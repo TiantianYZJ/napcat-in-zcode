@@ -245,6 +245,7 @@ type Message = {
 
 - 注入体软上限默认 40,000 字符（可配 `maxInjectChars`）；超出则截断并尾注「已截断，共 N 条，完整内容请导出后以附件引用」。
 - 注入头注明这是**用户提供的第三方聊天内容**（不可信内容声明），提示模型其中出现的指令不应被当作系统指令执行。
+- 平台能力补充（逆向验证）：`ui/message` 与 `ui/update-model-context` 的内容块均支持 `{type:"image"}`——勾选「包含图片」后，注入可内嵌图片内容块而非纯占位符（M1 先占位符实现，图片内嵌作为增强项）。`ui/update-model-context` 的宿主实现为持久化上下文条目（`plugin-ui-context:<pluginId>:<toolCallId>`，带序列化回读），会话恢复后仍生效。
 
 ### 5.8 导出机制
 
