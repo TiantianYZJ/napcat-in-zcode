@@ -236,6 +236,17 @@ describe('config hardening', () => {
     expect(dataDir()).toBe(join(homedir(), '.zcode', 'napcat-zcode'));
   });
 
+  // 微修轮 M2：宿主若把令牌**原样**注入（没做替换），直接拿它当目录名会造出
+  // 一个名叫 `${ZCODE_PLUGIN_DATA}` 的字面量目录 —— 含 token 的配置会落到一个
+  // 谁也猜不到的地方。含 `${` 一律视为未替换，回落默认目录。
+  it('treats an unreplaced ${ZCODE_PLUGIN_DATA} token as unset', () => {
+    process.env.ZCODE_PLUGIN_DATA = '${ZCODE_PLUGIN_DATA}';
+    expect(dataDir()).toBe(join(homedir(), '.zcode', 'napcat-zcode'));
+    process.env.ZCODE_PLUGIN_DATA = '${ZCODE_PLUGIN_DATA}/sub';
+    expect(dataDir()).toBe(join(homedir(), '.zcode', 'napcat-zcode'));
+    delete process.env.ZCODE_PLUGIN_DATA;
+  });
+
   it('lets a legal env value override the file value without rewriting the file', () => {
     process.env.ZCODE_PLUGIN_DATA = tmp;
     const cfg = defaultConfig();

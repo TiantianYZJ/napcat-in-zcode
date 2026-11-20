@@ -289,6 +289,29 @@ describe('ActionBar 保存为附件（主路径 = 服务端导出）', () => {
     expect(notices[notices.length - 1].action).toBeUndefined();
   });
 
+  // 微修轮 M1：最终修复波 SF-7 引入了两条新的工作区错误文案，
+  // 退路按钮的正则必须一起覆盖 —— 否则用户遇到「工作区目录不存在」只拿到一句裸错误，
+  // 拿不到「改用用户目录」的一键退路（而那正是该退路被设计出来解决的场景）。
+  it.each([
+    '工作区目录不存在：C:\\ws\\nope（请先创建它，或改用用户目录导出）',
+    '工作区路径不是目录：C:\\ws\\file.txt（请改用用户目录导出）',
+  ])('新的工作区错误文案也给「改用用户目录」退路：%s', async (message) => {
+    mock.exportSel.mockRejectedValueOnce(new Error(message));
+    const { notices } = renderBar();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    const notice = notices[notices.length - 1];
+    expect(notice.text).toContain(message.split('：')[0]);
+    expect(notice.action?.label).toBe('改用用户目录');
+
+    mock.exportSel.mockResolvedValueOnce(EXPORTED);
+    await act(async () => {
+      await notice.action?.onClick();
+    });
+    expect(mock.exportSel).toHaveBeenLastCalledWith(MSGS, CHAT, 'user');
+  });
+
   it('目的地是工作区时，提示里说明 .gitignore 的情况（已追加 / 未改动两种含义）', async () => {
     const { notices } = renderBar({ exportDir: 'workspace' });
     mock.exportSel.mockResolvedValueOnce({ ...EXPORTED, gitignoreUpdated: true });

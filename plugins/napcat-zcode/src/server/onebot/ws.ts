@@ -67,6 +67,16 @@ export class WsTransport implements OneBotClient {
          * 'websocket connect failed' reject 掉（先到先得），把真正的超时原因盖掉。
          */
         reject(new OneBotError(-3, 'websocket connect timeout'));
+        /**
+         * 显式复位连接状态。
+         *
+         * 老版 undici（Node 18/20）在 CONNECTING 态 `close()` 可能抛 InvalidStateError
+         * 而**不触发** error 事件 → 复位就落空 → `this.connecting` 停在已 reject 的
+         * promise 上 → 后续调用会**立即**以超时失败，而不是重新建连。
+         */
+        this.socket = undefined;
+        this.connecting = undefined;
+        this.rejectConnecting = undefined;
         try {
           ws.close();
         } catch {

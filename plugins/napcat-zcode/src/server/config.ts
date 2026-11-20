@@ -24,10 +24,16 @@ export function defaultConfig(): PluginConfig {
 /**
  * 插件数据目录：`ZCODE_PLUGIN_DATA` 优先（ZCode 启动插件进程时注入），否则 `~/.zcode/napcat-zcode`。
  *
+ * **未替换的令牌要当没注入**：宿主若把 `${ZCODE_PLUGIN_DATA}` 原样注入（没做替换），
+ * 直接拿它当目录名会造出一个名叫 `${ZCODE_PLUGIN_DATA}` 的字面量目录——
+ * 配置（含 token）就会落到一个谁也猜不到的地方。故含 `${` 一律视为未替换。
+ *
  * token 等敏感项只落在这个用户级目录里的 `config.json`，绝不进清单或 git。
  */
 export function dataDir(): string {
-  return process.env.ZCODE_PLUGIN_DATA || join(homedir(), '.zcode', 'napcat-zcode');
+  const injected = process.env.ZCODE_PLUGIN_DATA;
+  if (injected && !injected.includes('${')) return injected;
+  return join(homedir(), '.zcode', 'napcat-zcode');
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {

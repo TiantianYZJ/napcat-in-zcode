@@ -22117,7 +22117,9 @@ function defaultConfig() {
   };
 }
 function dataDir() {
-  return process.env.ZCODE_PLUGIN_DATA || join2(homedir2(), ".zcode", "napcat-zcode");
+  const injected = process.env.ZCODE_PLUGIN_DATA;
+  if (injected && !injected.includes("${")) return injected;
+  return join2(homedir2(), ".zcode", "napcat-zcode");
 }
 function isObj(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -22265,6 +22267,9 @@ var WsTransport = class {
       const timer = setTimeout(() => {
         this.clearHandshakeTimer();
         reject(new OneBotError(-3, "websocket connect timeout"));
+        this.socket = void 0;
+        this.connecting = void 0;
+        this.rejectConnecting = void 0;
         try {
           ws.close();
         } catch {

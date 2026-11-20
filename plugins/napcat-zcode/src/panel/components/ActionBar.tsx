@@ -100,12 +100,19 @@ export function suggestName(chat: Chat): string {
 /**
  * 是不是「工作区目录不可用」这类失败。
  *
- * 服务端的原话（`src/server/tools.ts`）：「工作区导出需要工作区目录：请给出 workspaceDir 参数，
- * 或在 ZCode 项目目录里使用插件」；导出器里还有一句英文的 `workspace export requires workspaceDir`。
+ * 服务端的原话（`src/server/export/export.ts`）：
+ * - 「工作区导出需要工作区目录：请给出 workspaceDir 参数，或在 ZCode 项目目录里使用插件」；
+ * - 「工作区目录不存在：…」（最终修复波 SF-7 引入：不再凭空创建工作区目录树）；
+ * - 「工作区路径不是目录：…」；
+ * - 导出器里还有一句英文的 `workspace export requires workspaceDir`。
+ *
  * 命中时给「改用用户目录」的一键退路；**不命中就按普通失败处理**（不猜、不改目的地）。
+ * 注意：这几条正是该退路被设计出来解决的场景，正则漏掉任何一条都会让用户只拿到一句裸错误。
  */
 export function isWorkspaceDirMissing(message: string): boolean {
-  return /工作区导出需要工作区目录|workspace export requires workspaceDir|workspaceDir/.test(message);
+  return /工作区导出需要工作区目录|workspace export requires workspaceDir|工作区目录不存在|工作区路径不是目录|workspaceDir/.test(
+    message,
+  );
 }
 
 /**

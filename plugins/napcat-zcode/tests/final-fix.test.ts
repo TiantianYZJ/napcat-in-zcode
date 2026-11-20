@@ -15,7 +15,8 @@ import { createServer as createHttpServer, type Server as HttpServer } from 'nod
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WebSocketServer } from 'ws';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -292,6 +293,117 @@ describe('should-fix #2：WS 握手有超时', () => {
     const c = createClient({ endpoint: `ws://127.0.0.1:${port}`, timeoutMs: 300 });
     await expect(c.call('get_login_info')).rejects.toThrow(/websocket connect timeout/);
     await c.close();
+  });
+
+  // 微修轮 M3：超时后必须**显式复位**连接状态。
+  // 老版 undici（Node 18/20）在 CONNECTING 态 close() 可能抛 InvalidStateError 而不触发
+  // error 事件 → 复位就落空 → this.connecting 停在已 reject 的 promise 上 →
+  // 后续调用会「立即」以超时失败，而不是重新建连。
+  //
+  // 这里用一个**假 WebSocket** 精确模拟老版行为（close() 不触发 error/close 事件），
+  // 让断言不依赖宿主 Node 的 undici 版本（新版本会自愈，测不出差异）。
+  it('握手超时后显式复位连接状态（老版 undici：close() 不触发 error 事件）', async () => {
+    class FakeWebSocket {
+      static instances: FakeWebSocket[] = [];
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      readyState = FakeWebSocket.CONNECTING;
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onmessage: ((ev: { data: unknown }) => void) | null = null;
+      constructor(public url: string | URL) {
+        FakeWebSocket.instances.push(this);
+      }
+      /** 老版 undici 的关键行为：握手中 close() **不**触发 error / close 事件 */
+      close(): void {
+        this.readyState = FakeWebSocket.CLOSED;
+      }
+      send(): void {
+        throw new Error('websocket is not open');
+      }
+      addEventListener(): void {}
+      removeEventListener(): void {}
+    }
+    FakeWebSocket.instances.length = 0;
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    try {
+      const c = createClient({ endpoint: 'ws://127.0.0.1:9/onebot', timeoutMs: 200 });
+      await expect(c.call('get_login_info')).rejects.toThrow(/websocket connect timeout/);
+      // 超时后：连接状态必须已被显式复位（否则后续调用会立刻失败而不重连）
+      const internals = c as unknown as { connecting?: Promise<void>; socket?: unknown };
+      expect(internals.connecting).toBeUndefined();
+      expect(internals.socket).toBeUndefined();
+      // 第二次调用 → 重新建连（新的 socket 实例）
+      await expect(c.call('get_login_info')).rejects.toThrow(/websocket connect timeout/);
+      expect(FakeWebSocket.instances.length).toBe(2);
+      await c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('握手超时后再次调用会重新建连（而不是立刻以超时失败）', async () => {
+    const wss = new WebSocketServer({ noServer: true });
+    const http = createHttpServer();
+    /** 升级前的裸 socket（第一次那个永远不完成握手，必须手动 destroy，否则 http.close() 等不到） */
+    const rawSockets = new Set<{ destroy(): void }>();
+    let accepts = 0;
+    http.on('upgrade', (req, socket, head) => {
+      accepts += 1;
+      rawSockets.add(socket);
+      socket.on('close', () => rawSockets.delete(socket));
+      socket.on('error', () => undefined);
+      if (accepts === 1) {
+        // 第一次：故意**不**完成握手 → 客户端的握手超时到期
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (conn) => {
+        conn.on('message', (raw) => {
+          const msg = JSON.parse(String(raw)) as { action: string; echo: string };
+          conn.send(
+            JSON.stringify({
+              status: 'ok',
+              retcode: 0,
+              data: { user_id: 1, nickname: 'TestBot' },
+              echo: msg.echo,
+            }),
+          );
+        });
+      });
+    });
+    await new Promise<void>((r) => http.listen(0, '127.0.0.1', r));
+    const p2 = (http.address() as { port: number }).port;
+    try {
+      const c = createClient({ endpoint: `ws://127.0.0.1:${p2}`, timeoutMs: 300 });
+      await expect(c.call('get_login_info')).rejects.toThrow(/websocket connect timeout/);
+      /**
+       * 白盒断言：超时后连接状态必须**已被显式复位**。
+       *
+       * 老版 undici（Node 18/20）在 CONNECTING 态 close() 可能抛 InvalidStateError 而不触发
+       * error 事件 → 复位就落空 → this.connecting 停在已 reject 的 promise 上 →
+       * 后续调用会「立即」以超时失败，而不是重新建连。
+       *
+       * 这条断言在所有 Node 版本上都能咬住（不依赖 undici 的具体行为）；
+       * 下面那条「第二次调用成功」则是行为层的验证（在新版 Node 上不依赖复位也能通过，
+       * 因为 close() 会触发 onerror → onclose 自愈）。
+       */
+      const internals = c as unknown as { connecting?: Promise<void>; socket?: unknown };
+      expect(internals.connecting).toBeUndefined();
+      expect(internals.socket).toBeUndefined();
+      // 第二次调用：重新建连 → 这次握手能完成 → 调用成功
+      const data = await c.call<{ nickname: string }>('get_login_info');
+      expect(data.nickname).toBe('TestBot');
+      expect(accepts).toBeGreaterThanOrEqual(2);
+      await c.close();
+    } finally {
+      wss.close();
+      for (const s of rawSockets) s.destroy();
+      rawSockets.clear();
+      await new Promise<void>((r) => http.close(() => r()));
+    }
   });
 });
 
