@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -113,57 +113,141 @@ function sanitize(m: Record<string, unknown>): PluginConfig {
 }
 
 /**
+ * 记录「文件里显式设置了哪些可被 env 兜底覆盖的字段」。
+ *
+ * 挂在配置对象上（Symbol 键 + 不可枚举）——不能进 `PluginConfig` 的类型（那是 T9/T10 的公开契约），
+ * 也不能被 `JSON.stringify` 写进 config.json（Symbol 键本就不参与序列化）。
+ */
+const EXPLICIT_FIELDS = Symbol('napcat-zcode.explicit-fields');
+
+interface ExplicitFields {
+  /** 文件里是否显式写了 `export.dir`。 */
+  exportDir: boolean;
+  /** 文件里是否显式写了 `export.includeImages`。 */
+  includeImages: boolean;
+}
+
+const NO_EXPLICIT: ExplicitFields = { exportDir: false, includeImages: false };
+
+function markExplicit(cfg: PluginConfig, flags: ExplicitFields): PluginConfig {
+  Object.defineProperty(cfg, EXPLICIT_FIELDS, {
+    value: flags,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return cfg;
+}
+
+/** 取配置对象上的「文件显式设置」标记；没有标记（不是从文件加载的）→ 视为都没显式设置。 */
+function explicitFields(cfg: PluginConfig): ExplicitFields {
+  const f = (cfg as unknown as Record<symbol, ExplicitFields | undefined>)[EXPLICIT_FIELDS];
+  return f ?? NO_EXPLICIT;
+}
+
+/** 读 `<dir>/config.json` 的原始内容；文件缺失/损坏/顶层不是对象 → 空对象（不抛错）。 */
+function readRaw(dir: string): Record<string, unknown> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf-8'));
+  } catch {
+    return {}; // 文件不存在 / 读失败 / JSON 损坏
+  }
+  return isObj(raw) ? raw : {};
+}
+
+/**
+ * 读配置并**同时**返回文件里的原始内容。
+ *
+ * - `config`：与默认值深合并、逐字段收敛后的合法配置（与 `loadConfig` 同一个对象）。
+ * - `raw`：文件里的原始 JSON 对象（缺失/损坏时为 `{}`）——保存时以它为基底**只写入变化的字段**，
+ *   才不会把 env 兜底值或默认值固化进文件（spec §6「保存配置时只写入文件里变化的字段」）。
+ */
+export function loadConfigWithRaw(dir: string): { config: PluginConfig; raw: Record<string, unknown> } {
+  const raw = readRaw(dir);
+  // 默认值与文件内容都是「不可信输入」：先按松散字典合并，再由 sanitize 逐字段收敛。
+  const merged = deepMerge(defaultConfig() as unknown as Record<string, unknown>, raw);
+  const config = sanitize(merged);
+  const exp = isObj(raw.export) ? raw.export : {};
+  const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(exp, k);
+  return { config: markExplicit(config, { exportDir: has('dir'), includeImages: has('includeImages') }), raw };
+}
+
+/**
  * 读 `<dir>/config.json` 并与默认值深合并。
  *
  * 文件缺失、JSON 损坏、顶层不是对象——都回退默认值，不抛错：配置坏掉不该让插件起不来。
  */
 export function loadConfig(dir: string): PluginConfig {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf-8'));
-  } catch {
-    return defaultConfig(); // 文件不存在 / 读失败 / JSON 损坏
-  }
-  if (!isObj(raw)) return defaultConfig();
-  // 默认值与文件内容都是「不可信输入」：先按松散字典合并，再由 sanitize 逐字段收敛。
-  const merged = deepMerge(defaultConfig() as unknown as Record<string, unknown>, raw);
-  return sanitize(merged);
+  return loadConfigWithRaw(dir).config;
 }
 
 /**
- * 环境变量覆盖（来源：清单 `userConfig` 经 `.mcp.json` 的 `env` 注入）。
+ * 环境变量兜底（来源：清单 `userConfig` 经 `.mcp.json` 的 `env` 注入）。
  *
- * - 只在取值合法时覆盖：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}、`NAPCAT_INCLUDE_IMAGES` ∈ {true, false}；
- *   非法值（含空串）一律不覆盖，保留配置文件里的值，也不抛错。
+ * 优先级（spec §6 裁定）：**`config.json` 里显式设置的字段优先，env 只作兜底**——
+ * 文件没设置该字段、且 env 取值合法时，env 的值才生效。理由：设置 UI 的目标就是把值写进
+ * `config.json`，env 只是把设置界面接到同一份配置上；若 env 反过来覆盖文件，用户在文件里的
+ * 设置会失效，且首次保存会把 env 值固化进文件。
+ *
+ * - 只在取值合法时兜底：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}、`NAPCAT_INCLUDE_IMAGES` ∈ {true, false}；
+ *   非法值（含空串）一律不覆盖，也不抛错。
+ * - 「文件是否显式设置」由 `loadConfig` 打在配置对象上的标记判定（见 `EXPLICIT_FIELDS`）；
+ *   不是从文件加载的配置（无标记）→ 视为都没显式设置 → env 直接兜底。
  * - 就地改写并返回同一个对象（既支持 `applyEnvOverrides(cfg, env)`，也支持 `cfg = applyEnvOverrides(cfg)`）。
  * - 幂等：同样的 env 反复应用结果一致。
  */
 export function applyEnvOverrides(cfg: PluginConfig, env: NodeJS.ProcessEnv = process.env): PluginConfig {
+  const explicit = explicitFields(cfg);
   const dir = env.NAPCAT_EXPORT_DIR;
-  if (dir === 'user' || dir === 'workspace') cfg.export.dir = dir;
+  if (!explicit.exportDir && (dir === 'user' || dir === 'workspace')) cfg.export.dir = dir;
   const imgs = env.NAPCAT_INCLUDE_IMAGES;
-  if (imgs === 'true' || imgs === 'false') cfg.export.includeImages = imgs === 'true';
+  if (!explicit.includeImages && (imgs === 'true' || imgs === 'false')) cfg.export.includeImages = imgs === 'true';
   return cfg;
 }
 
-/** 插件进程用的配置：数据目录里的文件 + 环境变量覆盖。 */
+/** 插件进程用的配置：数据目录里的文件优先，env 兜底未显式设置的字段。 */
 export function loadConfigData(): PluginConfig {
   return applyEnvOverrides(loadConfig(dataDir()));
 }
 
 /**
- * 原子写配置：先写 `config.json.tmp`，再 rename 覆盖 `config.json`。
+ * 临时文件名：带 pid 与时间戳。
  *
- * rename 在同一文件系统内是原子的——读方要么看到旧文件、要么看到完整的新文件，
- * 不会看到「被截断了一半」的 config.json。序列化在写临时文件**之前**完成：序列化失败
- * （循环引用等）时连临时文件都不会产生，旧配置原封不动。
+ * 固定名（`config.json.tmp`）在两个插件进程（两个 ZCode 窗口）同时保存时会互相覆盖临时文件，
+ * 甚至把对方的半截文件 rename 成 config.json。
+ */
+function tempPath(dir: string): string {
+  return join(dir, `config.json.${process.pid}.${Date.now()}.tmp`);
+}
+
+/**
+ * 原子写配置：先写临时文件，再 rename 覆盖 `config.json`。
+ *
+ * - rename 在同一文件系统内是原子的——读方要么看到旧文件、要么看到完整的新文件，
+ *   不会看到「被截断了一半」的 config.json。读方只读 `config.json`，残留的临时文件不被读取。
+ * - 序列化在写临时文件**之前**完成：序列化失败（循环引用等）时连临时文件都不会产生，旧配置原封不动。
+ * - 写临时文件失败 → 删掉可能写了一半的临时文件再重抛，不在数据目录里留含 token 的残片。
+ * - 临时文件与最终文件都用 0600 权限（POSIX）：config.json 含 token，只有本人可读。
+ *   rename 不保留权限位（Windows 上更不保留），所以落盘后再 chmod 一次——这才是可靠的那步。
  */
 export function saveConfig(dir: string, cfg: PluginConfig): void {
   mkdirSync(dir, { recursive: true });
   const payload = JSON.stringify(cfg, null, 2) + '\n';
-  const tmp = join(dir, 'config.json.tmp');
+  const tmp = tempPath(dir);
   const target = join(dir, 'config.json');
-  writeFileSync(tmp, payload, 'utf-8');
+  try {
+    // mode 只在「文件被创建」时生效；临时文件每次都是新建的，0600 在这里就位。
+    writeFileSync(tmp, payload, { encoding: 'utf-8', mode: 0o600 });
+  } catch (err) {
+    // 写失败：可能留下半截临时文件（含 token 片段）→ 删掉再重抛。
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* 清理失败不掩盖原始错误 */
+    }
+    throw err;
+  }
   try {
     renameSync(tmp, target);
   } catch (err) {
@@ -174,5 +258,11 @@ export function saveConfig(dir: string, cfg: PluginConfig): void {
       /* 清理失败不掩盖原始错误 */
     }
     throw err;
+  }
+  try {
+    // rename 不带权限位：目标文件的权限靠这一步收紧（POSIX 上含 token 的文件不该全局可读）。
+    chmodSync(target, 0o600);
+  } catch {
+    /* 某些文件系统/平台不支持 chmod：不影响配置本身的正确性 */
   }
 }

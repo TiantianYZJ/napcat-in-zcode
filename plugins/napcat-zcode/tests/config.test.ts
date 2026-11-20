@@ -1,16 +1,26 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyEnvOverrides,
   dataDir,
   defaultConfig,
   loadConfig,
   loadConfigData,
+  loadConfigWithRaw,
   saveConfig,
 } from '../src/server/config.js';
 import type { PluginConfig } from '../src/server/config.js';
+
+// 只把 writeFileSync 换成可注入的 mock（默认透传），用于制造「写了一半才失败」的写入失败场景。
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn((...args: Parameters<typeof actual.writeFileSync>) => actual.writeFileSync(...args)),
+  };
+});
 
 let tmp: string;
 
@@ -29,6 +39,7 @@ afterEach(() => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
+  vi.restoreAllMocks();
 });
 
 describe('config', () => {
@@ -117,6 +128,16 @@ describe('config hardening', () => {
     expect(Object.prototype.hasOwnProperty.call(c, '__proto__')).toBe(false);
   });
 
+  it('ignores the constructor and prototype keys from the file', () => {
+    writeFileSync(join(tmp, 'config.json'), '{"constructor": {"x": 1}, "prototype": {"y": 2}}');
+    const c = loadConfig(tmp);
+    expect(Object.getPrototypeOf(c)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(c, 'constructor')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(c, 'prototype')).toBe(false);
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+    expect(({} as Record<string, unknown>).y).toBeUndefined();
+  });
+
   it('drops invalid port entries but keeps legal ones', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { ports: [3000, '3001', 0, 70000] } }));
     expect(loadConfig(tmp).autoDetect.ports).toEqual([3000]);
@@ -127,11 +148,29 @@ describe('config hardening', () => {
     expect(loadConfig(tmp).autoDetect.ports).toEqual([]);
   });
 
+  it('filters non-string and blank endpoints', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { endpoints: ['ws://a', '', '   ', 42, null] } }));
+    expect(loadConfig(tmp).autoDetect.endpoints).toEqual(['ws://a']);
+  });
+
+  it('falls back to defaults for empty or non-string managed fields', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ managed: { napcatVersion: '', downloadMirror: 42 } }));
+    const c = loadConfig(tmp);
+    expect(c.managed.napcatVersion).toBe('4.18.42');
+    expect(c.managed.downloadMirror).toBe('auto');
+  });
+
+  it('floors a fractional maxInjectChars', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ inject: { maxInjectChars: 1234.7 } }));
+    expect(loadConfig(tmp).inject.maxInjectChars).toBe(1234);
+  });
+
   it('creates the directory and leaves no temp file behind', () => {
     const nested = join(tmp, 'a', 'b');
     saveConfig(nested, defaultConfig());
     expect(existsSync(join(nested, 'config.json'))).toBe(true);
     expect(existsSync(join(nested, 'config.json.tmp'))).toBe(false);
+    expect(readdirSync(nested)).toEqual(['config.json']); // 临时文件已 rename 掉
   });
 
   it('keeps the previous config when a save fails', () => {
@@ -141,7 +180,35 @@ describe('config hardening', () => {
     circular.self = circular; // 循环引用 → JSON.stringify 抛错
     expect(() => saveConfig(tmp, circular as unknown as PluginConfig)).toThrow();
     expect(readFileSync(join(tmp, 'config.json'), 'utf-8')).toBe(before);
-    expect(existsSync(join(tmp, 'config.json.tmp'))).toBe(false);
+    expect(readdirSync(tmp)).toEqual(['config.json']); // 连临时文件都没产生
+  });
+
+  it('cleans up the temp file when the rename fails and leaves the target untouched', () => {
+    const target = join(tmp, 'config.json');
+    mkdirSync(target); // 目标是个目录 → rename 必失败（Windows: EPERM，POSIX: EISDIR）
+    expect(() => saveConfig(tmp, defaultConfig())).toThrow();
+    expect(statSync(target).isDirectory()).toBe(true); // 旧目标未被破坏
+    expect(readdirSync(tmp)).toEqual(['config.json']); // 临时文件已清理，不留含 token 的残片
+  });
+
+  it('removes a partially written temp file when the write fails', async () => {
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(writeFileSync).mockImplementationOnce((path, _data, options) => {
+      actual.writeFileSync(path, 'partial', options); // 先写一半，再失败（磁盘满等）
+      throw new Error('disk full');
+    });
+    expect(() => saveConfig(tmp, defaultConfig())).toThrow('disk full');
+    const written = String(vi.mocked(writeFileSync).mock.calls[0]?.[0]);
+    expect(written).toContain(String(process.pid)); // 临时文件名带 pid（M4：多进程不互相覆盖）
+    expect(existsSync(written)).toBe(false); // 半截文件已被清掉（M2）
+    expect(existsSync(join(tmp, 'config.json'))).toBe(false); // 旧配置未被创建/破坏
+    vi.mocked(writeFileSync).mockReset();
+  });
+
+  it('writes the config file with owner-only permissions', () => {
+    if (process.platform === 'win32') return; // Windows 没有 POSIX 权限位
+    saveConfig(tmp, defaultConfig());
+    expect(statSync(join(tmp, 'config.json')).mode & 0o777).toBe(0o600);
   });
 
   it('ignores a leftover temp file', () => {
@@ -168,7 +235,7 @@ describe('config hardening', () => {
     expect(dataDir()).toBe(join(homedir(), '.zcode', 'napcat-zcode'));
   });
 
-  it('applies env overrides on top of the file config without rewriting the file', () => {
+  it('keeps the file values when env would override them and does not rewrite the file', () => {
     process.env.ZCODE_PLUGIN_DATA = tmp;
     const cfg = defaultConfig();
     cfg.export = { dir: 'workspace', includeImages: true };
@@ -177,10 +244,10 @@ describe('config hardening', () => {
 
     process.env.NAPCAT_EXPORT_DIR = 'user';
     process.env.NAPCAT_INCLUDE_IMAGES = 'false';
-    const overridden = loadConfigData();
-    expect(overridden.export.dir).toBe('user');
-    expect(overridden.export.includeImages).toBe(false);
-    expect(readFileSync(join(tmp, 'config.json'), 'utf-8')).toBe(onDisk); // env 覆盖不回写文件
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace'); // 文件优先
+    expect(c.export.includeImages).toBe(true); // 文件优先
+    expect(readFileSync(join(tmp, 'config.json'), 'utf-8')).toBe(onDisk); // env 兜底不回写文件
   });
 
   it('keeps the file config when env values are illegal', () => {
@@ -201,5 +268,79 @@ describe('config hardening', () => {
     const out = applyEnvOverrides(cfg, { NAPCAT_EXPORT_DIR: 'workspace' });
     expect(out).toBe(cfg);
     expect(applyEnvOverrides(out, { NAPCAT_EXPORT_DIR: 'workspace' }).export.dir).toBe('workspace');
+  });
+});
+
+describe('config priority (file first, env fallback)', () => {
+  it('uses the file value when the file sets export.dir', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = 'user';
+    expect(loadConfigData().export.dir).toBe('workspace');
+  });
+
+  it('uses the file value when the file sets includeImages', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { includeImages: false } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_INCLUDE_IMAGES = 'true';
+    expect(loadConfigData().export.includeImages).toBe(false);
+  });
+
+  it('falls back to env when the file does not set the field', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ connection: { mode: 'external' } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = 'workspace';
+    process.env.NAPCAT_INCLUDE_IMAGES = 'true';
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace');
+    expect(c.export.includeImages).toBe(true);
+    expect(c.connection.mode).toBe('external'); // 文件里的其它字段不受影响
+  });
+
+  it('falls back to env when there is no config file at all', () => {
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = 'workspace';
+    expect(loadConfigData().export.dir).toBe('workspace');
+  });
+
+  it('keeps the file value when the env value is illegal', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace', includeImages: true } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = 'bogus';
+    process.env.NAPCAT_INCLUDE_IMAGES = 'yes';
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace');
+    expect(c.export.includeImages).toBe(true);
+  });
+
+  it('falls back per field, not per section', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = 'user';
+    process.env.NAPCAT_INCLUDE_IMAGES = 'true';
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace'); // 文件里有 → 文件优先
+    expect(c.export.includeImages).toBe(true); // 文件里没有 → env 兜底
+  });
+
+  it('exposes the raw file content for patch-style saves', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' }, custom: 1 }));
+    const { config, raw } = loadConfigWithRaw(tmp);
+    expect(raw.export).toEqual({ dir: 'workspace' });
+    expect((raw as Record<string, unknown>).custom).toBe(1);
+    expect(config.export.dir).toBe('workspace');
+  });
+
+  it('reports an empty raw object when the file is absent or corrupt', () => {
+    expect(loadConfigWithRaw(tmp).raw).toEqual({});
+    writeFileSync(join(tmp, 'config.json'), '{oops');
+    expect(loadConfigWithRaw(tmp).raw).toEqual({});
+  });
+
+  it('does not write the explicit-field marker into the config file', () => {
+    saveConfig(tmp, loadConfig(tmp));
+    const text = readFileSync(join(tmp, 'config.json'), 'utf-8');
+    expect(text).not.toContain('explicit');
+    expect(Object.keys(JSON.parse(text)).sort()).toEqual(['autoDetect', 'connection', 'export', 'inject', 'managed']);
   });
 });
