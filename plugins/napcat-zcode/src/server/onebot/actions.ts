@@ -1,18 +1,26 @@
 import type { OneBotClient } from './client.js';
 import type { OB11Friend, OB11Group, OB11LoginInfo, OB11Message } from './types.js';
 
+/**
+ * OneBot 响应即使 retcode=0，data 也可能缺省或为 null（上游异常/兼容实现）。
+ * 所有解包点统一安全回落，避免裸 TypeError 打挂调用链。
+ */
+type Maybe<T> = T | null | undefined;
+
 export async function getLoginInfo(c: OneBotClient): Promise<OB11LoginInfo> {
   return c.call<OB11LoginInfo>('get_login_info');
 }
 
 export async function getGroupList(c: OneBotClient): Promise<OB11Group[]> {
-  const data = await c.call<OB11Group[] | { groups: OB11Group[] }>('get_group_list');
-  return Array.isArray(data) ? data : data.groups;
+  const data = await c.call<Maybe<OB11Group[] | { groups: OB11Group[] }>>('get_group_list');
+  if (Array.isArray(data)) return data;
+  return data?.groups ?? [];
 }
 
 export async function getFriendList(c: OneBotClient): Promise<OB11Friend[]> {
-  const data = await c.call<OB11Friend[] | { friends: OB11Friend[] }>('get_friend_list');
-  return Array.isArray(data) ? data : data.friends;
+  const data = await c.call<Maybe<OB11Friend[] | { friends: OB11Friend[] }>>('get_friend_list');
+  if (Array.isArray(data)) return data;
+  return data?.friends ?? [];
 }
 
 export async function fetchHistoryPage(
@@ -26,13 +34,13 @@ export async function fetchHistoryPage(
   if (kind === 'group') {
     params.group_id = id;
     if (beforeSeq) params.message_seq = String(beforeSeq);
-    const data = await c.call<{ messages: OB11Message[] }>('get_group_msg_history', params);
-    return data.messages ?? [];
+    const data = await c.call<Maybe<{ messages: OB11Message[] }>>('get_group_msg_history', params);
+    return data?.messages ?? [];
   }
   params.user_id = id;
   if (beforeSeq) params.message_seq = String(beforeSeq);
-  const data = await c.call<{ messages: OB11Message[] }>('get_friend_msg_history', params);
-  return data.messages ?? [];
+  const data = await c.call<Maybe<{ messages: OB11Message[] }>>('get_friend_msg_history', params);
+  return data?.messages ?? [];
 }
 
 /** 从 toSeq 所在页向更早翻页，直到覆盖 fromSeq 或空页；返回闭区间 [fromSeq, toSeq] 内消息（时间正序，按 seq 去重）。 */
