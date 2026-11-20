@@ -402,6 +402,19 @@ button[disabled] {
   cursor: pointer;
 }
 
+/* 提示里的动作按钮（例如「改用用户目录」的一键退路） */
+.toast .toast-action {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* ---------- 设置面板（只读配置） ---------- */
 
 .settings-panel {

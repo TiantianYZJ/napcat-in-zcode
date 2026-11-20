@@ -80,6 +80,7 @@ const EXPORTED = {
 interface Notice {
   text: string;
   copy?: string;
+  action?: { label: string; onClick: () => void };
 }
 
 afterEach(cleanup);
@@ -100,6 +101,8 @@ function renderBar(opts?: {
   chat?: Chat | null;
   caps?: typeof ALL_CAPS;
   phase?: string;
+  /** 配置里的导出目的地（跟随配置 → 影响 .gitignore 说明）。 */
+  exportDir?: 'user' | 'workspace';
 }) {
   const notices: Notice[] = [];
   const setNotice = (s: string | Notice) => {
@@ -112,6 +115,7 @@ function renderBar(opts?: {
       caps={opts?.caps ?? ALL_CAPS}
       setNotice={setNotice}
       phase={opts?.phase ?? 'ready'}
+      exportDir={opts?.exportDir}
     />,
   );
   return { ...utils, notices };
@@ -228,8 +232,8 @@ describe('ActionBar 保存为附件（主路径 = 服务端导出）', () => {
     });
     // 主路径不是 ui/download-file
     expect(mock.downloadFile).not.toHaveBeenCalled();
-    // 固定写用户目录（不涉及 .gitignore，也不依赖工作区目录存在）
-    expect(mock.exportSel).toHaveBeenCalledWith(MSGS, CHAT, 'user');
+    // 目的地**跟随服务端配置**（export.dir）：这里刻意不传 dir 参数
+    expect(mock.exportSel).toHaveBeenCalledWith(MSGS, CHAT);
     expect(mock.writeClipboard).toHaveBeenCalledWith(`@${EXPORTED.mdPath}`);
     expect(lastText(notices)).toContain('已导出并复制引用');
   });
@@ -252,6 +256,67 @@ describe('ActionBar 保存为附件（主路径 = 服务端导出）', () => {
       fireEvent.click(screen.getByTestId('act-attach'));
     });
     expect(lastText(notices)).toContain('export failed writing json');
+  });
+
+  it('工作区目录不可用 → 显示真实原因并给「改用用户目录」的一键重试', async () => {
+    mock.exportSel.mockRejectedValueOnce(
+      new Error('工作区导出需要工作区目录：请给出 workspaceDir 参数，或在 ZCode 项目目录里使用插件'),
+    );
+    const { notices } = renderBar();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    const notice = notices[notices.length - 1];
+    // 真实原因原样显示（不许静默改目的地）
+    expect(notice.text).toContain('工作区导出需要工作区目录');
+    expect(notice.action?.label).toBe('改用用户目录');
+
+    // 一键重试 → 这次明确用 dir='user'
+    mock.exportSel.mockResolvedValueOnce(EXPORTED);
+    await act(async () => {
+      await notice.action?.onClick();
+    });
+    expect(mock.exportSel).toHaveBeenLastCalledWith(MSGS, CHAT, 'user');
+    expect(mock.writeClipboard).toHaveBeenCalledWith(`@${EXPORTED.mdPath}`);
+  });
+
+  it('别的导出失败不给「改用用户目录」（退路只对工作区目录问题成立）', async () => {
+    mock.exportSel.mockRejectedValueOnce(new Error('export failed writing markdown'));
+    const { notices } = renderBar();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    expect(notices[notices.length - 1].action).toBeUndefined();
+  });
+
+  it('目的地是工作区时，提示里说明 .gitignore 的情况（已追加 / 未改动两种含义）', async () => {
+    const { notices } = renderBar({ exportDir: 'workspace' });
+    mock.exportSel.mockResolvedValueOnce({ ...EXPORTED, gitignoreUpdated: true });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    expect(lastText(notices)).toContain('.gitignore');
+    expect(lastText(notices)).toContain('追加');
+
+    cleanup();
+    mock.exportSel.mockResolvedValueOnce({ ...EXPORTED, gitignoreUpdated: false });
+    const bar = renderBar({ exportDir: 'workspace' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    const text = bar.notices[bar.notices.length - 1].text;
+    expect(text).toContain('.gitignore');
+    expect(text).not.toContain('追加');
+    expect(text).toContain('覆盖');
+    expect(text).toContain('取反');
+  });
+
+  it('目的地是用户目录时，提示里不提 .gitignore', async () => {
+    const { notices } = renderBar({ exportDir: 'user' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    expect(lastText(notices)).not.toContain('.gitignore');
   });
 });
 

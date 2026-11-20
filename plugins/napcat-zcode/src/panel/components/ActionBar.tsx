@@ -8,12 +8,16 @@ import { hm } from './MessageList.js';
  *
  * `copy` 非空时，toast 里额外挂一个「复制」按钮：点了才写剪贴板
  * （面板跑在沙箱 iframe 里，`navigator.clipboard` 经常不可用 → 降级成手动复制）。
+ *
+ * `action` 是**另一个**动作按钮（例如「改用用户目录」的一键退路）。
  */
 export interface Notice {
   /** 提示正文。 */
   text: string;
   /** 「复制」按钮要写进剪贴板的值（一般是 `@<路径>`）。 */
   copy?: string;
+  /** 额外动作按钮（例如失败后的「改用用户目录」重试）。 */
+  action?: { label: string; onClick: () => void };
 }
 
 /**
@@ -94,6 +98,36 @@ export function suggestName(chat: Chat): string {
 }
 
 /**
+ * 是不是「工作区目录不可用」这类失败。
+ *
+ * 服务端的原话（`src/server/tools.ts`）：「工作区导出需要工作区目录：请给出 workspaceDir 参数，
+ * 或在 ZCode 项目目录里使用插件」；导出器里还有一句英文的 `workspace export requires workspaceDir`。
+ * 命中时给「改用用户目录」的一键退路；**不命中就按普通失败处理**（不猜、不改目的地）。
+ */
+export function isWorkspaceDirMissing(message: string): boolean {
+  return /工作区导出需要工作区目录|workspace export requires workspaceDir|workspaceDir/.test(message);
+}
+
+/**
+ * `.gitignore` 说明（只有导出落在**工作区**时才有意义）。
+ *
+ * `gitignoreUpdated === false` 有**两种**含义（已被规则覆盖 / 因用户的取反规则而跳过），
+ * 服务端只回一个布尔值 → 文案把两种可能都说出来，**不断言具体是哪一种**。
+ *
+ * @param exportDir 目的地（`undefined` = 未知 → 用条件式措辞，既不谎称是工作区也不隐瞒风险）。
+ */
+export function gitignoreNote(
+  result: { gitignoreUpdated: boolean },
+  exportDir?: 'user' | 'workspace',
+): string {
+  if (result.gitignoreUpdated) return '已在工作区 .gitignore 追加忽略规则';
+  if (exportDir === 'user') return '';
+  if (exportDir === 'workspace')
+    return '.gitignore 未改动（导出目录可能已被忽略规则覆盖，或存在取反规则）——请确认这些文件不会进入版本库';
+  return '若导出落在工作区：.gitignore 未改动（可能被忽略规则覆盖，或存在取反规则）——请确认这些文件不会进入版本库';
+}
+
+/**
  * 底部动作条。
  *
  * 五个入口：
@@ -108,6 +142,7 @@ export function ActionBar({
   caps,
   setNotice,
   phase,
+  exportDir,
 }: {
   selected: Msg[];
   chat: Chat | null;
@@ -116,6 +151,13 @@ export function ActionBar({
   setNotice: (s: string | Notice) => void;
   /** 面板相位（`init` / `unconfigured` / `error` / `ready`）——决定按钮不可用的措辞。 */
   phase?: string;
+  /**
+   * 配置里的导出目的地（跟随 `export.dir`）。
+   *
+   * **只影响文案**：目的地由服务端按配置决定（面板不传 `dir`），
+   * 面板只是需要知道「这次是不是落在工作区」→ 决定要不要提 .gitignore。
+   */
+  exportDir?: 'user' | 'workspace';
 }) {
   const p = phase ?? 'ready';
   const [busy, setBusy] = useState(false);
@@ -162,6 +204,55 @@ export function ActionBar({
   const truncateNote = (r: { truncated: boolean }): string =>
     r.truncated ? '；内容超长已截断，完整内容请导出后以附件引用' : '';
 
+  /**
+   * 保存为附件：**主路径 = 服务端导出**（`napcat_export` 落盘并回真实路径）。
+   *
+   * 平台没有「往输入框附件区塞文件」的 API（spec §5.9），
+   * 所以这里做三段式：服务端导出 → 复制 `@<mdPath>` → 用户粘贴到输入框回车。
+   *
+   * **目的地跟随服务端配置**（`export.dir`，默认用户目录）：
+   * 这里**不传 `dir`**，让服务端按配置决定 —— 用户在设置里显式选的工作区目录必须生效。
+   * 万一工作区目录不可用（缺 `ZCODE_PROJECT_DIR`），那是**真实失败**：
+   * 原样报出原因，并给一个「改用用户目录」的一键退路（**不静默改写目的地**）。
+   *
+   * @param dir 缺省 = 跟随配置；`'user'` = 用户点了「改用用户目录」的退路。
+   */
+  async function attach(dir?: 'user'): Promise<void> {
+    try {
+      const r =
+        dir === undefined
+          ? await api.exportSel(selected, chat!)
+          : await api.exportSel(selected, chat!, dir);
+      const ref = `@${r.mdPath}`;
+      const copied = await bridge.writeClipboard(ref);
+      const lines = [
+        copied
+          ? '已导出并复制引用，粘贴到输入框回车即作为附件发送'
+          : `已导出：${r.mdPath}（剪贴板不可用，请点「复制」复制 @ 路径，粘贴到输入框回车即作为附件发送）`,
+      ];
+      // .gitignore 说明只在**工作区**导出时才有意义（用户目录没有 .gitignore 这回事）
+      const note = gitignoreNote(r, dir ?? exportDir);
+      if (note) lines.push(note);
+      setNotice({ text: lines.join('\n'), copy: ref });
+    } catch (e) {
+      const msg = errText(e);
+      // 工作区目录不可用 → 显示真实原因 + 给「改用用户目录」的一键退路
+      if (dir === undefined && isWorkspaceDirMissing(msg)) {
+        setNotice({
+          text: `${msg}。`,
+          action: {
+            label: '改用用户目录',
+            onClick: () => {
+              void run(() => attach('user'))();
+            },
+          },
+        });
+        return;
+      }
+      throw e; // 其它失败交给统一执行壳（落 toast）
+    }
+  }
+
   const actions = {
     /** 发送到对话：`ui/message`（role=user）。 */
     async send(): Promise<void> {
@@ -178,29 +269,8 @@ export function ActionBar({
       setNotice({ text: `已设为背景（${r.count} 条）${truncateNote(r)}` });
     },
 
-    /**
-     * 保存为附件：**主路径 = 服务端导出**（`napcat_export` 落盘并回真实路径）。
-     *
-     * 平台没有「往输入框附件区塞文件」的 API（spec §5.9），
-     * 所以这里做三段式：服务端导出 → 复制 `@<mdPath>` → 用户粘贴到输入框回车。
-     *
-     * 目录固定用**用户目录**（spec §5.8 的默认目录）：
-     * - 用户目录永远可写（工作区导出依赖 `ZCODE_PROJECT_DIR`，没有就导不出去）；
-     * - 用户目录**不涉及 .gitignore** → `gitignoreUpdated` 的两种含义（已覆盖 / 因取反规则跳过）
-     *   在这条路径上根本不会出现，文案不必含糊；
-     * - 需要落到工作区时用「导出▾ → 导出到当前工作区」，那里才检查 .gitignore。
-     */
-    async attach(): Promise<void> {
-      const r = await api.exportSel(selected, chat!, 'user');
-      const ref = `@${r.mdPath}`;
-      const copied = await bridge.writeClipboard(ref);
-      setNotice({
-        text: copied
-          ? '已导出并复制引用，粘贴到输入框回车即作为附件发送'
-          : `已导出：${r.mdPath}（剪贴板不可用，请点「复制」复制 @ 路径，粘贴到输入框回车即作为附件发送）`,
-        copy: ref,
-      });
-    },
+    /** 保存为附件：服务端导出 + 复制 `@路径`（目的地跟随配置，见上面的 `attach`）。 */
+    attach,
 
     /**
      * 另存一份：`ui/download-file` 降级通道（宿主弹另存为对话框）。
@@ -230,15 +300,9 @@ export function ActionBar({
       return async () => {
         const r = await api.exportSel(selected, chat!, dir);
         const lines = [`已导出：${r.mdPath}`, r.jsonPath];
-        if (dir === 'workspace') {
-          // gitignoreUpdated=false 有**两种**含义（已覆盖 / 因取反规则跳过），
-          // 服务端只给一个布尔值 → 文案把两种可能都说出来，不误导用户。
-          lines.push(
-            r.gitignoreUpdated
-              ? '已在工作区 .gitignore 追加忽略规则'
-              : '.gitignore 未改动（导出目录可能已被忽略规则覆盖，或存在取反规则）——请确认这些文件不会进入版本库',
-          );
-        }
+        // .gitignore 说明只在**工作区**导出时才有意义
+        const note = gitignoreNote(r, dir);
+        if (note) lines.push(note);
         setNotice({ text: lines.join('\n'), copy: `@${r.mdPath}` });
       };
     },

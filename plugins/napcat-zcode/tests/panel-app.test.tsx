@@ -508,4 +508,39 @@ describe('App 动作反馈', () => {
     await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
     expect(screen.getByTestId('toast').textContent).toContain('export failed writing markdown');
   });
+
+  it('工作区目录不可用 → toast 显示真实原因，并给「改用用户目录」重试按钮', async () => {
+    mock.getHistory.mockResolvedValueOnce({
+      messages: [msg('a', 1, 1000)],
+      nextBeforeSeq: 1,
+      exhausted: false,
+    });
+    mock.exportSel.mockRejectedValueOnce(
+      new Error('工作区导出需要工作区目录：请给出 workspaceDir 参数，或在 ZCode 项目目录里使用插件'),
+    );
+
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('msg-a'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
+    expect(screen.getByTestId('toast').textContent).toContain('工作区导出需要工作区目录');
+
+    // 一键退路：这次明确改用用户目录
+    mock.exportSel.mockResolvedValueOnce({
+      mdPath: '/tmp/x.md',
+      jsonPath: '/tmp/x.json',
+      gitignoreUpdated: false,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('toast-action'));
+    });
+    expect(mock.exportSel).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), 'user');
+    await waitFor(() => expect(screen.getByTestId('toast').textContent).toContain('已导出'));
+  });
 });

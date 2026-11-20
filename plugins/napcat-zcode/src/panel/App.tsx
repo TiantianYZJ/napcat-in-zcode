@@ -104,6 +104,13 @@ export function App() {
   const [reconfiguring, setReconfiguring] = useState(false);
   /** 设置面板（只读配置）是否展开。 */
   const [showSettings, setShowSettings] = useState(false);
+  /**
+   * 配置里的导出目的地（跟随 `export.dir`）。
+   *
+   * **只影响文案**：目的地由服务端按配置决定（面板不传 `dir`），
+   * 面板只是需要知道「这次是不是落在工作区」→ 决定要不要在提示里提 .gitignore。
+   */
+  const [exportDir, setExportDir] = useState<'user' | 'workspace' | undefined>(undefined);
 
   /**
    * 抛面板提示。
@@ -168,6 +175,20 @@ export function App() {
         if (!alive) return;
         setCaps(c);
         await reload();
+        /**
+         * 读一次配置，拿到导出目的地（`export.dir`）。
+         *
+         * 目的地本身由服务端按配置决定（面板不传 `dir`）；面板只是需要知道
+         * 「这次会不会落在工作区」→ 决定提示里要不要提 .gitignore。
+         * 读不到不影响其它功能（文案会自动退成条件式措辞，不误导）。
+         */
+        try {
+          const cfg = await api.getConfig();
+          const d = cfg.export?.dir;
+          if (alive && (d === 'user' || d === 'workspace')) setExportDir(d);
+        } catch {
+          /* 配置读不到：不影响其它功能 */
+        }
       } catch (e) {
         if (!alive) return;
         showNotice(errText(e));
@@ -432,6 +453,7 @@ export function App() {
         caps={caps}
         setNotice={showNotice}
         phase={phase}
+        exportDir={exportDir}
       />
       {notice && phase !== 'error' && (
         <div className="toast" data-testid="toast">
@@ -454,6 +476,15 @@ export function App() {
               }}
             >
               复制
+            </button>
+          )}
+          {notice.action && (
+            <button
+              className="toast-action"
+              data-testid="toast-action"
+              onClick={() => notice.action?.onClick()}
+            >
+              {notice.action.label}
             </button>
           )}
         </div>
