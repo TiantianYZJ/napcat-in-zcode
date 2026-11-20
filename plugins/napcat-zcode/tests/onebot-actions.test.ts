@@ -10,7 +10,9 @@ import {
 } from '../src/server/onebot/actions.js';
 
 // 数据集：seq 1..10，时间正序。服务端“最新页”= seq 8..10（页大小 3）。
-// 给定 message_seq=s 时返回“比 s 更早的 3 条”（即 seq < s 的最大 3 条），符合 NapCat 语义。
+// 给定 message_seq=s 时返回“比 s 更早的 3 条”（即 seq < s 的最大 3 条）——这是本文件的契约假设：
+// 真实 NapCat 的 message_seq 是独占还是包含语义尚未实测（留待 Task 14 验收），
+// 因此测试用 inclusiveSeq 开关把两种语义都覆盖一遍。
 const ALL = Array.from({ length: 10 }, (_, i) => ({ message_seq: i + 1, time: 1700000000 + i, sender: { nickname: `u${i + 1}` }, message: [{ type: 'text', data: { text: `m${i + 1}` } }] }));
 
 const GROUPS = [{ group_id: 900, group_name: '群A', member_count: 3 }];
@@ -31,7 +33,9 @@ let requestCount = 0;
 // - ignoreMessageSeq：服务端忽略 message_seq（恒返回最新一页，游标不推进）；
 // - maxItemsPerPage：服务端把每页条目数钳到该值（0 = 不钳，模拟 count 被服务端限流）；
 // - seqlessItems：每页额外混入一条没有 message_seq 的消息；
-// - inclusiveSeq：服务端 message_seq 语义取「包含式」（返回 seq <= s）而非「独占式」（返回 seq < s）。
+// - inclusiveSeq：服务端 message_seq 语义取「包含式」（返回 seq <= s）而非「独占式」（返回 seq < s）；
+// - oldestOnly：服务端只拥有最老的那条消息（seq 1），即不存在比它更早的历史；
+// - seqlessAfterFirst：第一次请求之后，服务端返回的页里只剩没有 message_seq 的消息。
 let listShape: 'array' | 'object' = 'array';
 let nullData = false;
 let nullLoginInfo = false;
@@ -39,6 +43,8 @@ let ignoreMessageSeq = false;
 let maxItemsPerPage = 0;
 let seqlessItems = false;
 let inclusiveSeq = false;
+let oldestOnly = false;
+let seqlessAfterFirst = false;
 
 beforeEach(async () => {
   listShape = 'array';
@@ -48,6 +54,8 @@ beforeEach(async () => {
   maxItemsPerPage = 0;
   seqlessItems = false;
   inclusiveSeq = false;
+  oldestOnly = false;
+  seqlessAfterFirst = false;
   lastUrl = '';
   lastBody = {};
   requestCount = 0;
@@ -61,15 +69,19 @@ beforeEach(async () => {
       lastBody = body;
       const action = req.url?.slice(1) ?? '';
       const count = maxItemsPerPage > 0 ? maxItemsPerPage : (body.count ?? 3);
+      const dataset = oldestOnly ? ALL.filter((m) => m.message_seq === 1) : ALL;
       let page: typeof ALL;
       if (!body.message_seq) {
-        page = ALL.filter((m) => m.message_seq > 7); // 最新一页
+        page = oldestOnly ? dataset : ALL.filter((m) => m.message_seq > 7); // 最新一页
       } else {
         const s = Number(body.message_seq);
-        page = ALL.filter((m) => (inclusiveSeq ? m.message_seq <= s : m.message_seq < s)).slice(-count);
+        page = dataset.filter((m) => (inclusiveSeq ? m.message_seq <= s : m.message_seq < s)).slice(-count);
       }
       if (ignoreMessageSeq) page = ALL.filter((m) => m.message_seq > 7); // 忽略游标：恒返回最新一页
       if (seqlessItems) page = [...page, { time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as typeof ALL;
+      if (seqlessAfterFirst && requestCount > 1) {
+        page = [{ time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as unknown as typeof ALL;
+      }
       res.setHeader('content-type', 'application/json');
       if (action === 'get_login_info') {
         res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullLoginInfo ? null : { user_id: 12345, nickname: 'Bot' } }));
@@ -273,6 +285,33 @@ describe('pagination robustness', () => {
     const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
     const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
     expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    await c.close();
+  });
+
+  it('throws instead of truncating with inclusive semantics and capacity 1', async () => {
+    // 容量 1：探测页装不下「边界消息 + 更早消息」两条，hasOlder 恒为假，
+    // 不能据此断定历史耗尽 —— 更早的 seq 9 确实存在，区间 [4,10] 必然残缺 → 必须抛错。
+    inclusiveSeq = true;
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
+    await c.close();
+  });
+
+  it('completes with inclusive semantics and capacity 1 when no earlier message exists', async () => {
+    // 服务端最老的消息就是 seq 1（不存在更早的历史）：第二次探测为空 → 确认耗尽 → 正常完成。
+    inclusiveSeq = true;
+    oldestOnly = true;
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 1, 1);
+    expect(msgs.map((m) => m.message_seq)).toEqual([1]);
+    await c.close();
+  });
+
+  it('throws when the probe page carries no message_seq at all', async () => {
+    // 探测页非空但取不到任何可比较的 message_seq → 无法验证是否耗尽 → 不得当作耗尽。
+    seqlessAfterFirst = true;
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
     await c.close();
   });
 

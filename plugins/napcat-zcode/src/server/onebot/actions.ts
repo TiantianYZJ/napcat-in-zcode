@@ -56,15 +56,16 @@ export async function fetchHistoryPage(
 /**
  * 从 toSeq 所在页向更早翻页，直到覆盖 fromSeq 或空页；返回闭区间 [fromSeq, toSeq] 内消息（时间正序，按 seq 去重）。
  *
- * 终止条件只有两类，且都能证明区间已被完整取回：
+ * 终止路径有三条，都能证明区间已被完整取回：
  * - 空页：历史已耗尽，区间内消息全部取完；
- * - 页内最小 seq <= fromSeq：已覆盖下界。
+ * - 页内最小 seq <= fromSeq：已覆盖下界；
+ * - 探测请求证明更早的历史确实不存在（见下方「无进展」分支）。
  *
  * 「服务端把 count 钳小」不再作为终止条件（短页不等于耗尽，会漏消息）；
- * 翻页无进展时用一次「严格更早」的探测请求区分「历史耗尽」与「服务端不推进游标」，
- * 判定只看探测结果里有没有比游标更早/更新的消息，因此与 NapCat `message_seq`
- * 的独占/包含语义无关；无法推进以及超过 MAX_PAGES 都会抛 OneBotError，
- * 不静默返回残缺区间——那会让调用方把部分结果当成完整结果。
+ * 翻页无进展时用探测请求区分「历史耗尽」与「服务端不推进游标」，
+ * 判定与 NapCat `message_seq` 的独占/包含语义无关、也不依赖探测页容量；
+ * 无法推进以及超过 MAX_PAGES 都会抛 OneBotError，不静默返回残缺区间——
+ * 那会让调用方把部分结果当成完整结果。
  */
 export async function fetchMessagesBetween(
   c: OneBotClient,
@@ -96,18 +97,34 @@ export async function fetchMessagesBetween(
     const minSeq = Math.min(...seqs);
     if (minSeq <= fromSeq) break; // 已覆盖下界，区间完整
     if (minSeq >= prevCursor) {
-      // 游标没有前进。可能是「历史确实已耗尽」，也可能是「服务端忽略 message_seq / 把 count 钳死」。
-      // 用一次「严格更早」的探测请求区分，且判定与 message_seq 的独占/包含语义无关（NapCat 真实语义待实测）：
-      //   - 探测结果里既没有比 minSeq 更早的、也没有比 minSeq 更新的消息 → 探测只可能为空或仅含边界消息
-      //     （独占语义返回空、包含语义返回 [minSeq]），说明更早的历史确实不存在 → 区间完整，结束；
-      //   - 探测结果里有更早的消息 → 还有更早的历史却推不动游标 → 区间可能残缺 → 报错；
-      //   - 探测结果里有更新的消息 → 服务端根本不认这个游标 → 区间可能残缺 → 报错。
+      // 游标没有前进。用探测请求区分「历史确实耗尽」与「服务端不推进游标」，
+      // 判定与 message_seq 的独占/包含语义无关（NapCat 真实语义待实测），且不依赖探测页的容量：
+      //   P(minSeq) 为探测页，minSeq 是本次无进展点的边界消息。
+      //   1) 探测页里有 seq < minSeq → 更早的历史确实存在，但游标推不动 → 区间可能残缺 → 抛错；
+      //   2) 探测页里有 seq > minSeq → 服务端不认这个游标 → 区间可能残缺 → 抛错；
+      //   3) 探测页为空 → 两种语义下都意味着没有 ≤ minSeq 的消息 → 确认耗尽 → 正常结束；
+      //   4) 探测页非空但取不到任何可比较的 message_seq → 无法验证 → 抛错；
+      //   5) 探测页只含 minSeq（只可能出现在包含式语义）→ 该页不足以证明没有更早消息
+      //      （容量可能看不全）→ 再探测一次 P(minSeq - 1)：为空 → 确认耗尽；非空 → 抛错。
       const probe = await fetchHistoryPage(c, kind, id, minSeq, pageSize);
       const probeSeqs = probe.map((m) => m.message_seq).filter((s): s is number => s !== undefined);
-      const hasOlder = probeSeqs.some((s) => s < minSeq);
-      const hasNewer = probeSeqs.some((s) => s > minSeq);
-      if (!hasOlder && !hasNewer) break; // 确认没有更早的历史 → 区间完整
-      failure = `history pagination made no progress at cursor ${prevCursor}; the range may be incomplete`;
+      if (probeSeqs.some((s) => s < minSeq)) {
+        failure = `history pagination made no progress at cursor ${prevCursor}; earlier history exists but the cursor cannot advance`;
+        break;
+      }
+      if (probeSeqs.some((s) => s > minSeq)) {
+        failure = `history pagination made no progress at cursor ${prevCursor}; the server ignored message_seq`;
+        break;
+      }
+      if (probe.length === 0) break; // 空页：确认没有 ≤ minSeq 的消息 → 历史耗尽，区间完整
+      if (probeSeqs.length === 0) {
+        failure = `history probe at cursor ${prevCursor} returned no message_seq values; cannot verify whether history is exhausted`;
+        break;
+      }
+      // 探测页只含 minSeq：再探测一次严格更早的边界，区分「确实没有更早消息」与「容量不足看不全」。
+      const deeper = await fetchHistoryPage(c, kind, id, minSeq - 1, pageSize);
+      if (deeper.length === 0) break; // 确认没有 ≤ minSeq-1 的消息 → 历史耗尽，区间完整
+      failure = `history pagination made no progress at cursor ${prevCursor}; earlier history exists but the cursor cannot advance`;
       break;
     }
     cursor = minSeq;
