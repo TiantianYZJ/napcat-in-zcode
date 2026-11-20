@@ -78,15 +78,15 @@
   "userConfig": {
     "exportDir": {
       "title": "导出目录",
-      "description": "聊天记录导出位置：user（用户目录 ~/.zcode/napcat/exports）或 workspace（当前工作区）",
+      "description": "聊天记录导出位置：填 user（用户目录 ~/.zcode/napcat/exports）或 workspace（当前工作区）；留空 = 跟随 config.json 里的设置",
       "type": "string",
-      "default": "user"
+      "default": ""
     },
     "includeImages": {
       "title": "包含图片",
-      "description": "导出时是否下载图片到 media/ 子目录（M1 仅记录 URL，不下载）",
+      "description": "导出时是否下载图片到 media/ 子目录（M1 仅记录 URL，不下载）；填 true / false，留空 = 跟随 config.json 里的设置",
       "type": "string",
-      "default": "false"
+      "default": ""
     }
   },
   "mcpServers": {
@@ -1645,7 +1645,7 @@ export function loadConfig(dir: string): PluginConfig {
   return deepMerge(defaultConfig(), raw);
 }
 
-/** 环境变量覆盖（来源：清单 userConfig 经 .mcp.json env 注入）。显式配置文件值优先于默认值，env 只在合法取值时覆盖。 */
+/** 环境变量覆盖（来源：清单 userConfig 经 .mcp.json env 注入）。env 合法值优先于文件值；清单两项 default 为空串，故未设置时文件保持权威。 */
 export function applyEnvOverrides(cfg: PluginConfig, env: NodeJS.ProcessEnv = process.env): PluginConfig {
   const dir = env.NAPCAT_EXPORT_DIR;
   if (dir === 'user' || dir === 'workspace') cfg.export.dir = dir;
