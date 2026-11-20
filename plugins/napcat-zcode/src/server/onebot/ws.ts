@@ -23,6 +23,8 @@ export class WsTransport implements OneBotClient {
   private connecting: Promise<void> | undefined;
   /** in-flight 建连的 reject 句柄：close() 期间用于立即终止正在建连的调用 */
   private rejectConnecting: ((e: Error) => void) | undefined;
+  /** in-flight 建连的握手超时定时器（close() 时要清掉，否则会吊住事件循环） */
+  private handshakeTimer: NodeJS.Timeout | undefined;
   private closed = false;
 
   constructor(
@@ -44,7 +46,37 @@ export class WsTransport implements OneBotClient {
       this.sockets.add(ws);
       // 握手期即持有：close() 才能中断握手中的连接
       this.socket = ws;
+      /**
+       * 握手超时。
+       *
+       * TCP 连上但服务端**不完成 WS 握手**时，`onopen` 与 `onerror` 可能都不触发
+       * （连接悬在那儿），`connect()` 的 promise 就永远不结算 → `call()` 挂到宿主超时。
+       * 因此给握手一个与请求超时同量级的上限：到点即视为连接失败。
+       *
+       * 这个定时器**不能 unref**：握手中的 socket 未必会让事件循环保持存活，
+       * unref 掉的定时器可能永远等不到执行（实测：握手悬挂时事件循环直接空转，
+       * promise 永不结算）。请求在途时保持事件循环存活本来就是应该的。
+       */
+      const timer = setTimeout(() => {
+        this.clearHandshakeTimer();
+        /**
+         * 先 reject 再关 socket。
+         *
+         * 顺序要紧：对**握手中**的 socket 调 `close()` 会让 undici 立刻抛
+         * 「连接未建立就被关闭」→ `onerror` 同步触发 → 它会把 promise 用
+         * 'websocket connect failed' reject 掉（先到先得），把真正的超时原因盖掉。
+         */
+        reject(new OneBotError(-3, 'websocket connect timeout'));
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+      }, this.timeoutMs);
+      this.handshakeTimer = timer;
+      const settleHandshake = () => this.clearHandshakeTimer();
       ws.onopen = () => {
+        settleHandshake();
         if (this.closed) {
           try {
             ws.close();
@@ -58,6 +90,7 @@ export class WsTransport implements OneBotClient {
         resolve();
       };
       ws.onerror = () => {
+        settleHandshake();
         this.sockets.delete(ws);
         if (this.socket === ws) {
           this.socket = undefined;
@@ -67,6 +100,7 @@ export class WsTransport implements OneBotClient {
         reject(new OneBotError(-2, 'websocket connect failed'));
       };
       ws.onclose = () => {
+        settleHandshake();
         this.sockets.delete(ws);
         if (this.socket === ws) {
           this.socket = undefined;
@@ -127,12 +161,21 @@ export class WsTransport implements OneBotClient {
     });
   }
 
+  /** 清掉握手超时定时器（握手结束 / close 时都要清，否则会吊住事件循环）。 */
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = undefined;
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     const sockets = [...this.sockets];
     this.sockets.clear();
     this.socket = undefined;
     this.connecting = undefined;
+    this.clearHandshakeTimer();
     // 同步拒绝所有 pending：不依赖对端完成关闭握手，也不让调用方干等到超时
     this.rejectPending(new OneBotError(-2, 'websocket closed'));
     // 终止正在建连的调用

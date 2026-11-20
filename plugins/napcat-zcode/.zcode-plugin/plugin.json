@@ -24,7 +24,14 @@
       "type": "stdio",
       "command": "node",
       "args": ["${ZCODE_PLUGIN_ROOT}/dist/server.mjs"],
-      "timeoutMs": 120000
+      "timeoutMs": 120000,
+      "cwd": "${ZCODE_PROJECT_DIR}",
+      "env": {
+        "NAPCAT_EXPORT_DIR": "${user_config.exportDir}",
+        "NAPCAT_INCLUDE_IMAGES": "${user_config.includeImages}",
+        "ZCODE_PROJECT_DIR": "${ZCODE_PROJECT_DIR}",
+        "ZCODE_PLUGIN_DATA": "${ZCODE_PLUGIN_DATA}"
+      }
     }
   },
   "ui": {

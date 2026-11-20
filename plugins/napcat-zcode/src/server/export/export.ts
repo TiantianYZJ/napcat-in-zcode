@@ -1,4 +1,13 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatRef, Message } from '../model/types.js';
@@ -7,6 +16,16 @@ import { renderMarkdown } from './markdown.js';
 
 /** 导出目录本身 + 它的各级祖先目录（判定「某条规则是否盖住了导出目录」）。 */
 const EXPORT_ANCESTORS = ['.zcode', '.zcode/napcat', '.zcode/napcat/exports'];
+
+/**
+ * 导出文件与目录的权限位（POSIX）。
+ *
+ * 聊天记录是高敏数据（spec §5.8 / 安全要求）：导出文件与含 token 的 `config.json`
+ * 用**同一套**权限口径（0600 / 0700），否则「token 只有本人可读、聊天记录同机人人可读」
+ * 就是一个自相矛盾的防护。Windows 上这些位不生效（由 ACL 决定），但代码路径保持一致。
+ */
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
 
 /**
  * 会话名 → 文件名安全片段：非法字符与空白（连续段折叠成一个）→ `_`，限长 60。
@@ -179,7 +198,8 @@ function errText(err: unknown): string {
  *   `<workspaceDir>/.gitignore` 覆盖 `.zcode/napcat/`（缺覆盖时自动追加）。
  * - `dir='abs'` → `absPath` 指定的目录。
  *
- * 聊天记录是高敏数据（spec §5.8 / 安全要求）：默认落用户目录；工作区导出强制 gitignore 防护。
+ * 聊天记录是高敏数据（spec §5.8 / 安全要求）：默认落用户目录；工作区导出强制 gitignore 防护；
+ * 文件与目录都是 0600 / 0700（与含 token 的 config.json 同口径）。
  */
 export async function exportSelection(opts: {
   messages: Message[];
@@ -195,6 +215,23 @@ export async function exportSelection(opts: {
   if (opts.dir === 'workspace') {
     wsDir = opts.workspaceDir;
     if (!wsDir) throw new Error('workspace export requires workspaceDir');
+    /**
+     * 工作区目录必须**已经存在**。
+     *
+     * 以前是 `mkdirSync(target, {recursive:true})` 一把梭：工作区目录不存在时，
+     * 它会把 `<ws>/.zcode/napcat/exports` 连同 `<ws>/.gitignore` 一起凭空造出来——
+     * 用户填错一个路径，插件就在那儿建出一棵目录树（还改了 .gitignore）。
+     * 现在改成：工作区不存在 ⇒ 明确报错；存在才建导出子目录。
+     */
+    let wsStat;
+    try {
+      wsStat = statSync(wsDir);
+    } catch {
+      throw new Error(`工作区目录不存在：${wsDir}（请先创建它，或改用用户目录导出）`);
+    }
+    if (!wsStat.isDirectory()) {
+      throw new Error(`工作区路径不是目录：${wsDir}（请改用用户目录导出）`);
+    }
     target = join(wsDir, '.zcode', 'napcat', 'exports');
   } else if (opts.dir === 'abs') {
     // 缺路径时响亮失败：静默回落到用户目录会把聊天记录写到用户没要求的位置。
@@ -204,7 +241,13 @@ export async function exportSelection(opts: {
     target = join(opts.homeDir ?? homedir(), '.zcode', 'napcat', 'exports');
   }
   // 先建目录再写 .gitignore：workspaceDir 不存在时，写 .gitignore 会先 ENOENT 崩掉。
-  mkdirSync(target, { recursive: true });
+  // mode 只在目录被创建时生效；已存在的目录不受影响（下面还会 chmod 一次）。
+  mkdirSync(target, { recursive: true, mode: DIR_MODE });
+  try {
+    chmodSync(target, DIR_MODE);
+  } catch {
+    /* 某些文件系统/平台不支持 chmod：不影响导出本身的正确性 */
+  }
   if (wsDir) gitignoreUpdated = ensureGitignore(wsDir);
 
   const base = exportBaseName(opts.chat, opts.messages);
@@ -216,18 +259,31 @@ export async function exportSelection(opts: {
   const mdExisted = existsSync(mdPath);
 
   try {
-    writeFileSync(mdPath, md, 'utf-8');
+    writeFileSync(mdPath, md, { encoding: 'utf-8', mode: FILE_MODE });
   } catch (err) {
     throw new Error(`export failed writing markdown ${mdPath}: ${errText(err)}`);
   }
   try {
-    writeFileSync(jsonPath, json, 'utf-8');
+    writeFileSync(jsonPath, json, { encoding: 'utf-8', mode: FILE_MODE });
   } catch (err) {
     // json 写失败时把**本次新建**的 md 撤掉，别留下孤儿文件（半对产物比没有更难判断）。
     if (!mdExisted) {
       try { unlinkSync(mdPath); } catch { /* 清理失败不掩盖原始错误 */ }
     }
     throw new Error(`export failed writing json ${jsonPath}: ${errText(err)}`);
+  }
+  /**
+   * 收紧权限位。
+   *
+   * `mode` 只在「文件被创建」时生效；覆盖既有文件时权限位不变（可能是 0644），
+   * 所以落盘后再 chmod 一次——这才是可靠的那步（与 config.ts 同一口径）。
+   */
+  for (const p of [mdPath, jsonPath]) {
+    try {
+      chmodSync(p, FILE_MODE);
+    } catch {
+      /* 某些文件系统/平台不支持 chmod：不影响导出本身的正确性 */
+    }
   }
   return { mdPath, jsonPath, gitignoreUpdated };
 }

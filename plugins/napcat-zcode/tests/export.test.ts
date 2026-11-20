@@ -5,19 +5,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { exportBaseName, exportSelection, sanitizeName } from '../src/server/export/export.js';
 import { renderJson } from '../src/server/export/json.js';
 import { renderMarkdown } from '../src/server/export/markdown.js';
+import { UNTRUSTED_NOTICE } from '../src/server/model/notice.js';
 import type { ChatRef, Message } from '../src/server/model/types.js';
 
 /**
  * M8：json 落盘失败要报错并撤掉已写的 md。
  * 真实文件系统里没法稳定制造「md 写成功、json 写失败」，故对 writeFileSync 做可控注入：
  * 只在开关打开时让 .json 写入抛错，其它调用走真实实现。
+ *
+ * 顺带**记录**每次 write/mkdir 的选项：权限位（MF-4）在 Windows 上无法从 `stat` 观察到
+ * （那里没有 POSIX mode），但「写盘时传了什么 mode」是跨平台可断言的。
  */
-const fsState = vi.hoisted(() => ({ failJsonWrite: false }));
+const fsState = vi.hoisted(() => ({
+  failJsonWrite: false,
+  writes: [] as Array<{ path: string; options: any }>,
+  mkdirs: [] as Array<{ path: string; options: any }>,
+}));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
+    mkdirSync: (path: any, options?: any) => {
+      fsState.mkdirs.push({ path: String(path), options });
+      return actual.mkdirSync(path, options);
+    },
     writeFileSync: (path: any, data: any, options?: any) => {
+      fsState.writes.push({ path: String(path), options });
       if (fsState.failJsonWrite && String(path).endsWith('.json')) {
         throw new Error('EACCES: permission denied');
       }
@@ -47,7 +60,12 @@ const MSGS: Message[] = [{
 
 let tmp: string;
 
-beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'napcat-export-')); fsState.failJsonWrite = false; });
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), 'napcat-export-'));
+  fsState.failJsonWrite = false;
+  fsState.writes.length = 0;
+  fsState.mkdirs.length = 0;
+});
 afterEach(() => { fsState.failJsonWrite = false; rmSync(tmp, { recursive: true, force: true }); });
 
 describe('sanitizeName', () => {
@@ -77,7 +95,11 @@ describe('renderMarkdown', () => {
     expect(md).toContain('# 产品群');
     expect(md).toContain('[12:00] Alice：场地定了吗？');
     expect(md).toContain('[12:01] Bob：[图片](https://x/i.png)');
-    expect(md).not.toContain('第三方内容');
+    // 导出文档**带**不可信声明（MF-1）：导出文件是插件推荐喂回模型的主路径
+    // （服务端导出 → 复制 @路径 → 用户粘贴 → 宿主把文件读进模型上下文），
+    // 没有这句声明，模型读到的就只是一份看起来可信的聊天记录。
+    // （原断言是 `not.toContain('第三方内容')`——它锁的正是本次要改掉的行为。）
+    expect(md).toContain(UNTRUSTED_NOTICE);
   });
 
   // 裁定 2：独立导出文档用 Markdown 标题做日分隔（注入体才用纯文本 '—— YYYY-MM-DD ——'）。
@@ -286,9 +308,23 @@ describe('exportSelection', () => {
     await expect(exportSelection({ messages: MSGS, chat: CHAT, dir: 'workspace' })).rejects.toThrow(/workspaceDir/);
   });
 
-  // I2：workspaceDir 不存在时也要成功（先建目录再写 .gitignore）。
-  it('creates a missing workspace dir together with its gitignore', async () => {
+  // I2：工作区目录**必须已经存在**（最终修复波 should-fix #7）。
+  // 以前是 mkdir 一把梭，会把不存在的 `<ws>/.zcode/napcat/exports` 连同 `<ws>/.gitignore`
+  // 一起凭空造出来（用户填错路径就在那儿建出一棵目录树、还改了 .gitignore）。
+  // 现在：不存在 ⇒ 明确报错，且**不创建**任何目录。
+  it('rejects a missing workspace dir instead of creating it', async () => {
     const ws = join(tmp, 'new-ws');
+    await expect(
+      exportSelection({ messages: MSGS, chat: CHAT, dir: 'workspace', workspaceDir: ws }),
+    ).rejects.toThrow(/工作区目录不存在/);
+    expect(existsSync(ws)).toBe(false); // 没有凭空造出目录树
+    expect(existsSync(join(ws, '.gitignore'))).toBe(false);
+  });
+
+  // 工作区存在时：导出子目录与 .gitignore 照常创建。
+  it('creates the export subdir and the gitignore inside an existing workspace', async () => {
+    const ws = join(tmp, 'existing-ws');
+    mkdirSync(ws, { recursive: true });
     const r = await exportSelection({ messages: MSGS, chat: CHAT, dir: 'workspace', workspaceDir: ws });
     expect(r.gitignoreUpdated).toBe(true);
     expect(existsSync(join(ws, '.gitignore'))).toBe(true);
@@ -296,6 +332,31 @@ describe('exportSelection', () => {
     expect(r.mdPath.startsWith(join(ws, '.zcode', 'napcat', 'exports'))).toBe(true);
     expect(existsSync(r.mdPath)).toBe(true);
     expect(existsSync(r.jsonPath)).toBe(true);
+  });
+
+  // MF-4：导出文件与目录的权限位（跨平台可断言「写盘时传了什么 mode」——
+  // Windows 上没有 POSIX mode，stat 看不到，只在 POSIX 用例里断言实际权限）。
+  it('导出文件按 0600 写、导出目录按 0700 建', async () => {
+    await exportSelection({ messages: MSGS, chat: CHAT, dir: 'user', homeDir: tmp });
+    const md = fsState.writes.find((w) => w.path.endsWith('.md'));
+    const json = fsState.writes.find((w) => w.path.endsWith('.json'));
+    expect(md?.options?.mode).toBe(0o600);
+    expect(json?.options?.mode).toBe(0o600);
+    const dir = fsState.mkdirs.find((m) => m.path.endsWith(join('napcat', 'exports')));
+    expect(dir?.options?.mode).toBe(0o700);
+  });
+
+  // MF-4：覆盖导出时权限也要收紧（mode 只在创建时生效 → 落盘后再 chmod 一次）。
+  it('覆盖导出时也会把权限收回来', async () => {
+    const first = await exportSelection({ messages: MSGS, chat: CHAT, dir: 'user', homeDir: tmp });
+    const { chmodSync, statSync } = await import('node:fs');
+    chmodSync(first.mdPath, 0o644);
+    chmodSync(first.jsonPath, 0o644);
+    await exportSelection({ messages: MSGS, chat: CHAT, dir: 'user', homeDir: tmp });
+    if (process.platform !== 'win32') {
+      expect(statSync(first.mdPath).mode & 0o777).toBe(0o600);
+      expect(statSync(first.jsonPath).mode & 0o777).toBe(0o600);
+    }
   });
 
   // M3：用户的取反规则（要把这些文件纳入版本库）不能被追加的忽略规则推翻。

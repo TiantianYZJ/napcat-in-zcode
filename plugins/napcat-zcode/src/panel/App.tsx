@@ -35,7 +35,15 @@ function errText(e: unknown): string {
 }
 
 /**
- * 跨调用去重键：优先 `seq`（= 服务端的 message_seq / message_id 归一值），其次消息 id。
+ * 跨调用去重键：与服务端 `tools.ts` 的 `dedupKey` **同构**（`s` / `i` 两个命名空间）。
+ *
+ * - `s${seq}`：服务端 `Message.seq` 只承载 `message_seq`（没有就是 0），所以 `s` 前缀
+ *   精确对应「有 message_seq」；
+ * - `i${id}`：没有 `message_seq` 时用消息 id（`message_id` / `real_id`）。
+ *
+ * 之前这里一律用 `s${m.seq}`（单一命名空间），而服务端的 seq 在缺 `message_seq`
+ * 时会回退成 `message_id` → 两边的键空间不一致，跨调用去重可能误删不同的消息。
+ * 现在两边的规则逐字一致。
  *
  * 没有稳定键的消息（既无 seq 又无 id）**不参与去重** —— 用页内下标当键会把不同消息误判成重复。
  */

@@ -64,6 +64,11 @@ export interface StatusInfo {
   mode: string;
   login?: { nickname?: string; user_id?: string };
   error?: string;
+  /**
+   * 安全警告（如「端点不在本机且未设 token」）。
+   * 有警告不代表连接失败——面板单独展示，不当成错误。
+   */
+  warning?: string;
 }
 
 /** `napcat_get_history` 的返回。 */
@@ -270,12 +275,23 @@ export const api = {
   /** 连接状态（连接失败时是「状态」而不是工具错误：`isError` 为 false）。 */
   status: () => callToolJson<StatusInfo>('napcat_status', {}),
 
-  /** 配置 OneBot 端点并重连。 */
-  configure: (endpoint: string, token: string) =>
-    callToolJson<{ configured: boolean; connected: boolean; login?: StatusInfo['login'] }>(
-      'napcat_configure',
-      { endpoint, token },
-    ),
+  /**
+   * 配置 OneBot 端点并重连。
+   *
+   * `token` 留空 = **保留已保存的 token**（服务端语义）；要清除已存的 token
+   * 显式传 `clearToken: true`。
+   */
+  configure: (endpoint: string, token: string, clearToken?: boolean) =>
+    callToolJson<{
+      configured: boolean;
+      connected: boolean;
+      login?: StatusInfo['login'];
+      warning?: string;
+    }>('napcat_configure', {
+      endpoint,
+      token,
+      ...(clearToken === true ? { clearToken: true } : {}),
+    }),
 
   /** 列群或好友。 */
   listChats: (kind: 'group' | 'friend') => callToolJson<{ chats: Chat[] }>('napcat_list_chats', { kind }),

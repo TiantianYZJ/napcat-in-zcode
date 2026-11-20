@@ -1,4 +1,5 @@
 import { segmentsText } from '../model/message.js';
+import { UNTRUSTED_NOTICE } from '../model/notice.js';
 import type { ChatRef, Message, Segment } from '../model/types.js';
 
 function two(n: number): string { return String(n).padStart(2, '0'); }
@@ -24,14 +25,14 @@ function fullDate(t: number): string {
  * 折行净化：会话名、发言人名、引用预览都是不可信元数据（群名/昵称可含换行），
  * 换行会伪造出新的标题行/记录行。与 model/format.ts 的 flatten 同口径，只压成空格。
  *
- * 已知缺口（跨任务登记，最终审查统一处理）：只处理 `\r?\n`，**不处理孤立 `\r`**，
- * 而 CommonMark 也把 CR 当行结束符——含孤立 CR 的会话名/昵称仍可在文档里伪造结构。
- * model/format.ts 归 T6 owner，本任务不改 model/，故此处一并登记不修。
+ * 换行有三种形态都要压：CRLF（`\r\n`）、孤立 `\n`、孤立 `\r`——
+ * CommonMark 也把 CR 当行结束符，只处理 `\r?\n` 时含孤立 CR 的会话名/昵称
+ * 仍可在文档里伪造结构（跨任务登记的缺口，本轮已修）。
  *
  * 与注入体的区别只在「折行」这一点；逐条消息行格式两者必须一致（`[HH:mm] 发言人：内容`）。
  */
 function flatten(s: string): string {
-  return s.replace(/\r?\n/g, ' ').trim();
+  return s.replace(/\r\n|\r|\n/g, ' ').trim();
 }
 
 /**
@@ -87,14 +88,17 @@ function segmentText(s: Segment): string {
  * 把选区渲染成独立导出文档（Markdown）。
  *
  * 与注入体（model/format.ts 的 formatSelection）是**两个渲染器**：
- * - 本函数：无「不可信内容声明」头、无截断（导出的是全量选区）；
+ * - 本函数：**首部带不可信内容声明**、无截断（导出的是全量选区）；
  *   日分隔用 Markdown 标题 `## YYYY-MM-DD`（独立文档需要结构）。
  * - 注入体：首行恒带不可信内容声明、超限截断；日分隔用纯文本 `—— YYYY-MM-DD ——`。
  *
- * 两者**逐条消息行格式必须一致**：`[HH:mm] 发言人：内容`。
+ * 两者的**逐条消息行格式必须一致**：`[HH:mm] 发言人：内容`；
+ * **信任标记也必须一致**：导出文件是插件推荐喂回模型的主路径
+ * （服务端导出 → 复制 `@路径` → 用户粘贴 → 宿主把文件读进模型上下文），
+ * 没有这句声明，模型读到的就只是一份看起来可信的聊天记录。
  */
 export function renderMarkdown(messages: Message[], chat: ChatRef): string {
-  const out: string[] = [`# ${flatten(chat.name ?? '')}`, ''];
+  const out: string[] = [`# ${flatten(chat.name ?? '')}`, '', UNTRUSTED_NOTICE, ''];
   let lastDay = '';
   for (const m of messages) {
     const day = ymd(m.time);

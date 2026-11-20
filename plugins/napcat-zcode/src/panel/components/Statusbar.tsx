@@ -25,6 +25,9 @@ export function modeLabel(mode: string): string {
  *
  * `phase === 'init'` 是「正在连接宿主…」的中间态 —— 首次握手最坏要 3×15s+2×500ms ≈ 46s，
  * 这段时间里动作按钮必须禁用（见 ActionBar）。
+ *
+ * `status.warning` 是**安全警告**（如「端点不在本机且未设 token」）：
+ * 它不是连接失败，单独一行展示，不替换状态文案（否则用户以为连不上）。
  */
 export function Statusbar({
   status,
@@ -57,6 +60,11 @@ export function Statusbar({
       <span className="status-text" title={mode ? `连接模式：${mode}` : undefined}>
         {text}
       </span>
+      {status?.warning && (
+        <span className="status-warning" data-testid="status-warning" title={status.warning}>
+          ⚠ {status.warning}
+        </span>
+      )}
       {onSettings && (
         <button
           className="settings"

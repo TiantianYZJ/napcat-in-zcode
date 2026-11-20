@@ -128,7 +128,14 @@ export function normalizeMessage(raw: OB11Message): Message {
   const replySeg = segments.find((s): s is Extract<Segment, { kind: 'reply' }> => s.kind === 'reply');
   return {
     id: String(raw.message_id ?? raw.real_id ?? raw.message_seq ?? ''),
-    seq: Number(raw.message_seq ?? raw.message_id ?? 0),
+    /**
+     * `seq` **只**是 `message_seq`（spec §5.4：`seq: number; // message_seq 游标`）。
+     *
+     * 以前缺 `message_seq` 时会回退成 `message_id` —— 两个不同的编号空间混在一个字段里，
+     * 导致「按 seq 去重」可能把两条不同的消息判成同一条（面板与服务端的去重键因此不一致）。
+     * 没有 `message_seq` 就是没有游标：`seq = 0`，去重改用消息 id（`i` 前缀）。
+     */
+    seq: Number(raw.message_seq ?? 0),
     time: Number(raw.time ?? 0),
     senderId: String(raw.sender?.user_id ?? raw.user_id ?? ''),
     senderName: raw.sender?.card || raw.sender?.nickname || String(raw.sender?.user_id ?? raw.user_id ?? ''),

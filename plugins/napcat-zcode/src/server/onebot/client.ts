@@ -30,6 +30,14 @@ class HttpTransport implements OneBotClient {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) {
+      /**
+       * 401/403 是**凭据**问题，不是「服务没起来」：
+       * 用户看到「HTTP 401 on get_login_info」分不清是 token 填错还是端口填错，
+       * 因此这里直接说成 token 校验失败（spec §8 的错误处理表）。
+       */
+      if (res.status === 401 || res.status === 403) {
+        throw new OneBotError(-1, `token 校验失败（HTTP ${res.status} on ${action}）：请检查 OneBot 的 access token`);
+      }
       throw new OneBotError(-1, `HTTP ${res.status} on ${action}`);
     }
     const ret = (await res.json()) as OB11Return<T>;

@@ -83,6 +83,18 @@ body {
   font-size: 12px;
 }
 
+/* 安全警告（非回环端点没设 token）：单独一行，不挤掉状态文案 */
+.statusbar .status-warning {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .statusbar.ready {
   color: var(--accent);
 }
@@ -354,8 +366,21 @@ button[disabled] {
   color: var(--fg-dim);
 }
 
+/* 同一行的勾选项（清除已保存的 token） */
+.setup label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
 .setup .err {
   color: var(--danger);
+  word-break: break-word;
+}
+
+/* 安全警告：不是错误，但必须让人看见（如非回环端点没设 token） */
+.setup .warn {
+  color: var(--warn);
   word-break: break-word;
 }
 

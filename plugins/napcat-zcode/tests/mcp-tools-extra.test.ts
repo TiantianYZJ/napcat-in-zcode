@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -318,6 +318,8 @@ describe('napcat_export', () => {
     state.clientOverride = fakeClient();
     state.homeDirOverride = tmp;
     state.workspaceDirOverride = join(tmp, 'ws');
+    // 工作区目录必须**已存在**（最终修复波 should-fix #7：不再凭空创建工作区目录树）
+    mkdirSync(join(tmp, 'ws'), { recursive: true });
     registerTools(server, state);
     const c = new Client({ name: 'test', version: '0.0.1' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -337,6 +339,8 @@ describe('napcat_export', () => {
 
   it('takes the export dir from the configuration when dir is omitted', async () => {
     const ws = join(tmp, 'ws');
+    // 工作区目录必须已存在（should-fix #7）
+    mkdirSync(ws, { recursive: true });
     const c = await makeClient(fakeClient(), { workspaceDir: ws });
     // 配置里的 dir 必须是**非默认值**，否则「读了配置」与「硬编码 user」无法区分。
     // 刻意在 state 建好之后写：刷新配置才是承重项。

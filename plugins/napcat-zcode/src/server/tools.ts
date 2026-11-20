@@ -9,6 +9,7 @@ import type { ChatRef, Message, Segment } from './model/types.js';
 import { safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import type { OB11Message } from './onebot/types.js';
 import type { AppState } from './state.js';
+import { endpointSecurityWarning } from './state.js';
 
 /** 单次 `napcat_get_history` 最多翻多少页（防死循环）。 */
 const MAX_PAGES = 40;
@@ -388,16 +389,28 @@ export function registerTools(server: McpServer, state: AppState): void {
   server.registerTool(
     'napcat_configure',
     {
-      description: '配置 OneBot 端点（地址与 token），保存后重连',
+      description:
+        '配置 OneBot 端点（地址与 token），保存后重连。' +
+        'token 留空（不传）= **保留已保存的 token**；要清除已存的 token，显式传 clearToken=true。' +
+        '端点不在本机且没有 token 时，返回里会带 warning（局域网暴露风险提示）。',
       inputSchema: {
         endpoint: z.string().describe('OneBot 11 端点，如 http://127.0.0.1:3000 或 ws://127.0.0.1:3001'),
-        token: z.string().optional().describe('access token，可空'),
+        token: z.string().optional().describe('access token；留空 = 保留已保存的 token'),
+        clearToken: z
+          .boolean()
+          .optional()
+          .describe('true = 清除已保存的 token（默认 false，即留空 token 不动已存值）'),
       },
     },
-    async ({ endpoint, token }) => {
+    async ({ endpoint, token, clearToken }) => {
       try {
-        const login = await state.setConnection(endpoint, token ?? '');
-        return ok({ configured: true, connected: true, login });
+        const login = await state.setConnection(endpoint, token ?? '', { clearToken: clearToken === true });
+        // 安全警告：非回环端点 + 没有 token → 同网段的人可能读到聊天记录（spec §5.2 / §9）
+        const warning = endpointSecurityWarning(
+          state.config.connection.endpoint,
+          state.config.connection.token ?? '',
+        );
+        return ok({ configured: true, connected: true, login, ...(warning ? { warning } : {}) });
       } catch (e) {
         return fail(state, e);
       }

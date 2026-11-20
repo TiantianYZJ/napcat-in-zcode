@@ -165,7 +165,14 @@ describe('mcp tool registration', () => {
     // description 里写明「连接失败返回 {connected:false, error} 且 isError 为 false」，避免下游当工具错误处理
     expect(byName.get('napcat_status')?.description).toContain('NapCat 连接状态与登录信息');
     expect(byName.get('napcat_status')?.description).toContain('isError 为 false');
-    expect(byName.get('napcat_configure')?.description).toBe('配置 OneBot 端点（地址与 token），保存后重连');
+    // configure 的 description 必须写明 token 的新语义（MF-2：留空 = 保留已存的 token，
+    // 清除要显式 clearToken）——agent 只看得到 description，不看文档。
+    // 原断言是 `toBe('配置 OneBot 端点（地址与 token），保存后重连')`，锁的是旧语义。
+    expect(byName.get('napcat_configure')?.description).toBe(
+      '配置 OneBot 端点（地址与 token），保存后重连。' +
+        'token 留空（不传）= **保留已保存的 token**；要清除已存的 token，显式传 clearToken=true。' +
+        '端点不在本机且没有 token 时，返回里会带 warning（局域网暴露风险提示）。',
+    );
     expect(byName.get('napcat_list_chats')?.description).toBe('列出群或好友');
     expect(byName.get('napcat_get_history')?.description).toBe('拉取会话历史消息（游标分页，时间正序返回）');
     // 入参 schema 形状固定（T10/T12 依赖）
