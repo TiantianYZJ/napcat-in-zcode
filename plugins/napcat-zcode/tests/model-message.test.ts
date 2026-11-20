@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest';
+import { normalizeMessage, segmentsText } from '../src/server/model/message.js';
+import type { OB11Message } from '../src/server/onebot/types.js';
+
+describe('normalizeMessage', () => {
+  it('normalizes a group text message', () => {
+    const raw: OB11Message = {
+      message_id: 1,
+      message_seq: 42,
+      time: 1700000000,
+      group_id: 123,
+      sender: { user_id: 10001, nickname: 'Alice', card: 'Alice[产品]' },
+      message: [{ type: 'text', data: { text: '场地定了吗？' } }],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.seq).toBe(42);
+    expect(m.senderName).toBe('Alice[产品]');
+    expect(m.text).toBe('场地定了吗？');
+    expect(m.segments).toEqual([{ kind: 'text', text: '场地定了吗？' }]);
+  });
+
+  it('projects media segments to placeholders', () => {
+    const raw: OB11Message = {
+      message_id: 2,
+      message_seq: 43,
+      time: 1700000001,
+      sender: { user_id: 2, nickname: 'Bob' },
+      message: [
+        { type: 'image', data: { url: 'https://x/img.png', file: 'img.png' } },
+        { type: 'text', data: { text: '看这个' } },
+        { type: 'face', data: { id: '13' } },
+        { type: 'record', data: { url: 'https://x/a.amr' } },
+        { type: 'at', data: { qq: 10001, name: 'Bob' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.text).toBe('[图片]看这个[表情][语音]@Bob');
+    expect(m.segments[0]).toMatchObject({ kind: 'image', url: 'https://x/img.png' });
+    expect(m.segments[3]).toMatchObject({ kind: 'voice', url: 'https://x/a.amr' });
+    // at 段有 name 时投影为 @name；没有 name 时回退为 @qq（标准 OB11 at 段只保证有 qq）。
+    expect(m.segments[4]).toMatchObject({ kind: 'at', qq: '10001', name: 'Bob' });
+    expect(segmentsText([{ kind: 'at', qq: '10001' }])).toBe('@10001');
+  });
+
+  it('extracts reply preview', () => {
+    const raw: OB11Message = {
+      message_id: 3,
+      message_seq: 44,
+      time: 1700000002,
+      sender: { user_id: 3, nickname: 'Carol' },
+      message: [
+        { type: 'reply', data: { id: '1' } },
+        { type: 'text', data: { text: '知道了' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.replyTo?.messageId).toBe('1');
+    expect(m.segments[0].kind).toBe('reply');
+  });
+
+  it('parses string message body via CQ fallback', () => {
+    const raw: OB11Message = {
+      message_id: 4,
+      message_seq: 45,
+      time: 1700000003,
+      sender: { user_id: 4, nickname: 'Dave' },
+      message: '你好 [CQ:image,file=abc.jpg] 世界',
+      raw_message: '你好 [CQ:image,file=abc.jpg] 世界',
+    };
+    const m = normalizeMessage(raw);
+    expect(m.segments).toEqual([
+      { kind: 'text', text: '你好 ' },
+      { kind: 'image', fileId: 'abc.jpg' },
+      { kind: 'text', text: ' 世界' },
+    ]);
+  });
+
+  it('segmentsText for forward', () => {
+    expect(segmentsText([{ kind: 'forward', messageId: '9' }])).toBe('[合并转发]');
+  });
+
+  // —— 以下为 brief 5 个测试之外补充的映射覆盖（自审要求：段类型映射表覆盖完整）——
+
+  it('maps every standard OneBot 11 segment type', () => {
+    const raw: OB11Message = {
+      message_id: 5,
+      message_seq: 46,
+      time: 1700000004,
+      sender: { user_id: 5, nickname: 'Eve' },
+      message: [
+        { type: 'text', data: { text: 'hi' } },
+        { type: 'at', data: { qq: 10001, name: 'Alice' } },
+        { type: 'face', data: { id: '13' } },
+        { type: 'reply', data: { id: '7' } },
+        { type: 'image', data: { url: 'https://x/i.png', file: 'i.png', width: '320', height: '240' } },
+        { type: 'record', data: { url: 'https://x/v.amr', seconds: '3' } },
+        { type: 'video', data: { url: 'https://x/v.mp4', file: 'v.mp4' } },
+        { type: 'file', data: { url: 'https://x/f.pdf', name: 'f.pdf', size: '1024' } },
+        { type: 'json', data: { data: '{"a":1}' } },
+        { type: 'forward', data: { id: '9' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.segments.map((s) => s.kind)).toEqual([
+      'text',
+      'at',
+      'face',
+      'reply',
+      'image',
+      'voice',
+      'video',
+      'file',
+      'json',
+      'forward',
+    ]);
+    expect(m.segments[2]).toMatchObject({ kind: 'face', faceId: '13' });
+    expect(m.segments[3]).toEqual({ kind: 'reply', messageId: '7' });
+    expect(m.segments[4]).toMatchObject({
+      kind: 'image',
+      url: 'https://x/i.png',
+      fileId: 'i.png',
+      width: 320,
+      height: 240,
+    });
+    expect(m.segments[5]).toMatchObject({ kind: 'voice', url: 'https://x/v.amr', duration: 3 });
+    expect(m.segments[6]).toMatchObject({ kind: 'video', url: 'https://x/v.mp4', fileName: 'v.mp4' });
+    expect(m.segments[7]).toMatchObject({ kind: 'file', url: 'https://x/f.pdf', fileName: 'f.pdf', size: 1024 });
+    expect(m.segments[8]).toMatchObject({ kind: 'json', raw: '{"a":1}' });
+    expect(m.segments[9]).toMatchObject({ kind: 'forward', messageId: '9' });
+  });
+
+  it('falls back to a placeholder for unknown segment types', () => {
+    const raw: OB11Message = {
+      message_id: 6,
+      message_seq: 47,
+      time: 1700000005,
+      sender: { user_id: 6, nickname: 'Frank' },
+      message: [{ type: 'dice', data: { result: '3' } }],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.segments).toEqual([{ kind: 'text', text: '[dice]' }]);
+    expect(m.text).toBe('[dice]');
+  });
+
+  it('keeps CQ escaped commas and query-string urls intact', () => {
+    const raw: OB11Message = {
+      message_id: 7,
+      message_seq: 48,
+      time: 1700000006,
+      sender: { user_id: 7, nickname: 'Grace' },
+      message: '[CQ:image,file=a&#44;b.jpg,url=https://x/i.png?w=1&h=2]',
+      raw_message: '[CQ:image,file=a&#44;b.jpg,url=https://x/i.png?w=1&h=2]',
+    };
+    const m = normalizeMessage(raw);
+    expect(m.segments).toEqual([
+      { kind: 'image', fileId: 'a,b.jpg', url: 'https://x/i.png?w=1&h=2' },
+    ]);
+    expect(m.text).toBe('[图片]');
+  });
+});
