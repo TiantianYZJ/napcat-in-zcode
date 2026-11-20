@@ -72,11 +72,12 @@ afterEach(() => {
   else process.env.ZCODE_PLUGIN_DATA = v;
 });
 
-async function makeClient(client: OneBotClient = fakeClient()) {
+async function makeClient(client: OneBotClient = fakeClient(), opts: { workspaceDir?: string } = {}) {
   const server = new McpServer({ name: 'napcat', version: '0.1.0' });
   const state = new AppState();
   state.clientOverride = client;
   state.homeDirOverride = tmp; // 导出走临时目录，不污染真实用户目录
+  if (opts.workspaceDir) state.workspaceDirOverride = opts.workspaceDir;
   registerTools(server, state);
   const c = new Client({ name: 'test', version: '0.0.1' });
   const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -232,11 +233,13 @@ describe('napcat_format_selection', () => {
 
   it('defaults maxChars to the configured inject.maxInjectChars', async () => {
     const c = await makeClient();
+    // 配置值必须**不是**内置默认 40000，否则「读了配置」与「任意大默认值」无法区分
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ inject: { maxInjectChars: 50 } }));
     const hist = payload(await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1' } }));
     const r = await c.callTool({ name: 'napcat_format_selection', arguments: { messages: hist.messages, chatName: '产品群' } });
     const p = payload(r);
-    expect(p.truncated).toBe(false);
-    expect(p.count).toBe(hist.messages.length);
+    expect(p.truncated).toBe(true); // 50 字符的预算装不下 4 条
+    expect(p.count).toBe(1); // 只渲染得下第一条
     expect(p.text).toContain('产品群');
   });
 
@@ -253,6 +256,22 @@ describe('napcat_format_selection', () => {
     const r = await c.callTool({ name: 'napcat_format_selection', arguments: { messages: [{ text: 'no time field' }], chatName: '产品群' } });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('time');
+  });
+
+  it('rejects a message whose time is null instead of rendering 1970-01-01', async () => {
+    const c = await makeClient();
+    // Number(null) === 0 是有限数 → 宽松写法会把它当 epoch 0 渲染成 1970-01-01
+    const r = await c.callTool({ name: 'napcat_format_selection', arguments: { messages: [{ time: null, text: 'x' }], chatName: '产品群' } });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('time');
+  });
+
+  it('reports an error when messages is not an array', async () => {
+    // 入参 schema 不再强制数组性 → 形状错误由工具内部校验，转成 isError（不是协议级错误）
+    const c = await makeClient();
+    const r = await c.callTool({ name: 'napcat_format_selection', arguments: { messages: 'abc', chatName: '产品群' } });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('数组');
   });
 });
 
@@ -295,12 +314,16 @@ describe('napcat_export', () => {
   }, 20000);
 
   it('takes the export dir from the configuration when dir is omitted', async () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'user' } }));
-    const c = await makeClient();
+    const ws = join(tmp, 'ws');
+    const c = await makeClient(fakeClient(), { workspaceDir: ws });
+    // 配置里的 dir 必须是**非默认值**，否则「读了配置」与「硬编码 user」无法区分。
+    // 刻意在 state 建好之后写：刷新配置才是承重项。
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));
     const hist = payload(await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1' } }));
     const r = await c.callTool({ name: 'napcat_export', arguments: { messages: hist.messages, chat: { kind: 'group', id: '1', name: '产品群' } } });
     const p = payload(r);
-    expect(p.mdPath).toContain(join(tmp, '.zcode', 'napcat', 'exports'));
+    expect(p.mdPath).toContain(join(ws, '.zcode', 'napcat', 'exports')); // 落在工作区
+    expect(p.mdPath).not.toContain(join(tmp, '.zcode', 'napcat', 'exports')); // 没落到 user 目录
   });
 
   it('reports an error when neither messages nor a seq range is given', async () => {
@@ -327,6 +350,38 @@ describe('napcat_export', () => {
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('export upstream down');
+  });
+
+  it('rejects a reversed seq range instead of writing an empty export', async () => {
+    // fromSeq > toSeq → fetchMessagesBetween 会返回 []，工具就会静默写出一对 `_empty` 空文件
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromSeq: 10, toSeq: 6 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('fromSeq');
+  });
+
+  it('rejects a chat that disagrees with the fetch parameters', async () => {
+    // 否则能把 1 号群的区间写进 999 号群名下的文件（张冠李戴，事后看不出来）
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: '999', name: '另一个群' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('不一致');
+  });
+
+  it('rejects a chat whose kind disagrees with the fetch parameters', async () => {
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'friend', id: '1', name: '张三' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('不一致');
   });
 });
 
@@ -365,6 +420,19 @@ describe('napcat_get_config', () => {
     expect(p.connection.token).toBe('');
     expect(p.inject.maxInjectChars).toBeGreaterThan(0);
   });
+
+  it('masks credentials embedded in autoDetect endpoints', async () => {
+    const c = await makeClient();
+    writeFileSync(
+      join(tmp, 'config.json'),
+      JSON.stringify({ autoDetect: { endpoints: ['http://user:pass@127.0.0.1:3000/?access_token=super-secret'] } }),
+    );
+    const r = await c.callTool({ name: 'napcat_get_config', arguments: {} });
+    const text = (r.content as Array<{ text: string }>)[0].text;
+    expect(text).not.toContain('super-secret');
+    expect(text).not.toContain('pass');
+    expect(payload(r).autoDetect.endpoints[0]).toContain('127.0.0.1:3000');
+  });
 });
 
 describe('mcp tool registration (T10)', () => {
@@ -389,5 +457,17 @@ describe('mcp tool registration (T10)', () => {
     expect(props('napcat_format_selection')).toEqual(['chatName', 'maxChars', 'messages']);
     expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromSeq', 'includeImages', 'messages', 'toSeq', 'workspaceDir']);
     expect(props('napcat_get_config')).toEqual([]);
+  });
+
+  it('publishes the chat structure in the export input schema', async () => {
+    // chat 的结构要留在发布的 JSON Schema 里（面板据此提示），取值校验在工具内部做
+    const c = await makeClient();
+    const list = await c.listTools();
+    const schema = list.tools.find((t) => t.name === 'napcat_export')?.inputSchema as {
+      properties?: Record<string, { type?: string; properties?: Record<string, unknown> }>;
+    };
+    const chat = schema.properties?.chat;
+    expect(chat?.type).toBe('object');
+    expect(Object.keys(chat?.properties ?? {}).sort()).toEqual(['id', 'kind', 'name']);
   });
 });

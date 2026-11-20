@@ -188,7 +188,20 @@ function coerceMessage(v: unknown, index: number): Message {
     throw new Error(`第 ${index + 1} 条消息不是对象`);
   }
   const o = v as Record<string, unknown>;
-  const time = Number(o.time);
+  /**
+   * `time` 必须是有限数。
+   *
+   * 注意 `Number(null) === 0` —— 直接 `Number(o.time)` 会把 `null` 当成 epoch 0，
+   * 渲染成 1970-01-01（而不是报出「缺少有效的 time 字段」）。
+   * 这里只接受数字或非空数字串，`null`/`undefined`/`''`/布尔一律拒绝。
+   */
+  const rawTime = o.time;
+  const time =
+    typeof rawTime === 'number'
+      ? rawTime
+      : typeof rawTime === 'string' && rawTime.trim() !== ''
+        ? Number(rawTime)
+        : Number.NaN;
   if (!Number.isFinite(time)) {
     throw new Error(`第 ${index + 1} 条消息缺少有效的 time 字段（epoch 秒）`);
   }
@@ -454,9 +467,11 @@ export function registerTools(server: McpServer, state: AppState): void {
       description:
         '会话内关键词搜索：向更早翻页扫描后按正文过滤（OneBot 11 无服务端搜索动作，扫描范围有限）。' +
         '返回 {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}；' +
+        'scanned = 扫过的不同消息条数；pages = 翻过的页数（含可能的最后一空页）；' +
         'contextBefore 是命中消息在时间上紧邻其前（更早）的那条；' +
         'exhausted 为三合一语义（历史耗尽 / 游标推不动 / 翻页触顶 maxPages 上限），不等于「没有更早的消息了」' +
-        '——判断还有更早消息请看「再翻一页是否返回空」。',
+        '——判断还有更早消息请看「再翻一页是否返回空」；' +
+        '命中数达上限而提前停止时 exhausted 为 false（那时是 hitsTruncated 在说明）。',
       inputSchema: {
         chatKind: z.enum(['group', 'friend']),
         chatId: z.string(),
@@ -489,7 +504,7 @@ export function registerTools(server: McpServer, state: AppState): void {
         '把选定消息格式化为注入文本：首行恒为「第三方内容」不可信声明（不改写、不裁剪），' +
         '逐条 [HH:mm] 发言人：内容；超出 maxChars 时截断并尾注。返回 {text, count, truncated}。',
       inputSchema: {
-        messages: z.array(z.any()).describe('napcat_get_history 返回的 Message 对象数组'),
+        messages: z.any().describe('napcat_get_history 返回的 Message 对象数组（必须是数组；元素须带 time 字段）'),
         chatName: z.string().describe('会话名（群名 / 好友名）'),
         maxChars: z.number().optional().describe('注入文本字符上限；缺省取配置 inject.maxInjectChars'),
       },
@@ -518,10 +533,14 @@ export function registerTools(server: McpServer, state: AppState): void {
         '返回 {mdPath, jsonPath, gitignoreUpdated}。',
       inputSchema: {
         messages: z
-          .array(z.any())
+          .any()
           .optional()
-          .describe('要导出的消息（Message 对象数组）；缺省时用 chatKind/chatId/fromSeq/toSeq 现拉该 seq 区间'),
-        chat: z.any().describe('会话引用 {kind:"group"|"friend", id:string, name:string}'),
+          .describe('要导出的消息（Message 对象数组；元素须带 time 字段）；缺省时用 chatKind/chatId/fromSeq/toSeq 现拉该 seq 区间'),
+        // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
+        chat: z
+          .object({ kind: z.string(), id: z.string(), name: z.string() })
+          .partial()
+          .describe('会话引用 {kind:"group"|"friend", id:string, name:string}'),
         chatKind: z.enum(['group', 'friend']).optional().describe('现拉时的会话类型'),
         chatId: z.string().optional().describe('现拉时的会话 id'),
         fromSeq: z.number().optional().describe('现拉时的起始 message_seq（含）'),
@@ -541,6 +560,18 @@ export function registerTools(server: McpServer, state: AppState): void {
         if (a.messages === undefined || a.messages.length === 0) {
           if (a.chatKind === undefined || a.chatId === undefined || a.fromSeq === undefined || a.toSeq === undefined) {
             throw new Error('缺少 messages 时需要同时给出 chatKind、chatId、fromSeq、toSeq（现拉该 seq 区间）');
+          }
+          // 区间反了 → 明确报错。否则 fetchMessagesBetween 会返回空数组，
+          // 工具静默写出一对 `{会话名}_empty` 的空文件（看着像导出成功，其实是空的）。
+          if (a.fromSeq > a.toSeq) {
+            throw new Error(`fromSeq（${a.fromSeq}）不能大于 toSeq（${a.toSeq}）`);
+          }
+          // 交叉校验：现拉的会话必须与 chat 指向同一个会话。
+          // 不校验就能把 B 群的区间写进 A 群名下的文件（张冠李戴，且事后看不出来）。
+          if (chat.kind !== a.chatKind || chat.id !== a.chatId) {
+            throw new Error(
+              `chat（${chat.kind}/${chat.id}）与现拉参数（${a.chatKind}/${a.chatId}）不一致`,
+            );
           }
           const c = await state.ensureClient();
           msgs = (await fetchMessagesBetween(c, a.chatKind, a.chatId, a.fromSeq, a.toSeq)).map(normalizeMessage);
@@ -584,13 +615,22 @@ export function registerTools(server: McpServer, state: AppState): void {
         const cfg = state.config;
         const token = cfg.connection?.token ?? '';
         const endpoint = cfg.connection?.endpoint ?? '';
+        /**
+         * 端点一律脱敏：端点里可能带 access_token（ws 约定）/ user:pass。
+         * `autoDetect.endpoints` 是**一列端点**，同样可能有凭据 → 逐条脱敏，
+         * 否则用户把带凭据的 URL 放进候选列表就会明文出现在面板里。
+         */
+        const maskEndpoint = (ep: string): string => state.redact(safeEndpointLabel(ep));
         const masked = {
           ...cfg,
           connection: {
             ...cfg.connection,
-            // 端点里可能带 access_token（ws 约定）/ user:pass → 用 safeEndpointLabel 去掉 query 与 userinfo
-            endpoint: state.redact(safeEndpointLabel(endpoint)),
+            endpoint: maskEndpoint(endpoint),
             token: token ? '***' : '',
+          },
+          autoDetect: {
+            ...cfg.autoDetect,
+            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint),
           },
         };
         return ok(masked);

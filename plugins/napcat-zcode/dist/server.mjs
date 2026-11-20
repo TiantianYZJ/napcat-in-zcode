@@ -22470,7 +22470,8 @@ function coerceMessage(v, index) {
     throw new Error(`\u7B2C ${index + 1} \u6761\u6D88\u606F\u4E0D\u662F\u5BF9\u8C61`);
   }
   const o = v;
-  const time3 = Number(o.time);
+  const rawTime = o.time;
+  const time3 = typeof rawTime === "number" ? rawTime : typeof rawTime === "string" && rawTime.trim() !== "" ? Number(rawTime) : Number.NaN;
   if (!Number.isFinite(time3)) {
     throw new Error(`\u7B2C ${index + 1} \u6761\u6D88\u606F\u7F3A\u5C11\u6709\u6548\u7684 time \u5B57\u6BB5\uFF08epoch \u79D2\uFF09`);
   }
@@ -22654,7 +22655,7 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_search_messages",
     {
-      description: "\u4F1A\u8BDD\u5185\u5173\u952E\u8BCD\u641C\u7D22\uFF1A\u5411\u66F4\u65E9\u7FFB\u9875\u626B\u63CF\u540E\u6309\u6B63\u6587\u8FC7\u6EE4\uFF08OneBot 11 \u65E0\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u626B\u63CF\u8303\u56F4\u6709\u9650\uFF09\u3002\u8FD4\u56DE {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}\uFF1BcontextBefore \u662F\u547D\u4E2D\u6D88\u606F\u5728\u65F6\u95F4\u4E0A\u7D27\u90BB\u5176\u524D\uFF08\u66F4\u65E9\uFF09\u7684\u90A3\u6761\uFF1Bexhausted \u4E3A\u4E09\u5408\u4E00\u8BED\u4E49\uFF08\u5386\u53F2\u8017\u5C3D / \u6E38\u6807\u63A8\u4E0D\u52A8 / \u7FFB\u9875\u89E6\u9876 maxPages \u4E0A\u9650\uFF09\uFF0C\u4E0D\u7B49\u4E8E\u300C\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u300D\u2014\u2014\u5224\u65AD\u8FD8\u6709\u66F4\u65E9\u6D88\u606F\u8BF7\u770B\u300C\u518D\u7FFB\u4E00\u9875\u662F\u5426\u8FD4\u56DE\u7A7A\u300D\u3002",
+      description: "\u4F1A\u8BDD\u5185\u5173\u952E\u8BCD\u641C\u7D22\uFF1A\u5411\u66F4\u65E9\u7FFB\u9875\u626B\u63CF\u540E\u6309\u6B63\u6587\u8FC7\u6EE4\uFF08OneBot 11 \u65E0\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u626B\u63CF\u8303\u56F4\u6709\u9650\uFF09\u3002\u8FD4\u56DE {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}\uFF1Bscanned = \u626B\u8FC7\u7684\u4E0D\u540C\u6D88\u606F\u6761\u6570\uFF1Bpages = \u7FFB\u8FC7\u7684\u9875\u6570\uFF08\u542B\u53EF\u80FD\u7684\u6700\u540E\u4E00\u7A7A\u9875\uFF09\uFF1BcontextBefore \u662F\u547D\u4E2D\u6D88\u606F\u5728\u65F6\u95F4\u4E0A\u7D27\u90BB\u5176\u524D\uFF08\u66F4\u65E9\uFF09\u7684\u90A3\u6761\uFF1Bexhausted \u4E3A\u4E09\u5408\u4E00\u8BED\u4E49\uFF08\u5386\u53F2\u8017\u5C3D / \u6E38\u6807\u63A8\u4E0D\u52A8 / \u7FFB\u9875\u89E6\u9876 maxPages \u4E0A\u9650\uFF09\uFF0C\u4E0D\u7B49\u4E8E\u300C\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u300D\u2014\u2014\u5224\u65AD\u8FD8\u6709\u66F4\u65E9\u6D88\u606F\u8BF7\u770B\u300C\u518D\u7FFB\u4E00\u9875\u662F\u5426\u8FD4\u56DE\u7A7A\u300D\uFF1B\u547D\u4E2D\u6570\u8FBE\u4E0A\u9650\u800C\u63D0\u524D\u505C\u6B62\u65F6 exhausted \u4E3A false\uFF08\u90A3\u65F6\u662F hitsTruncated \u5728\u8BF4\u660E\uFF09\u3002",
       inputSchema: {
         chatKind: external_exports.enum(["group", "friend"]),
         chatId: external_exports.string(),
@@ -22680,7 +22681,7 @@ function registerTools(server2, state) {
     {
       description: "\u628A\u9009\u5B9A\u6D88\u606F\u683C\u5F0F\u5316\u4E3A\u6CE8\u5165\u6587\u672C\uFF1A\u9996\u884C\u6052\u4E3A\u300C\u7B2C\u4E09\u65B9\u5185\u5BB9\u300D\u4E0D\u53EF\u4FE1\u58F0\u660E\uFF08\u4E0D\u6539\u5199\u3001\u4E0D\u88C1\u526A\uFF09\uFF0C\u9010\u6761 [HH:mm] \u53D1\u8A00\u4EBA\uFF1A\u5185\u5BB9\uFF1B\u8D85\u51FA maxChars \u65F6\u622A\u65AD\u5E76\u5C3E\u6CE8\u3002\u8FD4\u56DE {text, count, truncated}\u3002",
       inputSchema: {
-        messages: external_exports.array(external_exports.any()).describe("napcat_get_history \u8FD4\u56DE\u7684 Message \u5BF9\u8C61\u6570\u7EC4"),
+        messages: external_exports.any().describe("napcat_get_history \u8FD4\u56DE\u7684 Message \u5BF9\u8C61\u6570\u7EC4\uFF08\u5FC5\u987B\u662F\u6570\u7EC4\uFF1B\u5143\u7D20\u987B\u5E26 time \u5B57\u6BB5\uFF09"),
         chatName: external_exports.string().describe("\u4F1A\u8BDD\u540D\uFF08\u7FA4\u540D / \u597D\u53CB\u540D\uFF09"),
         maxChars: external_exports.number().optional().describe("\u6CE8\u5165\u6587\u672C\u5B57\u7B26\u4E0A\u9650\uFF1B\u7F3A\u7701\u53D6\u914D\u7F6E inject.maxInjectChars")
       }
@@ -22701,8 +22702,9 @@ function registerTools(server2, state) {
     {
       description: "\u5BFC\u51FA\u9009\u5B9A\u6D88\u606F\u4E3A Markdown + JSON \u6587\u4EF6\u5BF9\uFF1A\u9ED8\u8BA4\u843D\u5728 ~/.zcode/napcat/exports\uFF0Cdir=workspace \u65F6\u843D\u5728 <\u5DE5\u4F5C\u533A>/.zcode/napcat/exports \u5E76\u81EA\u52A8\u8865 .gitignore \u89C4\u5219\u3002gitignoreUpdated=false \u8868\u793A\u300C.gitignore \u5DF2\u8986\u76D6\u8BE5\u76EE\u5F55\u300D\u6216\u300C\u7528\u6237\u5199\u4E86\u53D6\u53CD\u89C4\u5219\u800C\u8DF3\u8FC7\u300D\u3002includeImages \u76EE\u524D\u4E0D\u4E0B\u8F7D\u56FE\u7247\u6587\u4EF6\uFF08\u5BFC\u51FA\u91CC\u56FE\u7247\u4E3A\u5360\u4F4D\u7B26 + URL \u8BB0\u5F55\uFF09\uFF0C\u5A92\u4F53\u4E0B\u8F7D\u968F M1.1 \u589E\u5F3A\u3002\u8FD4\u56DE {mdPath, jsonPath, gitignoreUpdated}\u3002",
       inputSchema: {
-        messages: external_exports.array(external_exports.any()).optional().describe("\u8981\u5BFC\u51FA\u7684\u6D88\u606F\uFF08Message \u5BF9\u8C61\u6570\u7EC4\uFF09\uFF1B\u7F3A\u7701\u65F6\u7528 chatKind/chatId/fromSeq/toSeq \u73B0\u62C9\u8BE5 seq \u533A\u95F4"),
-        chat: external_exports.any().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string, name:string}'),
+        messages: external_exports.any().optional().describe("\u8981\u5BFC\u51FA\u7684\u6D88\u606F\uFF08Message \u5BF9\u8C61\u6570\u7EC4\uFF1B\u5143\u7D20\u987B\u5E26 time \u5B57\u6BB5\uFF09\uFF1B\u7F3A\u7701\u65F6\u7528 chatKind/chatId/fromSeq/toSeq \u73B0\u62C9\u8BE5 seq \u533A\u95F4"),
+        // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
+        chat: external_exports.object({ kind: external_exports.string(), id: external_exports.string(), name: external_exports.string() }).partial().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string, name:string}'),
         chatKind: external_exports.enum(["group", "friend"]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD\u7C7B\u578B"),
         chatId: external_exports.string().optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD id"),
         fromSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u8D77\u59CB message_seq\uFF08\u542B\uFF09"),
@@ -22720,6 +22722,14 @@ function registerTools(server2, state) {
         if (a.messages === void 0 || a.messages.length === 0) {
           if (a.chatKind === void 0 || a.chatId === void 0 || a.fromSeq === void 0 || a.toSeq === void 0) {
             throw new Error("\u7F3A\u5C11 messages \u65F6\u9700\u8981\u540C\u65F6\u7ED9\u51FA chatKind\u3001chatId\u3001fromSeq\u3001toSeq\uFF08\u73B0\u62C9\u8BE5 seq \u533A\u95F4\uFF09");
+          }
+          if (a.fromSeq > a.toSeq) {
+            throw new Error(`fromSeq\uFF08${a.fromSeq}\uFF09\u4E0D\u80FD\u5927\u4E8E toSeq\uFF08${a.toSeq}\uFF09`);
+          }
+          if (chat.kind !== a.chatKind || chat.id !== a.chatId) {
+            throw new Error(
+              `chat\uFF08${chat.kind}/${chat.id}\uFF09\u4E0E\u73B0\u62C9\u53C2\u6570\uFF08${a.chatKind}/${a.chatId}\uFF09\u4E0D\u4E00\u81F4`
+            );
           }
           const c = await state.ensureClient();
           msgs = (await fetchMessagesBetween(c, a.chatKind, a.chatId, a.fromSeq, a.toSeq)).map(normalizeMessage);
@@ -22756,13 +22766,17 @@ function registerTools(server2, state) {
         const cfg = state.config;
         const token = cfg.connection?.token ?? "";
         const endpoint = cfg.connection?.endpoint ?? "";
+        const maskEndpoint = (ep) => state.redact(safeEndpointLabel(ep));
         const masked = {
           ...cfg,
           connection: {
             ...cfg.connection,
-            // 端点里可能带 access_token（ws 约定）/ user:pass → 用 safeEndpointLabel 去掉 query 与 userinfo
-            endpoint: state.redact(safeEndpointLabel(endpoint)),
+            endpoint: maskEndpoint(endpoint),
             token: token ? "***" : ""
+          },
+          autoDetect: {
+            ...cfg.autoDetect,
+            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint)
           }
         };
         return ok(masked);
