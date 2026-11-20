@@ -34,18 +34,25 @@ function flatten(s: string): string {
   return s.replace(/\r?\n/g, ' ').trim();
 }
 
-/** Markdown 链接文本转义：方括号会破坏链接结构（`]` → `\]`）。 */
+/**
+ * Markdown 链接文本转义：方括号会破坏链接结构（`]` → `\]`），反斜杠本身是转义符（`\` → `\\`）。
+ * 反斜杠漏转义时，文件名以 `\` 结尾会产出 `[文件 a\]`——`\]` 被当成转义掉的右括号，链接结构随之破坏。
+ */
 function escapeLabel(s: string): string {
-  return s.replace(/([[\]])/g, '\\$1');
+  return s.replace(/([\\\[\]])/g, '\\$1');
 }
 
 /**
  * Markdown 链接目标：含空白或括号的 URL 会破坏 inline link 语法 → 用尖括号形式 `<url>`；
  * URL 里的 `<`/`>` 本身会破坏尖括号形式 → 先百分号编码。
+ *
+ * 非尖括号分支还要转义反斜杠：CommonMark 会把 `\` 当转义符吃掉（`a\b.png` → `ab.png`）；
+ * 尖括号目标内部不做转义处理，故那里无需处理反斜杠。
  */
 function linkTarget(url: string): string {
   const safe = url.replace(/[<>]/g, (c) => (c === '<' ? '%3C' : '%3E'));
-  return /[\s()]/.test(safe) ? `<${safe}>` : safe;
+  if (/[\s()]/.test(safe)) return `<${safe}>`;
+  return safe.replace(/\\/g, '\\\\');
 }
 
 /** UTC 偏移标记（如 `UTC+08:00`）：让本地时间尾注能被换算成 JSON 里的 UTC ISO 时间。 */

@@ -5,8 +5,6 @@ import type { ChatRef, Message } from '../model/types.js';
 import { renderJson } from './json.js';
 import { renderMarkdown } from './markdown.js';
 
-/** 导出目录相对工作区的路径（gitignore 覆盖判定用）。 */
-const EXPORT_RELPATH = '.zcode/napcat/exports';
 /** 导出目录本身 + 它的各级祖先目录（判定「某条规则是否盖住了导出目录」）。 */
 const EXPORT_ANCESTORS = ['.zcode', '.zcode/napcat', '.zcode/napcat/exports'];
 
@@ -117,8 +115,10 @@ function ensureGitignore(wsDir: string): boolean {
   }
 
   const eol = dominantEol(content);
-  // 原文件没有结尾换行时先补一个，避免把新规则粘在上一行末尾。
-  const prefix = content && !content.endsWith('\n') && !content.endsWith('\r') ? eol : '';
+  // 原文件没有以 LF 结尾时先补一个换行，避免把新规则粘在上一行末尾。
+  // 末字节是**孤立 CR** 时同样要补：gitignore 只按 LF 分行，孤立 CR 不构成行结束符，
+  // 不补分隔符的话新规则会被并进上一行（该规则随之失效）。
+  const prefix = content && !content.endsWith('\n') ? eol : '';
   appendFileSync(gi, `${prefix}.zcode/napcat/${eol}`, 'utf-8');
   return true;
 }
@@ -211,6 +211,9 @@ export async function exportSelection(opts: {
   const { mdPath, jsonPath } = resolvePaths(target, base, opts.chat.id);
   const md = renderMarkdown(opts.messages, opts.chat);
   const json = renderJson(opts.messages, opts.chat);
+  // 本次是新建还是覆盖：只有**本次新建**的 md 才允许在 json 写失败时删掉。
+  // 覆盖场景下删掉的是用户原有的导出（内容已被本次写入覆盖，删了只会让目录里连 md 都不剩）。
+  const mdExisted = existsSync(mdPath);
 
   try {
     writeFileSync(mdPath, md, 'utf-8');
@@ -220,8 +223,10 @@ export async function exportSelection(opts: {
   try {
     writeFileSync(jsonPath, json, 'utf-8');
   } catch (err) {
-    // json 写失败时把已落盘的 md 撤掉，别留下孤儿文件（半对产物比没有更难判断）。
-    try { unlinkSync(mdPath); } catch { /* 清理失败不掩盖原始错误 */ }
+    // json 写失败时把**本次新建**的 md 撤掉，别留下孤儿文件（半对产物比没有更难判断）。
+    if (!mdExisted) {
+      try { unlinkSync(mdPath); } catch { /* 清理失败不掩盖原始错误 */ }
+    }
     throw new Error(`export failed writing json ${jsonPath}: ${errText(err)}`);
   }
   return { mdPath, jsonPath, gitignoreUpdated };

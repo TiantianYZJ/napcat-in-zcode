@@ -149,6 +149,19 @@ describe('renderMarkdown', () => {
     expect(md).toContain('[图片](https://x/i.png)');
   });
 
+  // N4/N5：label 里的反斜杠要转义（否则 `a\` 会吃掉后面的 `]`），非尖括号 URL 里的反斜杠也要转义。
+  it('escapes backslashes in labels and plain urls', () => {
+    const md = renderMarkdown([{
+      id: '10', seq: 10, time: T0, senderId: '10', senderName: 'Ann',
+      segments: [
+        { kind: 'file', fileName: 'a\\b.pdf', url: 'https://x/f.pdf' },
+        { kind: 'image', url: 'https://x/a\\b.png' },
+      ], text: '',
+    }], CHAT);
+    expect(md).toContain('[文件 a\\\\b.pdf](https://x/f.pdf)');
+    expect(md).toContain('[图片](https://x/a\\\\b.png)');
+  });
+
   // M15：本地时间尾注补 UTC 偏移量，便于与 JSON 的 UTC ISO 时间对照。
   it('marks the export timestamp with its UTC offset', () => {
     const md = renderMarkdown(MSGS, CHAT);
@@ -342,6 +355,26 @@ describe('exportSelection', () => {
     await expect(exportSelection({ messages: MSGS, chat: CHAT, dir: 'abs', absPath: dir }))
       .rejects.toThrow(/export failed writing json/);
     expect(existsSync(join(dir, `${base}.md`))).toBe(false);
+  });
+
+  // N2：覆盖场景下 json 写失败**不能**删掉原有的 .md（删了目录里连 md 都不剩）。
+  it('keeps a pre-existing markdown when the json write fails on a re-export', async () => {
+    const dir = join(tmp, 'out');
+    const first = await exportSelection({ messages: MSGS, chat: CHAT, dir: 'abs', absPath: dir });
+    fsState.failJsonWrite = true;
+    await expect(exportSelection({ messages: MSGS, chat: CHAT, dir: 'abs', absPath: dir }))
+      .rejects.toThrow(/export failed writing json/);
+    expect(existsSync(first.mdPath)).toBe(true);
+    expect(readFileSync(first.mdPath, 'utf-8')).toBe(renderMarkdown(MSGS, CHAT));
+  });
+
+  // N1：末字节是孤立 CR 时也要补分隔符，否则新规则会被并进上一行（该规则失效）。
+  it('separates the appended rule when the gitignore ends with a lone CR', async () => {
+    writeFileSync(join(tmp, '.gitignore'), 'node_modules/\r');
+    const r = await exportSelection({ messages: MSGS, chat: CHAT, dir: 'workspace', workspaceDir: tmp });
+    expect(r.gitignoreUpdated).toBe(true);
+    const gi = readFileSync(join(tmp, '.gitignore'), 'utf-8');
+    expect(gi.split('\n')[1]).toBe('.zcode/napcat/');
   });
 });
 
