@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { createClient } from '../src/server/onebot/client.js';
+import { createClient, type OneBotClient } from '../src/server/onebot/client.js';
 import {
   fetchHistoryPage,
   fetchMessagesBetween,
@@ -19,20 +19,45 @@ const FRIENDS = [{ user_id: 777, nickname: '好友A' }];
 let server: Server;
 let port: number;
 
-// 包装层测试的响应开关：listShape 决定列表动作返回裸数组还是 {groups}/{friends} 包装；nullData 决定 data 是否为 null。
+// 最近一次请求的 URL 与请求体（用于断言 action 名与参数名）。
+let lastUrl = '';
+let lastBody: Record<string, unknown> = {};
+let requestCount = 0;
+
+// 服务端行为开关：
+// - listShape：列表动作返回裸数组还是 {groups}/{friends} 包装；
+// - nullData：列表/历史动作的 data 为 null；
+// - nullLoginInfo：get_login_info 的 data 为 null；
+// - ignoreMessageSeq：服务端忽略 message_seq（恒返回最新一页，游标不推进）；
+// - maxItemsPerPage：服务端把每页条目数钳到该值（0 = 不钳，模拟 count 被服务端限流）；
+// - seqlessItems：每页额外混入一条没有 message_seq 的消息。
 let listShape: 'array' | 'object' = 'array';
 let nullData = false;
+let nullLoginInfo = false;
+let ignoreMessageSeq = false;
+let maxItemsPerPage = 0;
+let seqlessItems = false;
 
 beforeEach(async () => {
   listShape = 'array';
   nullData = false;
+  nullLoginInfo = false;
+  ignoreMessageSeq = false;
+  maxItemsPerPage = 0;
+  seqlessItems = false;
+  lastUrl = '';
+  lastBody = {};
+  requestCount = 0;
   server = createServer((req, res) => {
     let chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
+      requestCount++;
+      lastUrl = req.url ?? '';
       const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      lastBody = body;
       const action = req.url?.slice(1) ?? '';
-      const count = body.count ?? 3;
+      const count = maxItemsPerPage > 0 ? maxItemsPerPage : (body.count ?? 3);
       let page: typeof ALL;
       if (!body.message_seq) {
         page = ALL.filter((m) => m.message_seq > 7); // 最新一页
@@ -40,9 +65,11 @@ beforeEach(async () => {
         const s = Number(body.message_seq);
         page = ALL.filter((m) => m.message_seq < s).slice(-count);
       }
+      if (ignoreMessageSeq) page = ALL.filter((m) => m.message_seq > 7); // 忽略游标：恒返回最新一页
+      if (seqlessItems) page = [...page, { time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as typeof ALL;
       res.setHeader('content-type', 'application/json');
       if (action === 'get_login_info') {
-        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullData ? null : { user_id: 12345, nickname: 'Bot' } }));
+        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullLoginInfo ? null : { user_id: 12345, nickname: 'Bot' } }));
         return;
       }
       if (action === 'get_group_list') {
@@ -56,6 +83,7 @@ beforeEach(async () => {
         return;
       }
       res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullData ? null : { messages: page } }));
+
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -143,6 +171,104 @@ describe('action wrappers', () => {
     expect(await getFriendList(c)).toEqual([]);
     expect(await fetchHistoryPage(c, 'group', '123')).toEqual([]);
     expect(await fetchHistoryPage(c, 'friend', '555')).toEqual([]);
+    await c.close();
+  });
+
+  it('getLoginInfo throws OneBotError when the server returns null data', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    nullLoginInfo = true;
+    await expect(getLoginInfo(c)).rejects.toMatchObject({ name: 'OneBotError', retcode: -1 });
+    await c.close();
+  });
+});
+
+describe('request mapping', () => {
+  it('group path calls get_group_msg_history with group_id/message_seq/count', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await fetchHistoryPage(c, 'group', '123', 8, 3);
+    expect(lastUrl).toBe('/get_group_msg_history');
+    expect(lastBody).toEqual({ group_id: '123', message_seq: '8', count: 3 });
+    await c.close();
+  });
+
+  it('friend path calls get_friend_msg_history with user_id/message_seq/count', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await fetchHistoryPage(c, 'friend', '555', 8, 3);
+    expect(lastUrl).toBe('/get_friend_msg_history');
+    expect(lastBody).toEqual({ user_id: '555', message_seq: '8', count: 3 });
+    await c.close();
+  });
+
+  it('treats beforeSeq 0 as a real cursor instead of "no cursor"', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const page = await fetchHistoryPage(c, 'group', '123', 0, 3);
+    expect(lastUrl).toBe('/get_group_msg_history');
+    expect(lastBody).toEqual({ group_id: '123', message_seq: '0', count: 3 });
+    expect(page).toEqual([]); // seq < 0 没有消息
+    await c.close();
+  });
+
+  it('rejects a non-positive count before sending a request', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await expect(fetchHistoryPage(c, 'group', '123', undefined, 0)).rejects.toMatchObject({ name: 'OneBotError' });
+    expect(requestCount).toBe(0);
+    await c.close();
+  });
+});
+
+describe('pagination robustness', () => {
+  it('keeps paging when the server returns fewer items than count', async () => {
+    maxItemsPerPage = 2; // 服务端把每页钳到 2 条（少于请求的 3），不等于历史耗尽
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const msgs = await fetchMessagesBetween(c, 'group', '123', 4, 10, 3);
+    expect(msgs.map((m) => m.message_seq)).toEqual([4, 5, 6, 7, 8, 9, 10]);
+    await c.close();
+  });
+
+  it('throws instead of returning a partial range when the server ignores message_seq', async () => {
+    ignoreMessageSeq = true;
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 3)).rejects.toMatchObject({ name: 'OneBotError' });
+    expect(requestCount).toBeLessThan(10); // 不能空转到页数上限
+    await c.close();
+  });
+
+  it('throws instead of returning a partial range when pageSize is 1', async () => {
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
+    expect(requestCount).toBeLessThan(10);
+    await c.close();
+  });
+
+  it('throws when the page limit is exceeded', async () => {
+    // 用内存 stub：每页都比上一页更早 1 条，游标永远前进但永远到不了下界 → 触顶页数上限。
+    let calls = 0;
+    const stub: OneBotClient = {
+      async call<T>(): Promise<T> {
+        calls++;
+        return { messages: [{ message_seq: 100000 - calls }] } as unknown as T;
+      },
+      async close(): Promise<void> {},
+    };
+    await expect(fetchMessagesBetween(stub, 'group', '123', 0, 100000, 1)).rejects.toThrow(/page limit/);
+    expect(calls).toBe(1000);
+  });
+
+  it('completes when the history is exhausted above fromSeq', async () => {
+    // fromSeq=0 小于最老消息的 seq=1：重叠式翻页会一直拿到边界消息，
+    // 靠「严格更早」的探测请求证明历史已耗尽 → 区间完整返回，而不是误报「无进展」。
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
+    expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    await c.close();
+  });
+
+  it('skips messages that carry no message_seq', async () => {
+    seqlessItems = true;
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const msgs = await fetchMessagesBetween(c, 'group', '123', 4, 10, 3);
+    expect(msgs.every((m) => m.message_seq !== undefined)).toBe(true);
+    expect(msgs.map((m) => m.message_seq)).toEqual([4, 5, 6, 7, 8, 9, 10]);
     await c.close();
   });
 });
