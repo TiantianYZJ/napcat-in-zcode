@@ -1,0 +1,42 @@
+{
+  "name": "napcat-zcode",
+  "version": "0.1.0",
+  "description": "Inject selected QQ chat records into ZCode context and save them as attachments via NapCat (OneBot 11).",
+  "description_i18n": { "zh-CN": "把选定的 QQ 聊天记录注入 ZCode 上下文，或保存为输入框附件，基于 NapCat（OneBot 11）。" },
+  "author": { "name": "TiantianYZJ" },
+  "license": "MIT",
+  "userConfig": {
+    "exportDir": {
+      "title": "导出目录",
+      "description": "聊天记录导出位置：user（用户目录 ~/.zcode/napcat/exports）或 workspace（当前工作区）",
+      "type": "string",
+      "default": "user"
+    },
+    "includeImages": {
+      "title": "包含图片",
+      "description": "导出时是否下载图片到 media/ 子目录（M1 仅记录 URL，不下载）",
+      "type": "string",
+      "default": "false"
+    }
+  },
+  "mcpServers": {
+    "napcat": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${ZCODE_PLUGIN_ROOT}/dist/server.mjs"],
+      "timeoutMs": 120000
+    }
+  },
+  "ui": {
+    "surfaces": [
+      {
+        "id": "napcat-zcode",
+        "title": { "zh-CN": "QQ 聊天记录", "en-US": "QQ Chat Records" },
+        "icon": "message-circle",
+        "server": "napcat",
+        "resourceUri": "ui://napcat-zcode/panel.html",
+        "availability": "session"
+      }
+    ]
+  }
+}
