@@ -1,28 +1,48 @@
 import type { OB11Message, OB11MessageSegment } from '../onebot/types.js';
 import type { Message, Segment } from './types.js';
 
-// 键是规范化后的 Segment.kind（不是 OB11 段类型名）：
-// OB11 的 'record' 段规范化后 kind 是 'voice'，用段类型名做键会取不到占位符。
-const PLACEHOLDERS: Record<string, string> = {
+/**
+ * 纯文本投影占位符。
+ * 键是规范化后的 Segment.kind（不是 OB11 段类型名：OB11 的 'record' 段规范化后 kind 是 'voice'），
+ * satisfies 让键名拼错或漏写时在编译期暴露，而不是静默渲染成空串。
+ */
+const PLACEHOLDERS = {
   image: '[图片]',
   voice: '[语音]',
   video: '[视频]',
   face: '[表情]',
   forward: '[合并转发]',
   json: '[卡片]',
-};
+} satisfies Partial<Record<Segment['kind'], string>>;
 
+/**
+ * 段的纯文本投影。switch 对 Segment['kind'] 穷尽：
+ * 新增段类型时这里编译期报错，不会漏投影。
+ */
 function segText(s: Segment): string {
   switch (s.kind) {
     case 'text': return s.text;
-    case 'at': return `@${s.name ?? s.qq}`;
-    case 'file': return `[文件 ${s.fileName ?? ''}]`.trimEnd();
-    default: return PLACEHOLDERS[s.kind] ?? '';
+    case 'at': return `@${s.name || s.qq}`;
+    case 'face': return PLACEHOLDERS.face;
+    case 'reply': return '';
+    case 'image': return PLACEHOLDERS.image;
+    case 'voice': return PLACEHOLDERS.voice;
+    case 'video': return PLACEHOLDERS.video;
+    case 'file': return s.fileName ? `[文件 ${s.fileName}]` : '[文件]';
+    case 'json': return PLACEHOLDERS.json;
+    case 'forward': return PLACEHOLDERS.forward;
   }
 }
 
 export function segmentsText(segments: Segment[]): string {
   return segments.map(segText).join('');
+}
+
+/** 数值字段安全转换：空值与非数值字符串都归为 undefined，不产生 NaN。 */
+function toNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function normalizeSegment(seg: OB11MessageSegment): Segment {
@@ -32,10 +52,11 @@ function normalizeSegment(seg: OB11MessageSegment): Segment {
     case 'at': return { kind: 'at', qq: String(d.qq ?? ''), name: d.name ? String(d.name) : undefined };
     case 'face': return { kind: 'face', faceId: String(d.id ?? ''), text: d.text ? String(d.text) : undefined };
     case 'reply': return { kind: 'reply', messageId: String(d.id ?? '') };
-    case 'image': return { kind: 'image', url: d.url ? String(d.url) : undefined, fileId: d.file ? String(d.file) : undefined, width: d.width ? Number(d.width) : undefined, height: d.height ? Number(d.height) : undefined };
-    case 'record': return { kind: 'voice', url: d.url ? String(d.url) : undefined, duration: d.seconds ? Number(d.seconds) : undefined };
+    case 'image': return { kind: 'image', url: d.url ? String(d.url) : undefined, fileId: d.file ? String(d.file) : undefined, width: toNum(d.width), height: toNum(d.height) };
+    // 语音时长字段名各实现不一（seconds/duration/time），三种都吃；真实字段名待 NapCat 实测确认。
+    case 'record': return { kind: 'voice', url: d.url ? String(d.url) : undefined, duration: toNum(d.seconds) ?? toNum(d.duration) ?? toNum(d.time) };
     case 'video': return { kind: 'video', url: d.url ? String(d.url) : undefined, fileName: d.file ? String(d.file) : undefined };
-    case 'file': return { kind: 'file', url: d.url ? String(d.url) : undefined, fileName: d.name ? String(d.name) : d.file ? String(d.file) : undefined, size: d.size ? Number(d.size) : undefined };
+    case 'file': return { kind: 'file', url: d.url ? String(d.url) : undefined, fileName: d.name ? String(d.name) : d.file ? String(d.file) : undefined, size: toNum(d.size) };
     case 'forward': return { kind: 'forward', messageId: String(d.id ?? '') };
     case 'json': return { kind: 'json', raw: jsonRaw(d.data) };
     default: return { kind: 'text', text: `[${seg.type}]` };
@@ -48,7 +69,10 @@ function jsonRaw(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value) ?? '';
 }
 
-/** CQ 码转义还原。 */
+/**
+ * CQ 码转义还原：先还原 &#91; / &#93; / &#44;，再还原 &amp;
+ * （顺序要紧：先还原 &amp; 会把 &amp;#44; 里的 &#44; 提前吃掉）。
+ */
 function unescapeCq(s: string): string {
   return s
     .replace(/&#91;/g, '[')
@@ -76,20 +100,24 @@ function parseCqParams(paramStr: string): Record<string, string> {
   return out;
 }
 
-/** CQ 码粗解析（NapCat 少数场景 message 为字符串）。 */
+/**
+ * CQ 码粗解析（NapCat 少数场景 message 为字符串）。
+ * 纯文本片段同样要还原 CQ 转义，否则 'AT&amp;T' 这类正文会带着转义残留进入 Message.text，
+ * 关键词搜索搜不到、导出的正文也不干净。
+ */
 function parseCq(text: string): Segment[] {
   const out: Segment[] = [];
   const re = /\[CQ:([a-z][a-z0-9_]*)(?:,([^\]]*))?\]/gi;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    if (m.index > last) out.push({ kind: 'text', text: text.slice(last, m.index) });
+    if (m.index > last) out.push({ kind: 'text', text: unescapeCq(text.slice(last, m.index)) });
     const type = m[1].toLowerCase();
     const data = parseCqParams(m[2] ?? '');
     out.push(normalizeSegment({ type, data }));
     last = m.index + m[0].length;
   }
-  if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
+  if (last < text.length) out.push({ kind: 'text', text: unescapeCq(text.slice(last)) });
   return out;
 }
 

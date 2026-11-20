@@ -157,4 +157,106 @@ describe('normalizeMessage', () => {
     ]);
     expect(m.text).toBe('[图片]');
   });
+
+  // —— 审查硬化项补测 ——
+
+  it('projects file, json and video segments to placeholders', () => {
+    const raw: OB11Message = {
+      message_id: 8,
+      message_seq: 49,
+      time: 1700000007,
+      sender: { user_id: 8, nickname: 'Heidi' },
+      message: [
+        { type: 'file', data: { name: 'report.pdf', size: '2048', url: 'https://x/r.pdf' } },
+        { type: 'json', data: { data: '{"a":1}' } },
+        { type: 'video', data: { file: 'v.mp4', url: 'https://x/v.mp4' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.text).toBe('[文件 report.pdf][卡片][视频]');
+  });
+
+  it('reply contributes nothing to the text projection and carries a preview', () => {
+    const raw: OB11Message = {
+      message_id: 9,
+      message_seq: 50,
+      time: 1700000008,
+      sender: { user_id: 9, nickname: 'Ivan' },
+      message: [
+        { type: 'reply', data: { id: '42' } },
+        { type: 'text', data: { text: '好的' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.text).toBe('好的');
+    expect(m.replyTo).toEqual({ messageId: '42', preview: '[引用]' });
+    // 只有 reply 段时正文投影为空串（不产生任何字符）
+    expect(segmentsText([{ kind: 'reply', messageId: '42' }])).toBe('');
+  });
+
+  it('parses CQ codes without params, several codes in one string, and a CQ reply', () => {
+    const base = {
+      message_id: 10,
+      message_seq: 51,
+      time: 1700000009,
+      sender: { user_id: 10, nickname: 'Judy' },
+    };
+
+    const noParam = normalizeMessage({ ...base, message: '[CQ:shake]' });
+    expect(noParam.segments).toEqual([{ kind: 'text', text: '[shake]' }]);
+
+    const several = normalizeMessage({ ...base, message: '[CQ:face,id=1][CQ:at,qq=10001] 尾巴' });
+    expect(several.segments).toEqual([
+      { kind: 'face', faceId: '1' },
+      { kind: 'at', qq: '10001' },
+      { kind: 'text', text: ' 尾巴' },
+    ]);
+    expect(several.text).toBe('[表情]@10001 尾巴');
+
+    const reply = normalizeMessage({ ...base, message: '[CQ:reply,id=77]' });
+    expect(reply.replyTo).toEqual({ messageId: '77', preview: '[引用]' });
+    expect(reply.segments[0].kind).toBe('reply');
+  });
+
+  it('unescapes CQ escapes in text fragments', () => {
+    const raw: OB11Message = {
+      message_id: 11,
+      message_seq: 52,
+      time: 1700000010,
+      sender: { user_id: 11, nickname: 'Karl' },
+      message: 'AT&amp;T &#91;括号&#93; &#44;',
+    };
+    const m = normalizeMessage(raw);
+    expect(m.text).toBe('AT&T [括号] ,');
+    expect(m.segments).toEqual([{ kind: 'text', text: 'AT&T [括号] ,' }]);
+  });
+
+  it('normalizes numeric fields, tolerates invalid ones and accepts duration aliases', () => {
+    const raw: OB11Message = {
+      message_id: 12,
+      message_seq: 53,
+      time: 1700000011,
+      sender: { user_id: 12, nickname: 'Lena' },
+      message: [
+        { type: 'image', data: { file: 'i.png', width: '0', height: 'abc' } },
+        { type: 'record', data: { file: 'a.amr', duration: '5' } },
+        { type: 'record', data: { file: 'b.amr', seconds: '3' } },
+        { type: 'record', data: { file: 'c.amr', time: '7' } },
+        { type: 'file', data: { name: 'r.pdf', size: '1024' } },
+      ],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.segments[0]).toEqual({ kind: 'image', fileId: 'i.png', width: 0, height: undefined });
+    expect(m.segments[1]).toEqual({ kind: 'voice', duration: 5 });
+    expect(m.segments[2]).toEqual({ kind: 'voice', duration: 3 });
+    expect(m.segments[3]).toEqual({ kind: 'voice', duration: 7 });
+    expect(m.segments[4]).toEqual({ kind: 'file', fileName: 'r.pdf', size: 1024 });
+  });
+
+  it('projects segments without a name without dangling separators', () => {
+    expect(segmentsText([{ kind: 'file' }])).toBe('[文件]');
+    expect(segmentsText([{ kind: 'file', fileName: 'a.txt' }])).toBe('[文件 a.txt]');
+    expect(segmentsText([{ kind: 'at', qq: '10001', name: '' }])).toBe('@10001');
+    expect(segmentsText([{ kind: 'at', qq: '10001' }])).toBe('@10001');
+  });
 });
