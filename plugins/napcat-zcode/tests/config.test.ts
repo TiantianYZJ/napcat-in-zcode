@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyEnvOverrides,
@@ -235,7 +236,7 @@ describe('config hardening', () => {
     expect(dataDir()).toBe(join(homedir(), '.zcode', 'napcat-zcode'));
   });
 
-  it('keeps the file values when env would override them and does not rewrite the file', () => {
+  it('lets a legal env value override the file value without rewriting the file', () => {
     process.env.ZCODE_PLUGIN_DATA = tmp;
     const cfg = defaultConfig();
     cfg.export = { dir: 'workspace', includeImages: true };
@@ -245,9 +246,9 @@ describe('config hardening', () => {
     process.env.NAPCAT_EXPORT_DIR = 'user';
     process.env.NAPCAT_INCLUDE_IMAGES = 'false';
     const c = loadConfigData();
-    expect(c.export.dir).toBe('workspace'); // 文件优先
-    expect(c.export.includeImages).toBe(true); // 文件优先
-    expect(readFileSync(join(tmp, 'config.json'), 'utf-8')).toBe(onDisk); // env 兜底不回写文件
+    expect(c.export.dir).toBe('user'); // env 优先
+    expect(c.export.includeImages).toBe(false); // env 优先
+    expect(readFileSync(join(tmp, 'config.json'), 'utf-8')).toBe(onDisk); // env 覆盖不回写文件
   });
 
   it('keeps the file config when env values are illegal', () => {
@@ -271,22 +272,22 @@ describe('config hardening', () => {
   });
 });
 
-describe('config priority (file first, env fallback)', () => {
-  it('uses the file value when the file sets export.dir', () => {
+describe('config priority (legal env value wins, otherwise the file)', () => {
+  it('lets a legal env value override the file value of export.dir', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_EXPORT_DIR = 'user';
-    expect(loadConfigData().export.dir).toBe('workspace');
+    expect(loadConfigData().export.dir).toBe('user');
   });
 
-  it('uses the file value when the file sets includeImages', () => {
+  it('lets a legal env value override the file value of includeImages', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { includeImages: false } }));
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_INCLUDE_IMAGES = 'true';
-    expect(loadConfigData().export.includeImages).toBe(false);
+    expect(loadConfigData().export.includeImages).toBe(true);
   });
 
-  it('falls back to env when the file does not set the field', () => {
+  it('applies env when the file does not set the field', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ connection: { mode: 'external' } }));
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_EXPORT_DIR = 'workspace';
@@ -297,7 +298,7 @@ describe('config priority (file first, env fallback)', () => {
     expect(c.connection.mode).toBe('external'); // 文件里的其它字段不受影响
   });
 
-  it('falls back to env when there is no config file at all', () => {
+  it('applies env when there is no config file at all', () => {
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_EXPORT_DIR = 'workspace';
     expect(loadConfigData().export.dir).toBe('workspace');
@@ -313,14 +314,31 @@ describe('config priority (file first, env fallback)', () => {
     expect(c.export.includeImages).toBe(true);
   });
 
-  it('falls back per field, not per section', () => {
-    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));
+  it('keeps the file value when the env value is empty (manifest default = 未设置)', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace', includeImages: true } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    process.env.NAPCAT_EXPORT_DIR = '';
+    process.env.NAPCAT_INCLUDE_IMAGES = '';
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace');
+    expect(c.export.includeImages).toBe(true);
+  });
+
+  it('keeps the file value when the env variable is not set', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace', includeImages: true } }));
+    process.env.ZCODE_PLUGIN_DATA = tmp;
+    const c = loadConfigData();
+    expect(c.export.dir).toBe('workspace');
+    expect(c.export.includeImages).toBe(true);
+  });
+
+  it('applies env per field, not per section', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace', includeImages: true } }));
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_EXPORT_DIR = 'user';
-    process.env.NAPCAT_INCLUDE_IMAGES = 'true';
     const c = loadConfigData();
-    expect(c.export.dir).toBe('workspace'); // 文件里有 → 文件优先
-    expect(c.export.includeImages).toBe(true); // 文件里没有 → env 兜底
+    expect(c.export.dir).toBe('user'); // env 有合法值 → env 覆盖
+    expect(c.export.includeImages).toBe(true); // env 没给值 → 保留文件值
   });
 
   it('exposes the raw file content for patch-style saves', () => {
@@ -337,10 +355,25 @@ describe('config priority (file first, env fallback)', () => {
     expect(loadConfigWithRaw(tmp).raw).toEqual({});
   });
 
-  it('does not write the explicit-field marker into the config file', () => {
+  it('writes only the config sections into the config file', () => {
     saveConfig(tmp, loadConfig(tmp));
     const text = readFileSync(join(tmp, 'config.json'), 'utf-8');
     expect(text).not.toContain('explicit');
     expect(Object.keys(JSON.parse(text)).sort()).toEqual(['autoDetect', 'connection', 'export', 'inject', 'managed']);
+  });
+});
+
+describe('manifest userConfig defaults', () => {
+  const manifestPath = fileURLToPath(new URL('../.zcode-plugin/plugin.json', import.meta.url));
+
+  it('leaves both userConfig defaults empty so an unset setting never shadows the file', () => {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+      userConfig: Record<string, { default?: unknown; description?: string }>;
+    };
+    // 空串不是合法值 → env 不触发覆盖 → config.json 保持权威（spec §6 裁定）。
+    expect(manifest.userConfig.exportDir.default).toBe('');
+    expect(manifest.userConfig.includeImages.default).toBe('');
+    expect(manifest.userConfig.exportDir.description).toContain('留空');
+    expect(manifest.userConfig.includeImages.description).toContain('留空');
   });
 });

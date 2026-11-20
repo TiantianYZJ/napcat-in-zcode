@@ -112,39 +112,6 @@ function sanitize(m: Record<string, unknown>): PluginConfig {
   };
 }
 
-/**
- * 记录「文件里显式设置了哪些可被 env 兜底覆盖的字段」。
- *
- * 挂在配置对象上（Symbol 键 + 不可枚举）——不能进 `PluginConfig` 的类型（那是 T9/T10 的公开契约），
- * 也不能被 `JSON.stringify` 写进 config.json（Symbol 键本就不参与序列化）。
- */
-const EXPLICIT_FIELDS = Symbol('napcat-zcode.explicit-fields');
-
-interface ExplicitFields {
-  /** 文件里是否显式写了 `export.dir`。 */
-  exportDir: boolean;
-  /** 文件里是否显式写了 `export.includeImages`。 */
-  includeImages: boolean;
-}
-
-const NO_EXPLICIT: ExplicitFields = { exportDir: false, includeImages: false };
-
-function markExplicit(cfg: PluginConfig, flags: ExplicitFields): PluginConfig {
-  Object.defineProperty(cfg, EXPLICIT_FIELDS, {
-    value: flags,
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  });
-  return cfg;
-}
-
-/** 取配置对象上的「文件显式设置」标记；没有标记（不是从文件加载的）→ 视为都没显式设置。 */
-function explicitFields(cfg: PluginConfig): ExplicitFields {
-  const f = (cfg as unknown as Record<symbol, ExplicitFields | undefined>)[EXPLICIT_FIELDS];
-  return f ?? NO_EXPLICIT;
-}
-
 /** 读 `<dir>/config.json` 的原始内容；文件缺失/损坏/顶层不是对象 → 空对象（不抛错）。 */
 function readRaw(dir: string): Record<string, unknown> {
   let raw: unknown;
@@ -161,16 +128,13 @@ function readRaw(dir: string): Record<string, unknown> {
  *
  * - `config`：与默认值深合并、逐字段收敛后的合法配置（与 `loadConfig` 同一个对象）。
  * - `raw`：文件里的原始 JSON 对象（缺失/损坏时为 `{}`）——保存时以它为基底**只写入变化的字段**，
- *   才不会把 env 兜底值或默认值固化进文件（spec §6「保存配置时只写入文件里变化的字段」）。
+ *   才不会把 env 值或默认值固化进文件（spec §6「保存配置时只写入文件里变化的字段」）。
  */
 export function loadConfigWithRaw(dir: string): { config: PluginConfig; raw: Record<string, unknown> } {
   const raw = readRaw(dir);
   // 默认值与文件内容都是「不可信输入」：先按松散字典合并，再由 sanitize 逐字段收敛。
   const merged = deepMerge(defaultConfig() as unknown as Record<string, unknown>, raw);
-  const config = sanitize(merged);
-  const exp = isObj(raw.export) ? raw.export : {};
-  const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(exp, k);
-  return { config: markExplicit(config, { exportDir: has('dir'), includeImages: has('includeImages') }), raw };
+  return { config: sanitize(merged), raw };
 }
 
 /**
@@ -183,30 +147,30 @@ export function loadConfig(dir: string): PluginConfig {
 }
 
 /**
- * 环境变量兜底（来源：清单 `userConfig` 经 `.mcp.json` 的 `env` 注入）。
+ * 环境变量覆盖（来源：清单 `userConfig` 经 `.mcp.json` 的 `env` 注入）。
  *
- * 优先级（spec §6 裁定）：**`config.json` 里显式设置的字段优先，env 只作兜底**——
- * 文件没设置该字段、且 env 取值合法时，env 的值才生效。理由：设置 UI 的目标就是把值写进
- * `config.json`，env 只是把设置界面接到同一份配置上；若 env 反过来覆盖文件，用户在文件里的
- * 设置会失效，且首次保存会把 env 值固化进文件。
+ * 优先级（spec §6 裁定，2026-11-21 修订）：**env 合法值优先**（env 覆盖 `config.json`）——
+ * 用户在 ZCode 设置界面改值，env 立刻生效。
  *
- * - 只在取值合法时兜底：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}、`NAPCAT_INCLUDE_IMAGES` ∈ {true, false}；
- *   非法值（含空串）一律不覆盖，也不抛错。
- * - 「文件是否显式设置」由 `loadConfig` 打在配置对象上的标记判定（见 `EXPLICIT_FIELDS`）；
- *   不是从文件加载的配置（无标记）→ 视为都没显式设置 → env 直接兜底。
+ * 「env 总是有值」这个前提在**清单侧**被消掉了：两项 `userConfig` 的 `default` 都是空串，
+ * 空串不是合法值 → 不触发覆盖 → 用户没动过设置时，`config.json` 保持权威。
+ * 于是「没设置 / 注入默认值 / 注入空串 / 不注入」几种 ZCode 行为下结果都正确，
+ * 不需要追踪「字段是否显式设置」。
+ *
+ * - 只在取值合法时覆盖：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}、`NAPCAT_INCLUDE_IMAGES` ∈ {true, false}；
+ *   非法值（含空串、未设置）一律不覆盖，保留 `config.json` 里的值，也不抛错。
  * - 就地改写并返回同一个对象（既支持 `applyEnvOverrides(cfg, env)`，也支持 `cfg = applyEnvOverrides(cfg)`）。
  * - 幂等：同样的 env 反复应用结果一致。
  */
 export function applyEnvOverrides(cfg: PluginConfig, env: NodeJS.ProcessEnv = process.env): PluginConfig {
-  const explicit = explicitFields(cfg);
   const dir = env.NAPCAT_EXPORT_DIR;
-  if (!explicit.exportDir && (dir === 'user' || dir === 'workspace')) cfg.export.dir = dir;
+  if (dir === 'user' || dir === 'workspace') cfg.export.dir = dir;
   const imgs = env.NAPCAT_INCLUDE_IMAGES;
-  if (!explicit.includeImages && (imgs === 'true' || imgs === 'false')) cfg.export.includeImages = imgs === 'true';
+  if (imgs === 'true' || imgs === 'false') cfg.export.includeImages = imgs === 'true';
   return cfg;
 }
 
-/** 插件进程用的配置：数据目录里的文件优先，env 兜底未显式设置的字段。 */
+/** 插件进程用的配置：`config.json` 为基底，env 的合法值覆盖之。 */
 export function loadConfigData(): PluginConfig {
   return applyEnvOverrides(loadConfig(dataDir()));
 }

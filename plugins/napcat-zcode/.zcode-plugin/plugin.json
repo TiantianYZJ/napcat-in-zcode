@@ -8,15 +8,15 @@
   "userConfig": {
     "exportDir": {
       "title": "导出目录",
-      "description": "聊天记录导出位置：user（用户目录 ~/.zcode/napcat/exports）或 workspace（当前工作区）",
+      "description": "聊天记录导出位置：user（用户目录 ~/.zcode/napcat/exports）或 workspace（当前工作区）；留空 = 跟随 config.json 里的设置",
       "type": "string",
-      "default": "user"
+      "default": ""
     },
     "includeImages": {
       "title": "包含图片",
-      "description": "导出时是否下载图片到 media/ 子目录（M1 仅记录 URL，不下载）",
+      "description": "导出时是否下载图片到 media/ 子目录（M1 仅记录 URL，不下载）；留空 = 跟随 config.json 里的设置",
       "type": "string",
-      "default": "false"
+      "default": ""
     }
   },
   "mcpServers": {
