@@ -147,13 +147,18 @@ describe('mcp tools', () => {
 });
 
 describe('mcp tool registration', () => {
-  it('registers exactly the four tools with their descriptions', async () => {
+  it('registers the four T9 tools with their descriptions', async () => {
     const c = await makeClient();
     const list = await c.listTools();
+    // T10 追加了 search / format_selection / export / get_config 四个工具（见 tests/mcp-tools-extra.test.ts）
     expect(list.tools.map((t) => t.name).sort()).toEqual([
       'napcat_configure',
+      'napcat_export',
+      'napcat_format_selection',
+      'napcat_get_config',
       'napcat_get_history',
       'napcat_list_chats',
+      'napcat_search_messages',
       'napcat_status',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
