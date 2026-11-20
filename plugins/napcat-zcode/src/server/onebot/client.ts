@@ -44,7 +44,9 @@ class HttpTransport implements OneBotClient {
 
 export function createClient(cfg: ClientConfig): OneBotClient {
   const timeoutMs = cfg.timeoutMs ?? 30_000;
-  if (/^https?:\/\//.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
-  if (/^wss?:\/\//.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
+  // scheme 大小写不敏感：`HTTP://host` / `WS://host` 是合法端点，
+  // 之前只匹配小写会被误判成「unsupported endpoint scheme」。
+  if (/^https?:\/\//i.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
+  if (/^wss?:\/\//i.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
   throw new Error(`unsupported endpoint scheme: ${cfg.endpoint}`);
 }

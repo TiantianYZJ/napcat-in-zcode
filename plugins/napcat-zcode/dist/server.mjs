@@ -21758,7 +21758,6 @@ async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, un
   for (let guard = 0; guard < MAX_PAGES && out.length < want; guard++) {
     const page = await fetchHistoryPage(client, chatKind, chatId, cursor, want);
     if (page.length === 0) {
-      exhausted = true;
       break;
     }
     const norm = page.map((raw) => ({ raw, msg: normalizeMessage(raw) })).sort((a, b) => a.msg.seq - b.msg.seq);
@@ -21771,7 +21770,6 @@ async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, un
       }
       if (until !== void 0 && item.msg.time > until) continue;
       if (since !== void 0 && item.msg.time < since) {
-        exhausted = true;
         belowSince = true;
         continue;
       }
@@ -22092,8 +22090,8 @@ var HttpTransport = class {
 };
 function createClient(cfg) {
   const timeoutMs = cfg.timeoutMs ?? 3e4;
-  if (/^https?:\/\//.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
-  if (/^wss?:\/\//.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
+  if (/^https?:\/\//i.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
+  if (/^wss?:\/\//i.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
   throw new Error(`unsupported endpoint scheme: ${cfg.endpoint}`);
 }
 
@@ -22236,6 +22234,28 @@ function errText(e) {
 function isPlainObject3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
+function safeEndpointLabel(endpoint) {
+  const [noQuery] = endpoint.split("?");
+  const at = noQuery.lastIndexOf("@");
+  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
+}
+function assertUsableEndpoint(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error(
+      `\u7AEF\u70B9\u4E0D\u662F\u5408\u6CD5\u7684 URL\uFF08\u9700\u8981 http(s)://\u4E3B\u673A:\u7AEF\u53E3 \u6216 ws(s)://\u4E3B\u673A:\u7AEF\u53E3 \u5F62\u5F0F\uFF09\uFF1A${safeEndpointLabel(endpoint)}`
+    );
+  }
+  if (!url.hostname) {
+    throw new Error(`\u7AEF\u70B9\u7F3A\u5C11\u4E3B\u673A\u540D\uFF1A${safeEndpointLabel(endpoint)}`);
+  }
+  const port = url.port ? Number(url.port) : void 0;
+  if (port !== void 0 && (port < 1 || port > 65535)) {
+    throw new Error(`\u7AEF\u70B9\u7AEF\u53E3\u8D8A\u754C\uFF08\u9700\u5728 1-65535 \u4E4B\u95F4\uFF09\uFF1A${safeEndpointLabel(endpoint)}`);
+  }
+}
 var AppState = class {
   /** 配置快照：`loadConfigData()` = 文件内容 + env 兜底覆盖。 */
   config = loadConfigData();
@@ -22299,13 +22319,16 @@ var AppState = class {
    * 保存端点/令牌并重连，返回登录信息。
    *
    * 顺序：**先校验端点 → 再落盘 → 再换连接 → 最后取登录信息**。
-   * - 校验：`createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来。
+   * - 校验分两层：`createClient`（scheme 白名单）+ `assertUsableEndpoint`（URL 形状）。
+   *   `createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来；
+   *   URL 形状（空主机、越界端口、畸形写法）由第二层挡下。
    *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
    * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
    * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
    */
   async setConnection(endpoint, token) {
     const probed = createClient({ endpoint, token: token || void 0 });
+    assertUsableEndpoint(endpoint);
     this.saveConnection(endpoint, token);
     const old = this.client;
     this.client = null;

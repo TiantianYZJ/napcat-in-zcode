@@ -85,8 +85,7 @@ async function fetchHistory(
   for (let guard = 0; guard < MAX_PAGES && out.length < want; guard++) {
     const page = await fetchHistoryPage(client, chatKind, chatId, cursor, want);
     if (page.length === 0) {
-      exhausted = true; // 空页：更早的历史已经没有了
-      break;
+      break; // 空页：没有更早的历史了（窗口必然没攒满 → exhausted 由循环后的统一判定给出）
     }
 
     const norm = page
@@ -103,9 +102,8 @@ async function fetchHistory(
       }
       if (until !== undefined && item.msg.time > until) continue;
       if (since !== undefined && item.msg.time < since) {
-        exhausted = true;
         belowSince = true;
-        continue; // 时间单调：更早的消息也都在 since 之前
+        continue; // 时间单调：更早的消息也都在 since 之前（exhausted 由循环后的统一判定给出）
       }
       if (out.length < want) {
         out.push(item.msg);
@@ -122,8 +120,17 @@ async function fetchHistory(
     cursor = minSeq;
   }
 
-  // 没攒满 → 已经翻到底了。
-  // （不能在循环里按「短页」就置 exhausted：循环还会继续翻页并返回更多消息，那样 exhausted 与数据自相矛盾。）
+  /**
+   * `exhausted` 的唯一判定口径：**窗口没攒满 `want` 条**时为 true。
+   *
+   * 它是**三合一**语义，不等于「历史一定到底」：
+   * ① 历史耗尽（空页 / 翻到最开头）；
+   * ② 游标推不动（服务端不认 `message_seq`，或页里没有可定位的消息）；
+   * ③ 翻页数触顶（MAX_PAGES）。
+   *
+   * 下游不要把它读作「已经没有更早的消息了」——窗口满时它为 false，
+   * 而窗口不满也可能是 ②/③ 而不是 ①。要判断「真的到底」得看 `nextBeforeSeq` 是否为 null。
+   */
   if (out.length < want) exhausted = true;
 
   out.sort((a, b) => a.seq - b.seq);

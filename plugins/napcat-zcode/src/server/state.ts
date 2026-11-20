@@ -30,6 +30,45 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * 端点里可能带 access_token（OneBot 的 ws 约定）或 `user:pass` —— 报错时不能原样打出来。
+ */
+function safeEndpointLabel(endpoint: string): string {
+  const [noQuery] = endpoint.split('?');
+  const at = noQuery.lastIndexOf('@');
+  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
+}
+
+/**
+ * 端点**形状**校验（scheme 之外的第二道关）。
+ *
+ * `createClient` 的 scheme 判定只是正则白名单，**不做 URL 解析**：
+ * `http://`（空主机）、`http://host:99999`（端口越界）都能通过那层检查，
+ * 于是坏端点会被写进 `config.json`，插件从此卡在不可用状态。
+ *
+ * `new URL()` 才真正做形状解析：畸形写法、空主机、越界端口都会抛。
+ * 校验不过 → 抛错，**不写文件、不改内存态**（与 scheme 校验失败的处理一致）。
+ *
+ * 对 `ws://` 同样生效：`new URL` 的解析规则对 ws/wss 与 http/https 一致。
+ */
+function assertUsableEndpoint(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error(
+      `端点不是合法的 URL（需要 http(s)://主机:端口 或 ws(s)://主机:端口 形式）：${safeEndpointLabel(endpoint)}`,
+    );
+  }
+  if (!url.hostname) {
+    throw new Error(`端点缺少主机名：${safeEndpointLabel(endpoint)}`);
+  }
+  const port = url.port ? Number(url.port) : undefined;
+  if (port !== undefined && (port < 1 || port > 65535)) {
+    throw new Error(`端点端口越界（需在 1-65535 之间）：${safeEndpointLabel(endpoint)}`);
+  }
+}
+
+/**
  * 插件运行期状态：配置、OneBot 客户端、以及给测试用的注入位。
  *
  * 下游消费方：T10 的 `napcat_export` / `napcat_get_config`、T13 的面板。
@@ -102,7 +141,9 @@ export class AppState {
    * 保存端点/令牌并重连，返回登录信息。
    *
    * 顺序：**先校验端点 → 再落盘 → 再换连接 → 最后取登录信息**。
-   * - 校验：`createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来。
+   * - 校验分两层：`createClient`（scheme 白名单）+ `assertUsableEndpoint`（URL 形状）。
+   *   `createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来；
+   *   URL 形状（空主机、越界端口、畸形写法）由第二层挡下。
    *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
    * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
    * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
@@ -110,6 +151,7 @@ export class AppState {
   async setConnection(endpoint: string, token: string): Promise<OB11LoginInfo> {
     // ① 端点校验（不通过就直接抛，文件与内存态都不动）
     const probed = createClient({ endpoint, token: token || undefined });
+    assertUsableEndpoint(endpoint);
 
     // ② 校验通过 → patch 式落盘（只写 connection 段）
     this.saveConnection(endpoint, token);

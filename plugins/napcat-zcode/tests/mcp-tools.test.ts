@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AppState } from '../src/server/state.js';
 import { registerTools } from '../src/server/tools.js';
 import { registerPanelResource } from '../src/server/uiresource.js';
-import type { OneBotClient } from '../src/server/onebot/client.js';
+import { createClient, type OneBotClient } from '../src/server/onebot/client.js';
 import type { OB11Message } from '../src/server/onebot/types.js';
 
 /**
@@ -54,6 +55,19 @@ async function makeClient() {
   await server.connect(st);
   await client.connect(ct);
   return client;
+}
+
+/** 起一个只注册了工具的 server，调用 `napcat_configure` 并返回结果与 state。 */
+async function configureEndpoint(endpoint: string, token = 'tok') {
+  const server = new McpServer({ name: 'napcat', version: '0.1.0' });
+  const state = new AppState();
+  registerTools(server, state);
+  const client = new Client({ name: 'test', version: '0.0.1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await server.connect(st);
+  await client.connect(ct);
+  const r = await client.callTool({ name: 'napcat_configure', arguments: { endpoint, token } });
+  return { r, state };
 }
 
 /** 工具返回体：成功时是 JSON 文本，出错时带 isError。 */
@@ -289,6 +303,28 @@ describe('napcat_configure', () => {
     expect(onDisk.connection?.endpoint).toBe('http://127.0.0.1:3000'); // 旧配置原样保留
     expect(onDisk.connection?.token).toBe('old');
   });
+
+  // scheme 合法、但 URL 形状非法：光靠 scheme 白名单挡不住，必须再做一层 URL 解析
+  it.each([
+    ['http://', '空主机'],
+    ['http://host:99999', '端口越界'],
+    ['http://host:0', '端口为 0'],
+    ['ws://', 'ws 空主机'],
+  ])('rejects the malformed endpoint %s (%s)', async (endpoint) => {
+    const { r, state } = await configureEndpoint(endpoint);
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('端点');
+    expect(existsSync(join(tmp, 'config.json'))).toBe(false); // 没有落盘
+    expect(state.config.connection.endpoint).toBe(''); // 内存态也没被改
+  });
+
+  it('keeps the token out of the endpoint validation error', async () => {
+    // 端点里可能带 access_token（ws 约定）或 user:pass ——报错时不能原样回显
+    const { r } = await configureEndpoint('http://[bad?access_token=super-secret-token');
+    expect(isError(r)).toBe(true);
+    expect(toolText(r)).not.toContain('super-secret-token');
+    expect(payload(r).error).toContain('http://[bad'); // 只回显去掉 query / userinfo 的部分
+  });
 });
 
 describe('napcat_status error handling', () => {
@@ -458,6 +494,18 @@ describe('napcat_get_history', () => {
     expect(p.nextBeforeSeq).toBe(5);
   });
 
+  it('reports exhausted only when the window is not full', async () => {
+    // 固定页大小 3 → 页里既有 >= since 的也有 < since 的；窗口被填满 → 不能报 exhausted
+    const c = await historyClient(pagingClient(10, 3));
+    const r = await c.callTool({
+      name: 'napcat_get_history',
+      arguments: { chatKind: 'group', chatId: '123', count: 2, beforeSeq: 6, since: 1700000004 },
+    });
+    const p = payload(r);
+    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([5, 6]); // 窗口是满的
+    expect(p.exhausted).toBe(false); // 窗口满了 → exhausted 只能是 false
+  });
+
   it('reports exhausted when the history runs out', async () => {
     const c = await historyClient(pagingClient(3));
     const r = await c.callTool({
@@ -543,6 +591,42 @@ describe('napcat_get_history', () => {
     const p = payload(r);
     expect(p.error).toContain('端点');
     expect(p.error).not.toContain('undefined');
+  });
+});
+
+describe('endpoint scheme handling', () => {
+  it('accepts an uppercase scheme when building the client', () => {
+    // scheme 判定必须大小写不敏感：`HTTP://` / `WS://` 是合法端点
+    expect(() => createClient({ endpoint: 'HTTP://127.0.0.1:3000' })).not.toThrow();
+    expect(() => createClient({ endpoint: 'WS://127.0.0.1:3001' })).not.toThrow();
+    expect(() => createClient({ endpoint: 'ftp://127.0.0.1:3000' })).toThrow(/unsupported endpoint scheme/);
+  });
+
+  it('connects with an uppercase scheme end to end', async () => {
+    const server = createServer((req, res) => {
+      let chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const action = req.url?.slice(1) ?? '';
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify({
+            status: 'ok',
+            retcode: 0,
+            data: action === 'get_login_info' ? { user_id: 2350355494, nickname: 'TestBot' } : { messages: [] },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const { r } = await configureEndpoint(`HTTP://127.0.0.1:${port}`);
+      expect(isError(r)).toBe(false);
+      expect(payload(r).login.nickname).toBe('TestBot');
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
 
