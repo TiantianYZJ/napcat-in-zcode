@@ -1,5 +1,6 @@
 import { OneBotError } from './errors.js';
 import type { OB11Return } from './types.js';
+import { WsTransport } from './ws.js';
 
 export interface OneBotClient {
   call<T>(action: string, params?: object): Promise<T>;
@@ -9,10 +10,14 @@ export interface OneBotClient {
 export interface ClientConfig {
   endpoint: string;
   token?: string;
+  timeoutMs?: number;
 }
 
 class HttpTransport implements OneBotClient {
-  constructor(private cfg: ClientConfig) {}
+  constructor(
+    private cfg: ClientConfig,
+    private timeoutMs: number,
+  ) {}
 
   async call<T>(action: string, params?: object): Promise<T> {
     const res = await fetch(`${this.cfg.endpoint.replace(/\/$/, '')}/${action}`, {
@@ -22,7 +27,7 @@ class HttpTransport implements OneBotClient {
         ...(this.cfg.token ? { authorization: `Bearer ${this.cfg.token}` } : {}),
       },
       body: JSON.stringify(params ?? {}),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) {
       throw new OneBotError(-1, `HTTP ${res.status} on ${action}`);
@@ -38,7 +43,8 @@ class HttpTransport implements OneBotClient {
 }
 
 export function createClient(cfg: ClientConfig): OneBotClient {
-  if (/^https?:\/\//.test(cfg.endpoint)) return new HttpTransport(cfg);
-  if (/^wss?:\/\//.test(cfg.endpoint)) throw new Error('ws transport: not implemented yet');
+  const timeoutMs = cfg.timeoutMs ?? 30_000;
+  if (/^https?:\/\//.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
+  if (/^wss?:\/\//.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
   throw new Error(`unsupported endpoint scheme: ${cfg.endpoint}`);
 }
