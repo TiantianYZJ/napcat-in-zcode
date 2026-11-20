@@ -4,10 +4,13 @@
 > ZCode 官方 `documents` 插件的 bundle（面板侧 SDK）与 ZCode 宿主实现（`app.asar`）里
 > **逆向出来的**。本文件是 `src/panel/bridge.ts` 的唯一事实来源。
 >
-> 验证时间：2026-11-21　验证对象：
+> 验证时间：2026-11-21（审查修复轮 1 补验了宿主 `ui/download-file` 处理器，见 §6.1）　验证对象：
 > - 面板侧 SDK：`~/.zcode/cli/plugins/cache/zcode-plugins-official/documents/0.2.2/dist/ui/panel.html`
 >   （`documents` 0.2.9 / `presentations` 0.2.9 / `spreadsheets` 0.2.9 / `pdf` 0.2.10 / `zcode-site` 0.5.1 同源）
-> - 宿主实现：`D:\ZCode\resources\app.asar`（内含同一套 SDK + 宿主侧的 `AppBridge`）
+> - 宿主实现：`D:\ZCode\resources\app.asar`（内含同一套 SDK + 宿主侧的 `AppBridge` + `ui/download-file` 处理器）
+>
+> ⚠️ **本文件优先于 design doc**：凡是 design doc 描述的宿主行为，一律以这里的**宿主源码实测**为准
+> （`ui/download-file` 就是这样一个反例 —— design doc 说成功返回 `{success, filePath}`，实际是 `{}`）。
 >
 > 复现命令见文末「验证命令」。
 
@@ -183,7 +186,7 @@ m.object({
 
 ---
 
-## 6. `ui/download-file`（宿主弹另存为对话框并写盘）
+## 6. `ui/download-file`（宿主弹另存为对话框；**但保存路径不跨协议，插件拿不到**）
 
 请求 schema（bundle 里 `XN` / `app.asar` 里 `q`）：
 
@@ -209,11 +212,65 @@ Gr = m.object({ type: m.literal("resource_link"), uri, description, mimeType, si
 ```
 
 **结果 schema**：`m.object({ isError: m.boolean().optional() }).passthrough()`
-→ 协议层只有 `isError`；`success` / `filePath` / `canceled` 是**宿主私有扩展**（passthrough 允许）。
+→ 协议层只有 `isError`。
 
-> 宿主侧的设计（见 `docs/superpowers/specs/2026-11-20-napcat-zcode-design.md` §5.9）：
-> `ui/download-file` 的宿主实现是 `showSaveDialog` 另存为对话框后写盘，
-> 成功返回 `{success, filePath}`，用户取消返回 `canceled`。
+### 6.1 宿主实现（**实测，`app.asar`；不是 design doc 的描述**）
+
+宿主侧 `ui/download-file` 的处理器（压缩后原样）：
+
+```js
+return async n => {
+  let r = !1;
+  for (let [i, a] of n.entries()) {
+    let { data: n, name: o } = await t(qye(a, i));
+    if (n.byteLength === 0 || n.byteLength > 52428800)
+      throw S_(-32602, `file_too_large: ${o} must be 1..${N_e} bytes`);
+    (await e.saveFile({ data: n, suggestedName: o })).success || (r = !0);
+  }
+  return r ? { isError: !0 } : {};
+};
+```
+
+**结论（当前宿主实测）**：
+
+| 情况 | 宿主返回 | 插件能拿到什么 |
+| --- | --- | --- |
+| 全部保存成功 | `{}` | **什么都没有**：没有 `success`、没有 `filePath`、没有 `canceled` |
+| 保存失败 **或** 用户取消 | `{ isError: true }` | **分不清取消与失败**（宿主只读了 `saveFile(...).success`） |
+| 内容过大 / blob 非法 / 资源读不到 | 抛 `-32602`（`file_too_large` / `invalid_blob` / `resource_not_found`） | JSON-RPC **error 帧**（不是 `{isError:true}`） |
+
+**保存路径被宿主丢弃**：`saveFile` 本身（Electron 的保存对话框）返回 `{success, canceled, error, …}`，
+但宿主只读了 `.success`，**路径从未跨协议传回来**。
+
+> ⚠️ **给 T13：当前宿主不返回保存路径。**
+> `ui/download-file` 只能当「让用户自己另存一份」，插件拿不到文件在哪、也分不清取消与失败，
+> **面板文案必须中性**（例：「已触发另存为，宿主未返回保存结果（可能已取消或失败）」）。
+> 「保存为附件」的主路径应是服务端 `napcat_export` → 拿到真实 `mdPath` → 复制 `@<mdPath>` 到剪贴板 → 用户粘贴。
+
+### 6.2 宿主怎么给「另存为」对话框取建议文件名
+
+```js
+function Gye(uri) { return (uri.split(/[?#]/)[0] ?? '').split('/').filter(Boolean).at(-1) ?? ''; }  // uri 最后一段
+function Kye(name) { return name.replace(/[\\/\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim().slice(0, 120); }
+function x_({ name, uri, mimeType }, idx) {
+  const n = Kye(name?.trim() || (uri ? Gye(uri) : '') || `download-${idx+1}`);
+  const ext = EXT_BY_MIME[mimeType ?? ''];
+  return ext && !/\.[A-Za-z0-9]{1,8}$/.test(n) ? `${n}.${ext}` : n;
+}
+```
+
+即：**建议文件名 = 内嵌资源 `uri` 的最后一段（URL 解码后）**，必要时按 mimeType 补扩展名。
+（协议的内嵌资源 schema 里没有 `name` 字段，所以走 `uri` 这条路。）
+桥用的 `uri` 是 `ui://napcat-zcode/<encodeURIComponent(filename)>` → 解码后正好是原文件名。✓
+
+### 6.3 复核命令
+
+```bash
+cd /d/ZCode/resources
+grep -a -o 'saveFile({data:.\{0,200\}' app.asar | head -3
+grep -a -o '.\{600\}saveFile({data:n,suggestedName:o}).\{0,80\}' app.asar | head -2
+grep -a -o 'function Gye(e){.\{0,700\}' app.asar | head -2
+```
 
 ---
 
@@ -233,10 +290,11 @@ Gr = m.object({ type: m.literal("resource_link"), uri, description, mimeType, si
 | --- | --- | --- | --- |
 | 1 | `ui/initialize` params = `{appInfo, appCapabilities}` | schema 里 `protocolVersion` **必填**，SDK 也发它 | 已补 `protocolVersion: "2026-01-26"` |
 | 2 | `ui/download-file` params = `{contents:[{uri,mimeType,text}]}` | 协议要求 `{contents:[{type:"resource", resource:{uri,mimeType,text}}]}`（内容块，不是裸资源） | 已按协议包裹 `type:"resource"` |
-| 3 | `downloadFile` 返回 `{success,filePath,canceled,error}` | 协议层只有 `{isError?}`；`success/filePath/canceled` 是宿主私有扩展 | 归一：优先用宿主给的 `success`，否则由 `isError` 反推；`filePath/canceled` 透传；原始载荷放 `raw` 字段（不丢信息） |
+| 3 | `downloadFile` 返回 `{success,filePath,canceled,error}` | 协议层只有 `{isError?}`；**宿主实测**：成功返回 `{}`、失败与取消都返回 `{isError:true}`，**路径被丢弃、取消与失败分不清** | 归一（不编造）：优先用宿主给的 `success`，否则由 `isError` 反推；`filePath/canceled` 透传但**当前宿主不会填**；宿主没给 error 文案时给中性的机器可读标记 `download_not_confirmed`（不造人话）；原始载荷放 `raw`（不丢信息） |
 | 4 | `uiMessage` 忽略返回值 | 结果是 `{isError?}`，`isError:true` = 投递失败 | `isError:true` → reject（不静默） |
 | 5 | 能力位用 `'message' in hc` 判定 | 「键存在 = 支持」；值为 `null/undefined/false` 视为不支持 | 判定函数 `capEnabled()`：键存在 **且** 值不是 `null/undefined/false` |
 | 6 | 传输/方法名/id 关联 | **与实测完全一致** | 不改 |
+| 7 | brief 的 `downloadFile` 返回值看起来像宿主会回 `{success,filePath}` | 那是 design doc §5.9 的**设计**，不是宿主实现（宿主源码见 §6.1） | 桥按**实测**实现；面板文案中性；真实路径走服务端 `napcat_export` |
 
 ---
 
@@ -265,4 +323,9 @@ grep -o 'method:m.literal("ui/update-model-context"),params:.\{0,260\}' dist/ui/
 # 宿主侧的能力构造（app.asar 里）
 cd /d/ZCode/resources
 grep -a -o -m 4 '.\{300\}serverTools:{.\{0,300\}' app.asar
+
+# 宿主侧的 ui/download-file 处理器（§6.1 的实测来源）
+grep -a -o 'saveFile({data:.\{0,200\}' app.asar | head -3
+grep -a -o '.\{600\}saveFile({data:n,suggestedName:o}).\{0,80\}' app.asar | head -2
+grep -a -o 'function Gye(e){.\{0,700\}' app.asar | head -2
 ```

@@ -31,13 +31,23 @@ export type RawHostCapabilities = Record<string, unknown>;
 
 /** `ui/download-file` 的结果（宿主原始载荷 + 归一后的判定）。 */
 export interface DownloadResult {
-  /** 是否成功保存。 */
+  /**
+   * 宿主是否**报告**保存成功。
+   *
+   * 注意语义：当前宿主**不返回保存路径**，成功时返回 `{}`、失败与取消都返回 `{isError:true}`，
+   * 所以这个位只说明「宿主那边没报失败」，**不代表插件知道文件存到哪了**。
+   */
   success: boolean;
-  /** 宿主写盘的路径。 */
+  /** 宿主写盘的路径。**当前宿主不返回**（字段保留只为兼容将来补上的宿主）。 */
   filePath?: string;
-  /** 用户在宿主的另存为对话框里取消了。 */
+  /** 用户在宿主的另存为对话框里取消了。**当前宿主不返回**（宿主分不清取消与失败）。 */
   canceled?: boolean;
-  /** 失败原因（宿主给的话）。 */
+  /**
+   * 失败原因。
+   *
+   * 宿主给了字符串就原样带出；没给时是**机器可读标记** `'download_not_confirmed'`
+   *（不是人话，别原样显示给用户 —— 由面板自己措辞）。
+   */
   error?: string;
   /** 宿主返回的原始载荷（原样保留，未知字段不丢）。 */
   raw?: unknown;
@@ -135,12 +145,21 @@ export function parseHostCapabilities(raw: unknown): HostCaps {
 /**
  * 归一 `ui/download-file` 的结果。
  *
- * 协议层的结果 schema 只有 `{isError?: boolean}`（passthrough）；
- * `success` / `filePath` / `canceled` 是**宿主私有扩展**（ZCode 宿主实现是 `showSaveDialog` + 写盘）。
- * 两种形状都要认：
- * - 宿主直接给了 `success` → 用它；
+ * **宿主实测行为（ZCode `app.asar`，见 protocol-notes.md §6）**：
+ * 宿主处理器是
+ * `(await saveFile({data, suggestedName})).success || (r = true); return r ? {isError:true} : {}`
+ * —— 也就是：
+ * - 成功 → 返回 `{}`：**没有 `success`、没有 `filePath`、没有 `canceled`**（保存路径被宿主丢弃）；
+ * - 失败**与**用户取消 → 都返回 `{isError:true}`（宿主分不清取消与失败）。
+ *
+ * 协议层的结果 schema 本来也只有 `{isError?: boolean}`（passthrough）。
+ * 所以这里只能做「尽力归一」，不能编造宿主没给的信息：
+ * - 宿主直接给了 `success` → 用它（未来的宿主可能补上）；
  * - 只给了 `isError` → `success = !isError`；
  * - 什么都没给 → 视为成功（宿主没报错）。
+ *
+ * `filePath` / `canceled` 保留在返回类型里（对外 API 形状不变），但**当前宿主不会填**。
+ * `error` 只在宿主给了字符串时才原样带出；否则用**中性的机器可读标记**（不是面向用户的话术）。
  */
 function normalizeDownloadResult(raw: unknown): DownloadResult {
   const record = isRecord(raw) ? raw : {};
@@ -154,7 +173,8 @@ function normalizeDownloadResult(raw: unknown): DownloadResult {
   if (typeof record.filePath === 'string') result.filePath = record.filePath;
   if (typeof record.canceled === 'boolean') result.canceled = record.canceled;
   if (typeof record.error === 'string') result.error = record.error;
-  else if (record.isError === true) result.error = 'host reported a failed download';
+  // 宿主没给 error 文案：不自造人话，只给一个机器可读标记，让面板自己措辞
+  else if (record.isError === true) result.error = 'download_not_confirmed';
   return result;
 }
 
@@ -200,7 +220,13 @@ export class HostBridge {
   /** 收到的消息 → 按 id 找回在途请求。 */
   private handle = (ev: MessageEvent): void => {
     const data = ev.data as
-      | { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: HostErrorPayload }
+      | {
+          jsonrpc?: unknown;
+          id?: unknown;
+          method?: unknown;
+          result?: unknown;
+          error?: HostErrorPayload;
+        }
       | undefined;
     if (!isRecord(data)) return;
     if (data.jsonrpc !== '2.0') return; // 不是 JSON-RPC 2.0（别的扩展消息）→ 忽略
@@ -216,6 +242,17 @@ export class HostBridge {
 
     const id = Number(data.id);
     if (!Number.isInteger(id)) return; // 通知没有 id，不参与关联
+
+    /**
+     * 带 `method` 的帧是**请求/通知**，不是响应 → 一律不当成响应处理。
+     *
+     * 这一条是防「自己给自己回话」：`post()` 在 `window.parent` 缺失时会回退到 `window`，
+     * 于是桥发出去的请求帧会被自己的 message 监听器收到；
+     * 若把它当响应（`result` 为 undefined），自己的请求会被自己的 pending 满足掉，
+     * 凭空 resolve 出一个 `undefined`。
+     */
+    if (typeof data.method === 'string') return;
+
     const pending = this.pending.get(id);
     if (!pending) return; // 未知 id（迟到的响应 / 别的请求）→ 忽略，不能误伤在途请求
 
@@ -377,6 +414,11 @@ export class HostBridge {
    *
    * 协议形状：`{contents:[{type:"resource", resource:{uri, mimeType, text}}]}`
    * —— 是**内容块**（`type:"resource"`），不是裸的资源对象（实测见 protocol-notes.md §6）。
+   *
+   * **宿主实测**：成功返回 `{}`，失败与用户取消都返回 `{isError:true}` ——
+   * **插件拿不到保存路径，也分不清取消与失败**。
+   * 所以这个方法只是「让用户自己另存一份」，不能拿它的结果去做「已保存到 X」的文案；
+   * 要真实路径请用服务端工具 `napcat_export`。
    */
   async downloadFile(
     filename: string,
@@ -438,7 +480,12 @@ export class HostBridge {
     return this.pending.size;
   }
 
-  /** 断开：摘掉监听、拒掉所有在途请求（不留悬挂的 promise）。 */
+  /**
+   * 断开：摘掉监听、拒掉所有在途请求（不留悬挂的 promise），并**清空握手状态与能力位**。
+   *
+   * 清能力位是必须的：销毁后的桥不该再声称自己拥有宿主能力（否则调用方会以为
+   * `caps.downloadFile` 仍可用而放行按钮）。
+   */
   dispose(): void {
     if (this.listenerAttached) {
       window.removeEventListener('message', this.handle);
@@ -448,6 +495,10 @@ export class HostBridge {
       this.settle(id, undefined, new Error('host bridge disposed'));
     }
     this.pending.clear();
+    this.handshakeDone = false;
+    this.lastInitError = undefined;
+    this.caps = { message: false, updateModelContext: false, downloadFile: false, serverTools: false };
+    this.rawCaps = {};
   }
 }
 

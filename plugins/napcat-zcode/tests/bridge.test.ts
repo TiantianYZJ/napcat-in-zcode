@@ -54,33 +54,50 @@ const defaultResponder: Responder = (method) => {
  *
  * vitest 的 jsdom 环境下 `window === globalThis`，所以 `vi.stubGlobal` 能同时顶掉
  * `window.parent` 与 `window.addEventListener`（本仓库实测：`window === globalThis` 为 true）。
+ *
+ * `removeEventListener` 一并 stub：否则 `dispose()` 的监听器拆卸根本没被验证
+ *（stub 掉的 addEventListener 不会真的注册到 DOM 上，真实 removeEventListener 也就摘不掉）。
  */
 function fakeHost(responder: Responder = defaultResponder) {
   const listeners: ((ev: MessageEvent) => void)[] = [];
   vi.stubGlobal('addEventListener', (t: string, fn: (ev: MessageEvent) => void) => {
     if (t === 'message') listeners.push(fn);
   });
+  vi.stubGlobal('removeEventListener', (t: string, fn: (ev: MessageEvent) => void) => {
+    if (t !== 'message') return;
+    const i = listeners.indexOf(fn);
+    if (i >= 0) listeners.splice(i, 1);
+  });
   const sent: SentMessage[] = [];
+  /** 把一帧投递给所有 message 监听器（异步，和真机一致）。 */
+  const deliver = (data: unknown) => {
+    setTimeout(
+      () => listeners.forEach((fn) => fn({ data } as MessageEvent)),
+      0,
+    );
+  };
   vi.stubGlobal('parent', {
     postMessage: (msg: SentMessage) => {
       sent.push(msg);
       if (typeof msg.id !== 'number') return; // 通知没有 id，不回
-      const reply = (data: unknown) => {
-        setTimeout(
-          () => listeners.forEach((fn) => fn({ data } as MessageEvent)),
-          0,
-        );
-      };
       const res = responder(msg.method ?? '', msg.params);
       if (!res || res.silent) return; // 宿主不响应
       if (res.error) {
-        reply({ jsonrpc: '2.0', id: msg.id, error: res.error });
+        deliver({ jsonrpc: '2.0', id: msg.id, error: res.error });
         return;
       }
-      reply({ jsonrpc: '2.0', id: msg.id, result: res.result });
+      deliver({ jsonrpc: '2.0', id: msg.id, result: res.result });
     },
   });
-  return { sent, listeners };
+  return {
+    sent,
+    listeners,
+    /** 手动回一条结果（用来测乱序响应 / 并发）。 */
+    reply: (id: number, result: unknown) => deliver({ jsonrpc: '2.0', id, result }),
+    /** 手动回一条错误帧。 */
+    replyError: (id: number, error: { code: number; message: string; data?: unknown }) =>
+      deliver({ jsonrpc: '2.0', id, error }),
+  };
 }
 
 beforeEach(() => vi.unstubAllGlobals());
@@ -342,5 +359,159 @@ describe('HostBridge', () => {
     b.dispose();
     await expect(inflight).rejects.toThrow(/disposed/);
     expect(b.pendingCount).toBe(0);
+  });
+
+  it('dispose() detaches the message listener', async () => {
+    const host = fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    expect(host.listeners.length).toBe(1);
+    b.dispose();
+    expect(host.listeners.length).toBe(0);
+  });
+
+  it('dispose() clears the handshake state and the capability bits', async () => {
+    fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    expect(b.initialized).toBe(true);
+    expect(b.capabilities.serverTools).toBe(true);
+
+    b.dispose();
+
+    // 已销毁的桥不该再声称自己拥有宿主能力
+    expect(b.initialized).toBe(false);
+    expect(b.capabilities).toEqual({
+      message: false,
+      updateModelContext: false,
+      downloadFile: false,
+      serverTools: false,
+    });
+    expect(b.hostCapabilities).toEqual({});
+    // 销毁后再调用动作类方法必须被挡住
+    await expect(b.callTool('napcat_status', {})).rejects.toThrow(/not initialized/);
+  });
+
+  // ---- 能力位：值为 null / false / undefined 一律视为不支持 ----
+
+  it('treats null / false / undefined capability values as unsupported', async () => {
+    fakeHost((method) =>
+      method === 'ui/initialize'
+        ? {
+            result: {
+              protocolVersion: '2026-01-26',
+              hostCapabilities: {
+                message: null,
+                downloadFile: false,
+                serverTools: {},
+                updateModelContext: undefined,
+              },
+            },
+          }
+        : { result: {} },
+    );
+    const b = new HostBridge();
+    const caps = await b.initialize();
+    expect(caps).toEqual({
+      message: false,
+      downloadFile: false,
+      serverTools: true,
+      updateModelContext: false,
+    });
+  });
+
+  // ---- 并发：id → pending 关联 ----
+
+  it('correlates concurrent requests by id even when the responses arrive out of order', async () => {
+    const host = fakeHost((method) =>
+      method === 'ui/initialize'
+        ? { result: { protocolVersion: '2026-01-26', hostCapabilities: { serverTools: {} } } }
+        : { silent: true }, // tools/call 不自动回，测试手动控制顺序
+    );
+    const b = new HostBridge({ timeoutMs: 5_000, initAttempts: 1 });
+    await b.initialize();
+
+    const first = b.callTool('napcat_status', {});
+    const second = b.callTool('napcat_list_chats', { kind: 'group' });
+    expect(b.pendingCount).toBe(2);
+
+    const calls = host.sent.filter((m) => m.method === 'tools/call');
+    expect(calls).toHaveLength(2);
+    expect(calls[0].id).not.toBe(calls[1].id);
+
+    // 逆序回：第二个请求先回
+    host.reply(calls[1].id!, { content: [{ type: 'text', text: 'second' }] });
+    host.reply(calls[0].id!, { content: [{ type: 'text', text: 'first' }] });
+
+    expect(((await first) as { content: [{ text: string }] }).content[0].text).toBe('first');
+    expect(((await second) as { content: [{ text: string }] }).content[0].text).toBe('second');
+    expect(b.pendingCount).toBe(0);
+  });
+
+  // ---- 不把自己的请求当响应 ----
+
+  it('ignores its own request frames instead of resolving them with undefined', async () => {
+    const host = fakeHost((method) =>
+      method === 'ui/initialize'
+        ? { result: { protocolVersion: '2026-01-26', hostCapabilities: { serverTools: {} } } }
+        : { silent: true },
+    );
+    const b = new HostBridge({ timeoutMs: 40, initAttempts: 1 });
+    await b.initialize();
+
+    // 模拟「window.parent 缺失」：桥的 post() 回退到 window，请求帧会回到自己的监听器
+    vi.stubGlobal('parent', undefined);
+    vi.stubGlobal('postMessage', (msg: unknown) => {
+      setTimeout(() => host.listeners.forEach((fn) => fn({ data: msg } as MessageEvent)), 0);
+    });
+
+    // 自己的请求帧带 method → 不能被当成响应把 pending 满足掉（否则会 resolve 出 undefined）
+    await expect(b.callTool('napcat_status', {})).rejects.toThrow(/host request timeout: tools\/call/);
+    expect(b.pendingCount).toBe(0);
+  });
+
+  // ---- 宿主实测的下载语义 ----
+
+  it('maps the measured host download shapes: {} = ok, {isError:true} = not confirmed', async () => {
+    fakeHost((method) => {
+      if (method === 'ui/initialize') {
+        return {
+          result: { protocolVersion: '2026-01-26', hostCapabilities: { downloadFile: {} } },
+        };
+      }
+      if (method === 'ui/download-file') {
+        // 宿主实测：成功返回 {}（路径被丢弃），失败与取消都返回 {isError:true}
+        return { result: {} };
+      }
+      return { result: {} };
+    });
+    const b = new HostBridge();
+    await b.initialize();
+    const ok = await b.downloadFile('选区.md', '# hi', 'text/markdown');
+    expect(ok.success).toBe(true);
+    // 宿主不返回路径，也不返回 canceled
+    expect(ok.filePath).toBeUndefined();
+    expect(ok.canceled).toBeUndefined();
+    expect(ok.error).toBeUndefined();
+    expect(ok.raw).toEqual({});
+  });
+
+  it('reports a neutral machine-readable marker when the host does not confirm the download', async () => {
+    fakeHost((method) => {
+      if (method === 'ui/initialize') {
+        return {
+          result: { protocolVersion: '2026-01-26', hostCapabilities: { downloadFile: {} } },
+        };
+      }
+      if (method === 'ui/download-file') return { result: { isError: true } };
+      return { result: {} };
+    });
+    const b = new HostBridge();
+    await b.initialize();
+    const r = await b.downloadFile('选区.md', '# hi', 'text/markdown');
+    expect(r.success).toBe(false);
+    // 不自造人话：给一个中性的机器可读标记，由面板自己措辞
+    expect(r.error).toBe('download_not_confirmed');
+    expect(r.raw).toEqual({ isError: true });
   });
 });
