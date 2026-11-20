@@ -30,13 +30,15 @@ let requestCount = 0;
 // - nullLoginInfo：get_login_info 的 data 为 null；
 // - ignoreMessageSeq：服务端忽略 message_seq（恒返回最新一页，游标不推进）；
 // - maxItemsPerPage：服务端把每页条目数钳到该值（0 = 不钳，模拟 count 被服务端限流）；
-// - seqlessItems：每页额外混入一条没有 message_seq 的消息。
+// - seqlessItems：每页额外混入一条没有 message_seq 的消息；
+// - inclusiveSeq：服务端 message_seq 语义取「包含式」（返回 seq <= s）而非「独占式」（返回 seq < s）。
 let listShape: 'array' | 'object' = 'array';
 let nullData = false;
 let nullLoginInfo = false;
 let ignoreMessageSeq = false;
 let maxItemsPerPage = 0;
 let seqlessItems = false;
+let inclusiveSeq = false;
 
 beforeEach(async () => {
   listShape = 'array';
@@ -45,6 +47,7 @@ beforeEach(async () => {
   ignoreMessageSeq = false;
   maxItemsPerPage = 0;
   seqlessItems = false;
+  inclusiveSeq = false;
   lastUrl = '';
   lastBody = {};
   requestCount = 0;
@@ -63,7 +66,7 @@ beforeEach(async () => {
         page = ALL.filter((m) => m.message_seq > 7); // 最新一页
       } else {
         const s = Number(body.message_seq);
-        page = ALL.filter((m) => m.message_seq < s).slice(-count);
+        page = ALL.filter((m) => (inclusiveSeq ? m.message_seq <= s : m.message_seq < s)).slice(-count);
       }
       if (ignoreMessageSeq) page = ALL.filter((m) => m.message_seq > 7); // 忽略游标：恒返回最新一页
       if (seqlessItems) page = [...page, { time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as typeof ALL;
@@ -257,6 +260,16 @@ describe('pagination robustness', () => {
   it('completes when the history is exhausted above fromSeq', async () => {
     // fromSeq=0 小于最老消息的 seq=1：重叠式翻页会一直拿到边界消息，
     // 靠「严格更早」的探测请求证明历史已耗尽 → 区间完整返回，而不是误报「无进展」。
+    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
+    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
+    expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    await c.close();
+  });
+
+  it('completes when the server uses inclusive message_seq semantics', async () => {
+    // 服务端语义为「message_seq=s → 返回 seq <= s」（包含式）：探测请求会带回边界消息 [minSeq]，
+    // 而不是空页。耗尽判定必须与独占/包含语义无关，否则触底查询会被误判成失败。
+    inclusiveSeq = true;
     const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
     const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
     expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);

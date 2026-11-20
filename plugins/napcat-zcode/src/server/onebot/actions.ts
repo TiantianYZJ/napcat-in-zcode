@@ -62,8 +62,9 @@ export async function fetchHistoryPage(
  *
  * 「服务端把 count 钳小」不再作为终止条件（短页不等于耗尽，会漏消息）；
  * 翻页无进展时用一次「严格更早」的探测请求区分「历史耗尽」与「服务端不推进游标」，
- * 后者以及超过 MAX_PAGES 都会抛 OneBotError，不静默返回残缺区间——
- * 那会让调用方把部分结果当成完整结果。
+ * 判定只看探测结果里有没有比游标更早/更新的消息，因此与 NapCat `message_seq`
+ * 的独占/包含语义无关；无法推进以及超过 MAX_PAGES 都会抛 OneBotError，
+ * 不静默返回残缺区间——那会让调用方把部分结果当成完整结果。
  */
 export async function fetchMessagesBetween(
   c: OneBotClient,
@@ -96,10 +97,16 @@ export async function fetchMessagesBetween(
     if (minSeq <= fromSeq) break; // 已覆盖下界，区间完整
     if (minSeq >= prevCursor) {
       // 游标没有前进。可能是「历史确实已耗尽」，也可能是「服务端忽略 message_seq / 把 count 钳死」。
-      // 用一次「严格更早」的探测请求区分：探测为空 → 确认没有更早的消息（区间完整，结束）；
-      // 探测非空 → 服务端明明还有更早的消息却推不动游标 → 区间可能残缺 → 报错，绝不静默返回半截。
+      // 用一次「严格更早」的探测请求区分，且判定与 message_seq 的独占/包含语义无关（NapCat 真实语义待实测）：
+      //   - 探测结果里既没有比 minSeq 更早的、也没有比 minSeq 更新的消息 → 探测只可能为空或仅含边界消息
+      //     （独占语义返回空、包含语义返回 [minSeq]），说明更早的历史确实不存在 → 区间完整，结束；
+      //   - 探测结果里有更早的消息 → 还有更早的历史却推不动游标 → 区间可能残缺 → 报错；
+      //   - 探测结果里有更新的消息 → 服务端根本不认这个游标 → 区间可能残缺 → 报错。
       const probe = await fetchHistoryPage(c, kind, id, minSeq, pageSize);
-      if (probe.length === 0) break;
+      const probeSeqs = probe.map((m) => m.message_seq).filter((s): s is number => s !== undefined);
+      const hasOlder = probeSeqs.some((s) => s < minSeq);
+      const hasNewer = probeSeqs.some((s) => s > minSeq);
+      if (!hasOlder && !hasNewer) break; // 确认没有更早的历史 → 区间完整
       failure = `history pagination made no progress at cursor ${prevCursor}; the range may be incomplete`;
       break;
     }
