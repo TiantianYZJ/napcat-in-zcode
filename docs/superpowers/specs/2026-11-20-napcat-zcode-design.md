@@ -287,7 +287,9 @@ type Message = {
 ```
 
 - token 等敏感项只存该文件（用户级、随插件数据目录隔离），不进清单、不进环境变量默认值、不进 git。
-- 暴露为清单 `userConfig` 的简单项（供 ZCode 设置 UI 读写，映射到上述 config.json 字段）：`export.dir`（`"user" | "workspace"`，默认 `"user"`）、`export.includeImages`（布尔，默认 `false`）。
+- 暴露为清单 `userConfig` 的简单项（供 ZCode 设置 UI 读写，映射到上述 config.json 字段）：`export.dir`（`"user" | "workspace"`）、`export.includeImages`（`"true" | "false"`）。**两项的 `default` 一律为空串**（空=未设置=跟随 `config.json`）。
+- **配置优先级（裁定，2026-11-21 修订）**：**env 合法值优先**（env 覆盖 `config.json`）。为避免「用户没动过设置、env 却注入默认值 → `config.json` 永久失效」，清单两项 `userConfig` 的 `default` 设为**空串**——空串不是合法值 → 不触发覆盖 → 文件保持权威；只有用户在 ZCode 设置界面**显式**选了值，env 才生效。因此不需要追踪「字段是否显式设置」，`config.json` 的普通深合并即可。
+- `napcat_get_config` 返回给工具/面板时**必须遮蔽 token**（如 `token: "***"` 或省略），token 明文只存在于 `config.json`。
 
 ## 7. 可移植性约束（跨设备硬性要求）
 
