@@ -242,6 +242,8 @@ function coerceChat(v: unknown): ChatRef {
     throw new Error("chat.kind 必须是 'group' 或 'friend'");
   }
   const id = o.id === undefined || o.id === null ? '' : String(o.id);
+  // 归一：id 允许是数字（QQ 号本来就是数字型）→ 一律转成字符串，
+  // 后面与 `chatId` 的交叉校验比的就是归一后的字符串（`123` 与 `'123'` 视为同一个会话）。
   if (!id) throw new Error('chat.id 不能为空');
   const name = o.name === undefined || o.name === null ? '' : String(o.name);
   return { kind: o.kind, id, name };
@@ -537,10 +539,12 @@ export function registerTools(server: McpServer, state: AppState): void {
           .optional()
           .describe('要导出的消息（Message 对象数组；元素须带 time 字段）；缺省时用 chatKind/chatId/fromSeq/toSeq 现拉该 seq 区间'),
         // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
+        // id 允许数字：QQ 群号/好友号本来就是数字型，面板与 agent 很可能就这么传
+        // （归一化成字符串仍在 coerceChat 里做，比较时统一用归一后的字符串）。
         chat: z
-          .object({ kind: z.string(), id: z.string(), name: z.string() })
+          .object({ kind: z.string(), id: z.union([z.string(), z.number()]), name: z.string() })
           .partial()
-          .describe('会话引用 {kind:"group"|"friend", id:string, name:string}'),
+          .describe('会话引用 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: z.enum(['group', 'friend']).optional().describe('现拉时的会话类型'),
         chatId: z.string().optional().describe('现拉时的会话 id'),
         fromSeq: z.number().optional().describe('现拉时的起始 message_seq（含）'),

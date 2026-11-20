@@ -60,16 +60,29 @@ function recordingClient(inner: OneBotClient, calls: Array<{ action: string; par
 let tmp: string;
 let envSnapshot: Record<string, string | undefined>;
 
+/**
+ * 测试必须不受开发者 shell 里的同名环境变量影响。
+ *
+ * `NAPCAT_EXPORT_DIR` / `NAPCAT_INCLUDE_IMAGES` 是清单 `userConfig` 经 `.mcp.json` 注入的
+ * **env 覆盖**（env 优先于 config.json）——开发者机器上正好有 `NAPCAT_EXPORT_DIR=user` 时，
+ * 「dir 缺省取配置」的用例会读到 env 而不是配置文件 → 假失败。
+ * `ZCODE_PROJECT_DIR` 同理（工作区目录的兜底来源）。
+ */
+const ENV_KEYS = ['ZCODE_PLUGIN_DATA', 'NAPCAT_EXPORT_DIR', 'NAPCAT_INCLUDE_IMAGES', 'ZCODE_PROJECT_DIR'] as const;
+
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'napcat-exp-'));
-  envSnapshot = { ZCODE_PLUGIN_DATA: process.env.ZCODE_PLUGIN_DATA };
+  envSnapshot = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of ENV_KEYS) delete process.env[k];
   process.env.ZCODE_PLUGIN_DATA = tmp; // 配置读取指向临时目录，不读本机真实配置
 });
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
-  const v = envSnapshot.ZCODE_PLUGIN_DATA;
-  if (v === undefined) delete process.env.ZCODE_PLUGIN_DATA;
-  else process.env.ZCODE_PLUGIN_DATA = v;
+  for (const k of ENV_KEYS) {
+    const v = envSnapshot[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 async function makeClient(client: OneBotClient = fakeClient(), opts: { workspaceDir?: string } = {}) {
@@ -379,6 +392,29 @@ describe('napcat_export', () => {
     const r = await c.callTool({
       name: 'napcat_export',
       arguments: { chat: { kind: 'friend', id: '1', name: '张三' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('不一致');
+  });
+
+  it('accepts a numeric chat id and compares it with the normalised chatId', async () => {
+    // QQ 群号/好友号本来就是数字型 → chat.id 传数字必须能用；
+    // 交叉校验比的是归一后的字符串（123 与 '123' 是同一个会话）。
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '123', fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(false);
+    const p = payload(r);
+    expect(p.mdPath).toContain(tmp);
+  });
+
+  it('rejects a numeric chat id that disagrees with the fetch parameters', async () => {
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '456', fromSeq: 6, toSeq: 10 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');

@@ -22704,7 +22704,9 @@ function registerTools(server2, state) {
       inputSchema: {
         messages: external_exports.any().optional().describe("\u8981\u5BFC\u51FA\u7684\u6D88\u606F\uFF08Message \u5BF9\u8C61\u6570\u7EC4\uFF1B\u5143\u7D20\u987B\u5E26 time \u5B57\u6BB5\uFF09\uFF1B\u7F3A\u7701\u65F6\u7528 chatKind/chatId/fromSeq/toSeq \u73B0\u62C9\u8BE5 seq \u533A\u95F4"),
         // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
-        chat: external_exports.object({ kind: external_exports.string(), id: external_exports.string(), name: external_exports.string() }).partial().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string, name:string}'),
+        // id 允许数字：QQ 群号/好友号本来就是数字型，面板与 agent 很可能就这么传
+        // （归一化成字符串仍在 coerceChat 里做，比较时统一用归一后的字符串）。
+        chat: external_exports.object({ kind: external_exports.string(), id: external_exports.union([external_exports.string(), external_exports.number()]), name: external_exports.string() }).partial().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: external_exports.enum(["group", "friend"]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD\u7C7B\u578B"),
         chatId: external_exports.string().optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD id"),
         fromSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u8D77\u59CB message_seq\uFF08\u542B\uFF09"),
