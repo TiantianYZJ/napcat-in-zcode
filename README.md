@@ -444,8 +444,8 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
    也**分不清用户是取消还是失败**。要真实路径请用「保存为附件…」或「导出▾」。
 2. **「添加到输入框附件区」靠粘贴。** 平台**没有** composer 附件 API —— ZCode 的 MCP-UI 宿主能力位里
    **本插件依赖的**只有 `message` / `updateModelContext` / `downloadFile` / `serverTools` 四个
-   （宿主另外还有 `openLinks` / `logging` / `serverResources` / `experimental` / `sandbox` 等，本插件都不用；
-   也没有 `sampling` 相关的用法）。
+   （宿主实测**实际返回**的还有 `openLinks` / `logging` / `serverResources` / `experimental` 等，本插件都不用；
+   `sandbox` 只出现在协议**声明的 schema** 里、宿主实测不返回它；本插件也没有 `sampling` 相关的用法）。
    实际路径是「保存为附件… → 导出并复制 `@路径` → 你粘贴到输入框」。
 3. **注入文本首行是不可信第三方内容声明。** 注入体放在模型上下文里，模型会把聊天内容当作
    第三方内容而不是指令 —— 这是设计意图，不要因为「模型没听我的」就去删这一行。

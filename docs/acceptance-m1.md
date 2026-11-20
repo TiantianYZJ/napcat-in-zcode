@@ -174,7 +174,10 @@
   - 找一条**语音**消息，看 `napcat_get_history` 返回的 `segments` 里 `kind:"voice"` 的
     `duration` 是不是合理值（不是 `NaN`、不是巨大数值）
   - 插件依次尝试 `seconds` / `duration` / `time` 三个字段名（`model/message.ts` 的 `normalizeSegment`），
-    **真实 NapCat 用的是哪一个待实测**；若三者都不对，语音时长会显示成 `undefined`
+    **真实 NapCat 用的是哪一个待实测**
+  - 若三个候选字段名**都取不到**：`duration` 键在序列化结果里**直接不存在**
+    （`JSON.stringify` 会丢掉值为 `undefined` 的键，不会变成字符串 `"undefined"`），
+    且面板**从不展示时长** —— 只渲染 `[语音]` 占位符（`duration` 在 `src/panel/` 里根本没被引用）
 
   → 结论记到 §13；这些是 M1 收尾计划里明确要实测确认的语义点。
 
