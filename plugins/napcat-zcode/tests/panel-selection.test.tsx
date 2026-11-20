@@ -84,3 +84,69 @@ describe('MessageList selection', () => {
     expect(getByTestId('msg-seq:2')).toBeTruthy();
   });
 });
+
+describe('MessageList 拖拽划选', () => {
+  it('按住并划过其它消息 → 上报起点与终点', () => {
+    const onDragSelect = vi.fn();
+    const { getByTestId } = render(
+      <MessageList
+        messages={MSGS}
+        selection={new Set()}
+        onToggle={vi.fn()}
+        onLoadOlder={vi.fn()}
+        onDragSelect={onDragSelect}
+      />,
+    );
+    fireEvent.mouseDown(getByTestId('msg-a'));
+    fireEvent.mouseOver(getByTestId('msg-b'));
+    expect(onDragSelect).toHaveBeenCalledWith('a', 'b', false);
+  });
+
+  it('Ctrl/Cmd 拖拽 → 叠加语义（additive=true）', () => {
+    const onDragSelect = vi.fn();
+    const { getByTestId } = render(
+      <MessageList
+        messages={MSGS}
+        selection={new Set()}
+        onToggle={vi.fn()}
+        onLoadOlder={vi.fn()}
+        onDragSelect={onDragSelect}
+      />,
+    );
+    fireEvent.mouseDown(getByTestId('msg-a'), { metaKey: true });
+    fireEvent.mouseOver(getByTestId('msg-b'), { metaKey: true });
+    expect(onDragSelect).toHaveBeenCalledWith('a', 'b', true);
+  });
+
+  it('没有按下就不划选（普通悬停不产生选区变化）', () => {
+    const onDragSelect = vi.fn();
+    const { getByTestId } = render(
+      <MessageList
+        messages={MSGS}
+        selection={new Set()}
+        onToggle={vi.fn()}
+        onLoadOlder={vi.fn()}
+        onDragSelect={onDragSelect}
+      />,
+    );
+    fireEvent.mouseOver(getByTestId('msg-b'));
+    expect(onDragSelect).not.toHaveBeenCalled();
+  });
+
+  it('鼠标松开后停止划选', () => {
+    const onDragSelect = vi.fn();
+    const { getByTestId } = render(
+      <MessageList
+        messages={MSGS}
+        selection={new Set()}
+        onToggle={vi.fn()}
+        onLoadOlder={vi.fn()}
+        onDragSelect={onDragSelect}
+      />,
+    );
+    fireEvent.mouseDown(getByTestId('msg-a'));
+    fireEvent.mouseUp(document);
+    fireEvent.mouseOver(getByTestId('msg-b'));
+    expect(onDragSelect).not.toHaveBeenCalled();
+  });
+});

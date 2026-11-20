@@ -13,7 +13,8 @@ export function hm(t: number): string {
  * - 向上滚（滚到顶部 sentinel）触发 `onLoadOlder()` 载入更早的消息；
  * - 没有 `IntersectionObserver` 的环境（jsdom / 老宿主）退回「加载更早」按钮；
  * - 不做完整虚拟滚动（行高可变，复杂度高），改用「增量加载 + 渲染上限」，
- *   行为与虚拟滚动等价（向上滚加载更早），差异与理由见 Task 12 的 brief。
+ *   行为与虚拟滚动等价（向上滚加载更早），差异与理由见 Task 12 的 brief；
+ * - 支持**拖拽划选**：按住一条消息并划过其它消息 → 按可见列表序选中区间。
  */
 export function MessageList({
   messages,
@@ -23,6 +24,7 @@ export function MessageList({
   noMore,
   loadingOlder,
   note,
+  onDragSelect,
 }: {
   messages: Msg[];
   selection: Set<string>;
@@ -33,9 +35,34 @@ export function MessageList({
   loadingOlder?: boolean;
   /** 顶部提示（为什么不能继续加载）。 */
   note?: string;
+  /** 拖拽划选：上报起点与终点（`additive` = Ctrl/Cmd 拖拽 → 与已有选区合并）。 */
+  onDragSelect?: (fromId: string, toId: string, additive: boolean) => void;
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
   const listwrap = useRef<HTMLDivElement>(null);
+
+  /** 拖拽划选状态：起点消息键、是否正在拖、刚拖过（用来吃掉浏览器补的那个 click）。 */
+  const dragFrom = useRef<string | null>(null);
+  const dragging = useRef(false);
+  const suppressClick = useRef(false);
+
+  /** 鼠标松开 → 结束拖拽。 */
+  useEffect(() => {
+    const end = (): void => {
+      dragging.current = false;
+      dragFrom.current = null;
+      /**
+       * 拖拽结束后浏览器还会补一个 click（目标是按下与松开的最近公共祖先）。
+       * 若拖拽确实划过别的消息，这个 click 不能把刚划好的区间改成单选 →
+       * 置一个标记让它被忽略；用 `setTimeout(0)` 复位，保证之后的正常点击不受影响。
+       */
+      setTimeout(() => {
+        suppressClick.current = false;
+      }, 0);
+    };
+    window.addEventListener('mouseup', end);
+    return () => window.removeEventListener('mouseup', end);
+  }, []);
 
   useEffect(() => {
     const target = sentinel.current;
@@ -83,7 +110,30 @@ export function MessageList({
           key={msgKey(m)}
           data-testid={`msg-${msgKey(m)}`}
           className={`msg ${selection.has(msgKey(m)) ? 'sel' : ''}`}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            dragFrom.current = msgKey(m);
+            dragging.current = true;
+            suppressClick.current = false;
+          }}
+          onMouseOver={(e) => {
+            if (!dragging.current) return;
+            // 只认落在消息行本身的悬停（划过行内的子元素不重复触发）
+            if (e.target !== e.currentTarget) return;
+            const from = dragFrom.current;
+            if (!from || from === msgKey(m)) return;
+            suppressClick.current = true;
+            // 划选优先于文本选择：把浏览器已经开始的文本选区清掉
+            e.preventDefault();
+            if (typeof window.getSelection === 'function') window.getSelection()?.removeAllRanges();
+            onDragSelect?.(from, msgKey(m), e.ctrlKey || e.metaKey);
+          }}
           onClick={(e) => {
+            // 刚拖拽过 → 这个 click 是浏览器补的，别让它把区间改成单选
+            if (suppressClick.current) {
+              suppressClick.current = false;
+              return;
+            }
             const mode = e.ctrlKey || e.metaKey ? 'ctrl' : e.shiftKey ? 'shift' : 'click';
             onToggle(msgKey(m), mode, i);
           }}

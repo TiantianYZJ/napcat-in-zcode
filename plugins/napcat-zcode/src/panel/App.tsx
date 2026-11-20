@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, handshake, msgKey, type Chat, type Msg, type StatusInfo } from './api.js';
+import { api, bridge, handshake, msgKey, type Chat, type Msg, type StatusInfo } from './api.js';
 import type { HostCaps } from './bridge.js';
 import { Statusbar } from './components/Statusbar.js';
 import { ChatList } from './components/ChatList.js';
 import { MessageList } from './components/MessageList.js';
 import { Toolbar } from './components/Toolbar.js';
-import { ActionBar } from './components/ActionBar.js';
+import { ActionBar, type Notice } from './components/ActionBar.js';
+import { SettingsPanel } from './components/SettingsPanel.js';
 import { UnconfiguredForm } from './components/UnconfiguredForm.js';
 
 /** 面板状态机。 */
@@ -94,13 +95,25 @@ export function App() {
   const [sender, setSender] = useState('');
   const [range, setRange] = useState('all');
   const [includeImages, setIncludeImages] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [caps, setCaps] = useState<HostCaps>(NO_CAPS);
   const [noMore, setNoMore] = useState(false);
   const [olderNote, setOlderNote] = useState('');
   const [loadingOlder, setLoadingOlder] = useState(false);
   /** 失败态下是否展开「重新配置端点」表单。 */
   const [reconfiguring, setReconfiguring] = useState(false);
+  /** 设置面板（只读配置）是否展开。 */
+  const [showSettings, setShowSettings] = useState(false);
+
+  /**
+   * 抛面板提示。
+   *
+   * 提示可以是纯文本，也可以是带「复制」入口的结构化提示
+   * （沙箱里 `navigator.clipboard` 常常不可用 → 让用户自己点「复制」）。
+   */
+  const showNotice = useCallback((s: string | Notice) => {
+    setNotice(typeof s === 'string' ? { text: s } : s);
+  }, []);
 
   /** 当前会话（`loadOlder` 是稳定回调，用 ref 读最新值）。 */
   const activeRef = useRef<Chat | null>(null);
@@ -121,22 +134,22 @@ export function App() {
       const st = await api.status();
       setStatus(st);
       if (!st.configured) {
-        setNotice('');
+        setNotice(null);
         setPhase('unconfigured');
         return;
       }
       if (!st.connected) {
-        setNotice('');
+        setNotice(null);
         setReconfiguring(false);
         setPhase('error');
         return;
       }
       const [g, f] = await Promise.all([api.listChats('group'), api.listChats('friend')]);
       setChats([...(g.chats ?? []), ...(f.chats ?? [])]);
-      setNotice('');
+      setNotice(null);
       setPhase('ready');
     } catch (e) {
-      setNotice(errText(e));
+      showNotice(errText(e));
       setPhase('error');
     }
   }, []);
@@ -157,7 +170,7 @@ export function App() {
         await reload();
       } catch (e) {
         if (!alive) return;
-        setNotice(errText(e));
+        showNotice(errText(e));
         setPhase('error');
       }
     })();
@@ -179,7 +192,7 @@ export function App() {
     setNoMore(false);
     setOlderNote('');
     // 换会话就把上一段残留的提示清掉（否则上一段的失败提示会一直挂在面板上）
-    setNotice('');
+    setNotice(null);
     try {
       const r = await api.getHistory(chat.kind, chat.id, undefined, PAGE_SIZE);
       if (activeRef.current !== chat) return; // 用户已经切到别的会话了
@@ -201,7 +214,7 @@ export function App() {
       }
       cursorRef.current = r.nextBeforeSeq;
     } catch (e) {
-      setNotice(errText(e));
+      showNotice(errText(e));
     }
   }, []);
 
@@ -252,7 +265,7 @@ export function App() {
       }
       cursorRef.current = r.nextBeforeSeq;
     } catch (e) {
-      setNotice(errText(e));
+      showNotice(errText(e));
     } finally {
       loadingOlderRef.current = false;
       setLoadingOlder(false);
@@ -328,9 +341,35 @@ export function App() {
     });
   }, []);
 
+  /**
+   * 拖拽划选：按住一条消息划过其它消息 → 选中区间（按**可见列表**序）。
+   *
+   * `additive`（Ctrl/Cmd 拖拽）= 与已有选区合并；否则整段替换。
+   */
+  const dragSelect = useCallback((fromId: string, toId: string, additive: boolean) => {
+    const order = orderRef.current;
+    const a = order.indexOf(fromId);
+    const b = order.indexOf(toId);
+    if (a < 0 || b < 0) return;
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    setSelection((prev) => {
+      const next = additive ? new Set(prev) : new Set<string>();
+      for (let i = lo; i <= hi; i++) {
+        const mid = order[i];
+        if (mid) next.add(mid);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <div className="app">
-      <Statusbar status={status} phase={phase} notice={notice} />
+      <Statusbar
+        status={status}
+        phase={phase}
+        notice={notice?.text ?? ''}
+        onSettings={() => setShowSettings(true)}
+      />
       <div className="main">
         <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
         <div className="right">
@@ -346,7 +385,7 @@ export function App() {
               <UnconfiguredForm onDone={() => void reload()} initialEndpoint="" />
             ) : (
               <div className="placeholder" data-testid="phase-error">
-                <p>{notice || status?.error || '连接失败'}</p>
+                <p>{notice?.text || status?.error || '连接失败'}</p>
                 <button data-testid="retry-btn" onClick={() => void reload()}>
                   重试
                 </button>
@@ -381,6 +420,7 @@ export function App() {
                 noMore={noMore}
                 loadingOlder={loadingOlder}
                 note={olderNote}
+                onDragSelect={dragSelect}
               />
             </>
           )}
@@ -390,14 +430,35 @@ export function App() {
         selected={selected}
         chat={active}
         caps={caps}
-        setNotice={setNotice}
+        setNotice={showNotice}
         phase={phase}
       />
       {notice && phase !== 'error' && (
-        <div className="toast" data-testid="toast" onClick={() => setNotice('')}>
-          {notice}
+        <div className="toast" data-testid="toast">
+          <span className="toast-text" onClick={() => setNotice(null)}>
+            {notice.text}
+          </span>
+          {notice.copy !== undefined && (
+            <button
+              className="toast-copy"
+              data-testid="toast-copy"
+              title={`复制 ${notice.copy}`}
+              onClick={async () => {
+                const value = notice.copy ?? '';
+                const ok = await bridge.writeClipboard(value);
+                setNotice(
+                  ok
+                    ? { text: `已复制：${value}` }
+                    : { text: `复制失败：请手动复制 ${value}`, copy: value },
+                );
+              }}
+            >
+              复制
+            </button>
+          )}
         </div>
       )}
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

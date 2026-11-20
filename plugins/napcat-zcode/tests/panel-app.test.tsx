@@ -18,6 +18,10 @@ const mock = vi.hoisted(() => ({
   formatSelection: vi.fn(),
   exportSel: vi.fn(),
   getConfig: vi.fn(),
+  uiMessage: vi.fn(),
+  updateModelContext: vi.fn(),
+  downloadFile: vi.fn(),
+  writeClipboard: vi.fn(),
 }));
 
 // 只替换「会跟宿主说话」的部分；纯函数（msgKey 等）保留真身。
@@ -27,7 +31,13 @@ vi.mock('../src/panel/api.js', async (importOriginal) => {
     ...actual,
     handshake: mock.handshake,
     // 工厂里不能引用顶层变量（vi.mock 会被提升到文件顶部）→ 能力集就地写死。
-    bridge: { capabilities: { message: true, updateModelContext: true, downloadFile: true, serverTools: true } },
+    bridge: {
+      capabilities: { message: true, updateModelContext: true, downloadFile: true, serverTools: true },
+      uiMessage: mock.uiMessage,
+      updateModelContext: mock.updateModelContext,
+      downloadFile: mock.downloadFile,
+      writeClipboard: mock.writeClipboard,
+    },
     api: {
       status: mock.status,
       listChats: mock.listChats,
@@ -62,6 +72,11 @@ beforeEach(() => {
   mock.status.mockReset();
   mock.listChats.mockReset();
   mock.getHistory.mockReset();
+  mock.getConfig.mockReset();
+  mock.uiMessage.mockReset();
+  mock.updateModelContext.mockReset();
+  mock.downloadFile.mockReset();
+  mock.writeClipboard.mockReset();
   mock.handshake.mockResolvedValue(ALL_CAPS);
   mock.status.mockResolvedValue({
     configured: true,
@@ -75,6 +90,15 @@ beforeEach(() => {
       : { chats: [{ kind: 'friend', id: '2', name: '张三' }] },
   );
   mock.getHistory.mockResolvedValue({ messages: [], nextBeforeSeq: null, exhausted: true });
+  mock.getConfig.mockResolvedValue({
+    connection: { mode: 'external', endpoint: 'http://127.0.0.1:3000', token: '***' },
+    export: { dir: 'user', includeImages: false },
+    inject: { maxInjectChars: 40000 },
+  });
+  mock.uiMessage.mockResolvedValue(undefined);
+  mock.updateModelContext.mockResolvedValue(undefined);
+  mock.downloadFile.mockResolvedValue({ success: true, raw: {} });
+  mock.writeClipboard.mockResolvedValue(true);
 });
 
 /** 挂载 App 并把初始的异步握手/加载冲干净。 */
@@ -162,21 +186,39 @@ describe('App 能力降级', () => {
     expect(ctxBtn.disabled).toBe(true);
     expect(ctxBtn.getAttribute('data-reason')).toContain('updateModelContext');
 
+    // 「保存为附件…」的主路径是服务端导出 → 依赖 serverTools（tools/call 代理）
     const attachBtn = screen.getByTestId('act-attach') as HTMLButtonElement;
     expect(attachBtn.disabled).toBe(true);
-    expect(attachBtn.getAttribute('data-reason')).toContain('downloadFile');
+    expect(attachBtn.getAttribute('data-reason')).toContain('serverTools');
+
+    // 「另存一份…」是 ui/download-file 降级通道 → 依赖 downloadFile 能力位
+    const downloadBtn = screen.getByTestId('act-download') as HTMLButtonElement;
+    expect(downloadBtn.disabled).toBe(true);
+    expect(downloadBtn.getAttribute('data-reason')).toContain('downloadFile');
 
     const exportBtn = screen.getByTestId('act-export') as HTMLButtonElement;
     expect(exportBtn.disabled).toBe(true);
     expect(exportBtn.getAttribute('data-reason')).toContain('serverTools');
   });
 
-  it('能力齐备时按钮仍然置灰（占位，原因标明待实现）', async () => {
+  it('能力齐备、已打开会话并选中消息 → 动作按钮可点（不再是占位）', async () => {
+    mock.getHistory.mockResolvedValueOnce({
+      messages: [msg('a', 1, 1000)],
+      nextBeforeSeq: 1,
+      exhausted: false,
+    });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
-    const exportBtn = screen.getByTestId('act-export') as HTMLButtonElement;
-    expect(exportBtn.disabled).toBe(true);
-    expect(exportBtn.getAttribute('data-reason')).toContain('T13');
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('msg-a'));
+    await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
+
+    for (const id of ['act-message', 'act-context', 'act-attach', 'act-download', 'act-export']) {
+      const btn = screen.getByTestId(id) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+      expect(btn.getAttribute('data-reason')).toBe('');
+    }
   });
 
   it('连接中（init）相位的不可用原因是「正在连接宿主…」', async () => {
@@ -362,5 +404,108 @@ describe('App 选择规则', () => {
     fireEvent.click(screen.getByTestId('chat-2'));
     await waitFor(() => expect(screen.getByTestId('msg-z')).toBeTruthy());
     expect(screen.getByTestId('sel-count').textContent).toContain('已选 0 条');
+  });
+
+  it('拖拽划选：按住并划过其它消息 → 选中区间', async () => {
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(3));
+
+    fireEvent.mouseDown(screen.getByTestId('msg-a'));
+    fireEvent.mouseOver(screen.getByTestId('msg-c'));
+    await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 3 条'));
+  });
+
+  it('拖拽划选带 Ctrl → 与已有选区合并', async () => {
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(3));
+
+    fireEvent.click(screen.getByTestId('msg-a'));
+    await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
+    fireEvent.mouseDown(screen.getByTestId('msg-b'), { ctrlKey: true });
+    fireEvent.mouseOver(screen.getByTestId('msg-c'), { ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 3 条'));
+  });
+});
+
+describe('App 状态条与设置', () => {
+  it('状态条显示连接模式', async () => {
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
+    const bar = screen.getByTestId('statusbar');
+    expect(bar.getAttribute('data-mode')).toBe('external');
+    expect(bar.textContent).toContain('外部端点');
+  });
+
+  it('状态条有「设置」入口，点开后展示只读配置（token 不回显明文）', async () => {
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
+    fireEvent.click(screen.getByTestId('settings-btn'));
+    await waitFor(() => expect(screen.getByTestId('settings-panel')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('settings-panel').textContent).toContain('127.0.0.1:3000'));
+    const panel = screen.getByTestId('settings-panel').textContent ?? '';
+    // token 绝不出现在面板上（服务端返回的已是 '***'，面板再包一层）
+    expect(panel).not.toContain('token:');
+    expect(panel).toContain('Token');
+    fireEvent.click(screen.getByTestId('settings-close'));
+    await waitFor(() => expect(screen.queryByTestId('settings-panel')).toBeNull());
+  });
+});
+
+describe('App 动作反馈', () => {
+  it('剪贴板写不进去时，toast 给出「复制」按钮，点它再写一次', async () => {
+    mock.getHistory.mockResolvedValueOnce({
+      messages: [msg('a', 1, 1000)],
+      nextBeforeSeq: 1,
+      exhausted: false,
+    });
+    mock.exportSel.mockResolvedValue({
+      mdPath: '/tmp/产品群_20261121_1200-1202.md',
+      jsonPath: '/tmp/产品群_20261121_1200-1202.json',
+      gitignoreUpdated: false,
+    });
+    mock.writeClipboard.mockResolvedValue(false);
+
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('msg-a'));
+    await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
+    expect(screen.getByTestId('toast').textContent).toContain('/tmp/产品群_20261121_1200-1202.md');
+    const copyBtn = screen.getByTestId('toast-copy');
+    await act(async () => {
+      fireEvent.click(copyBtn);
+    });
+    expect(mock.writeClipboard).toHaveBeenLastCalledWith('@/tmp/产品群_20261121_1200-1202.md');
+  });
+
+  it('动作失败 → toast 显示错误消息（不只 console）', async () => {
+    mock.getHistory.mockResolvedValueOnce({
+      messages: [msg('a', 1, 1000)],
+      nextBeforeSeq: 1,
+      exhausted: false,
+    });
+    mock.exportSel.mockRejectedValue(new Error('export failed writing markdown'));
+
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('msg-a'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('act-attach'));
+    });
+    await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
+    expect(screen.getByTestId('toast').textContent).toContain('export failed writing markdown');
   });
 });
