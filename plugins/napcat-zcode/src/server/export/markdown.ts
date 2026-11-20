@@ -24,10 +24,35 @@ function fullDate(t: number): string {
  * 折行净化：会话名、发言人名、引用预览都是不可信元数据（群名/昵称可含换行），
  * 换行会伪造出新的标题行/记录行。与 model/format.ts 的 flatten 同口径，只压成空格。
  *
+ * 已知缺口（跨任务登记，最终审查统一处理）：只处理 `\r?\n`，**不处理孤立 `\r`**，
+ * 而 CommonMark 也把 CR 当行结束符——含孤立 CR 的会话名/昵称仍可在文档里伪造结构。
+ * model/format.ts 归 T6 owner，本任务不改 model/，故此处一并登记不修。
+ *
  * 与注入体的区别只在「折行」这一点；逐条消息行格式两者必须一致（`[HH:mm] 发言人：内容`）。
  */
 function flatten(s: string): string {
   return s.replace(/\r?\n/g, ' ').trim();
+}
+
+/** Markdown 链接文本转义：方括号会破坏链接结构（`]` → `\]`）。 */
+function escapeLabel(s: string): string {
+  return s.replace(/([[\]])/g, '\\$1');
+}
+
+/**
+ * Markdown 链接目标：含空白或括号的 URL 会破坏 inline link 语法 → 用尖括号形式 `<url>`；
+ * URL 里的 `<`/`>` 本身会破坏尖括号形式 → 先百分号编码。
+ */
+function linkTarget(url: string): string {
+  const safe = url.replace(/[<>]/g, (c) => (c === '<' ? '%3C' : '%3E'));
+  return /[\s()]/.test(safe) ? `<${safe}>` : safe;
+}
+
+/** UTC 偏移标记（如 `UTC+08:00`）：让本地时间尾注能被换算成 JSON 里的 UTC ISO 时间。 */
+function utcOffsetLabel(d: Date): string {
+  const mins = -d.getTimezoneOffset(); // 本地相对 UTC 的分钟偏移（东八区为 +480）
+  const abs = Math.abs(mins);
+  return `UTC${mins < 0 ? '-' : '+'}${two(Math.floor(abs / 60))}:${two(abs % 60)}`;
 }
 
 /**
@@ -41,10 +66,10 @@ function flatten(s: string): string {
 function segmentText(s: Segment): string {
   switch (s.kind) {
     case 'image':
-      return s.url ? `[图片](${s.url})` : '[图片]';
+      return s.url ? `[图片](${linkTarget(s.url)})` : '[图片]';
     case 'file': {
       const label = s.fileName ? `文件 ${s.fileName}` : '文件';
-      return s.url ? `[${label}](${s.url})` : `[${label}]`;
+      return s.url ? `[${escapeLabel(label)}](${linkTarget(s.url)})` : `[${escapeLabel(label)}]`;
     }
     default:
       return segmentsText([s]);
@@ -73,6 +98,6 @@ export function renderMarkdown(messages: Message[], chat: ChatRef): string {
     if (preview) out.push(`> ${preview}`);
     out.push(`[${hm(m.time)}] ${flatten(m.senderName ?? '')}：${body}`);
   }
-  out.push('', `> 导出时间：${fullDate(Math.floor(Date.now() / 1000))} · 共 ${messages.length} 条`);
+  out.push('', `> 导出时间：${fullDate(Math.floor(Date.now() / 1000))} (${utcOffsetLabel(new Date())}) · 共 ${messages.length} 条`);
   return out.join('\n') + '\n';
 }
