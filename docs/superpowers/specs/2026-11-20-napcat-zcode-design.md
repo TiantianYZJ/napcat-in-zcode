@@ -165,7 +165,7 @@ type Message = {
 |------|------|
 | `napcat_status` | 连接状态、当前模式、登录账号 |
 | `napcat_list_chats` | 群列表 / 好友列表（`kind` 参数） |
-| `napcat_get_history` | 拉取指定会话消息：`chat`、`beforeSeq?`、`count?`（默认 50、上限 200）、`since?/until?`（时间过滤由插件 server 侧完成——OneBot 无时间过滤参数，仍按游标翻页后过滤） |
+| `napcat_get_history` | 拉取会话历史消息：`chatKind`、`chatId`、`beforeSeq?`、`count?`（默认 100、上限 200）、`since?/until?`（时间过滤由插件 server 侧完成——OneBot 无时间过滤参数，仍按游标翻页后过滤）。返回 `{messages, nextBeforeSeq, exhausted}`；取窗按**最新优先**（页内配额用满时保留较新的消息，被挤出的更旧消息由下一次向前翻页取回） |
 | `napcat_search_messages` | 会话内关键词搜索：从 `startSeq` 向更早翻页过滤，`maxPages` 限制扫描量（默认 20 页），返回命中及上下文各 1 条 |
 | `napcat_format_selection` | 输入消息对象数组或 `chat + seqRange`，返回注入/导出统一格式的 Markdown 与统计 |
 | `napcat_export` | 导出为 md+json：`chat`、`messages 或 seqRange`、`dir(user|workspace|绝对路径)`、`includeImages`；返回两个文件绝对路径 |
