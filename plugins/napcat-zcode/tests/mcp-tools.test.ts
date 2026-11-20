@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -110,8 +110,10 @@ describe('mcp tools', () => {
     const r = await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '123', count: 3 } });
     const payload = JSON.parse((r.content as [{ type: string; text: string }])[0].text);
     expect(payload.messages).toHaveLength(3);
-    expect(payload.messages[0]).toMatchObject({ seq: 1, senderName: 'u1', text: 'm1' }); // 时间正序
-    expect(payload.nextBeforeSeq).toBe(1); // 页内最小 seq，作为向更早翻页的游标
+    // 取窗「最新优先」：页内按 seq 降序挑 count 条，输出再按 seq 升序
+    expect(payload.messages[0]).toMatchObject({ seq: 3, senderName: 'u3', text: 'm3' });
+    expect(payload.messages[2]).toMatchObject({ seq: 5, senderName: 'u5', text: 'm5' });
+    expect(payload.nextBeforeSeq).toBe(3); // 窗口内最小 seq，作为向更早翻页的游标
   });
 
   it('napcat_status reports unconfigured without endpoint', async () => {
@@ -141,7 +143,9 @@ describe('mcp tool registration', () => {
       'napcat_status',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
-    expect(byName.get('napcat_status')?.description).toBe('NapCat 连接状态与登录信息');
+    // description 里写明「连接失败返回 {connected:false, error} 且 isError 为 false」，避免下游当工具错误处理
+    expect(byName.get('napcat_status')?.description).toContain('NapCat 连接状态与登录信息');
+    expect(byName.get('napcat_status')?.description).toContain('isError 为 false');
     expect(byName.get('napcat_configure')?.description).toBe('配置 OneBot 端点（地址与 token），保存后重连');
     expect(byName.get('napcat_list_chats')?.description).toBe('列出群或好友');
     expect(byName.get('napcat_get_history')?.description).toBe('拉取会话历史消息（游标分页，时间正序返回）');
@@ -243,6 +247,47 @@ describe('napcat_configure', () => {
     const p = payload(r);
     expect(typeof p.error).toBe('string');
     expect(p.error.length).toBeGreaterThan(0);
+  });
+
+  it('does not write an unusable endpoint into the config file', async () => {
+    const server = new McpServer({ name: 'napcat', version: '0.1.0' });
+    const state = new AppState();
+    registerTools(server, state);
+    const client = new Client({ name: 'test', version: '0.0.1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    await client.connect(ct);
+
+    const r = await client.callTool({
+      name: 'napcat_configure',
+      arguments: { endpoint: 'ftp://127.0.0.1:3000', token: 'tok' },
+    });
+    expect(isError(r)).toBe(true);
+    // 端点没校验过就不许落盘：否则插件会被一个写错的地址卡在不可用状态
+    expect(existsSync(join(tmp, 'config.json'))).toBe(false);
+    expect(state.config.connection.endpoint).toBe(''); // 内存态也没被改
+  });
+
+  it('keeps the previous endpoint when the new one is unusable', async () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ connection: { endpoint: 'http://127.0.0.1:3000', token: 'old' } }));
+    const server = new McpServer({ name: 'napcat', version: '0.1.0' });
+    const state = new AppState();
+    registerTools(server, state);
+    const client = new Client({ name: 'test', version: '0.0.1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    await client.connect(ct);
+
+    const r = await client.callTool({
+      name: 'napcat_configure',
+      arguments: { endpoint: 'ftp://127.0.0.1:3000', token: 'new' },
+    });
+    expect(isError(r)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(join(tmp, 'config.json'), 'utf-8')) as {
+      connection?: { endpoint?: string; token?: string };
+    };
+    expect(onDisk.connection?.endpoint).toBe('http://127.0.0.1:3000'); // 旧配置原样保留
+    expect(onDisk.connection?.token).toBe('old');
   });
 });
 
@@ -383,6 +428,8 @@ describe('napcat_get_history', () => {
     expect(seqs).toEqual([6, 7, 8, 9, 10]); // 时间升序
     expect(new Set(seqs).size).toBe(seqs.length); // 页边界重叠的消息只出现一次
     expect(p.nextBeforeSeq).toBe(6);
+    // 页是「短页」（固定页大小 2 < count 5），但窗口是攒满的 → 不能报 exhausted
+    expect(p.exhausted).toBe(false);
   });
 
   it('filters by until and keeps walking back to older pages', async () => {
@@ -395,7 +442,8 @@ describe('napcat_get_history', () => {
     const p = payload(r);
     expect(p.messages.every((m: { time: number }) => m.time <= 1700000004)).toBe(true);
     expect(p.messages.length).toBeGreaterThan(0);
-    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([2, 4, 5]);
+    // 取窗「最新优先」：窗口是时间窗内**最新的 3 条**，且连续（不再出现空洞）
+    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([3, 4, 5]);
   });
 
   it('stops at the since boundary and reports exhausted', async () => {
@@ -438,6 +486,31 @@ describe('napcat_get_history', () => {
     expect(calls[1]?.count).toBe(200); // 上限 200
     await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1', count: 0 } });
     expect(calls[2]?.count).toBe(1); // 下限 1
+  });
+
+  it('does not drop messages that have neither message_seq nor message_id', async () => {
+    // 这类消息没有稳定标识：不能拿「页内下标」当去重键，否则跨页的同下标消息会被误判成重复而丢弃
+    const page1: OB11Message[] = [
+      { time: 1700000001, message: [{ type: 'text', data: { text: 'a' } }] },
+      { message_seq: 2, time: 1700000002, message: [{ type: 'text', data: { text: 'b' } }] },
+      { time: 1700000003, message: [{ type: 'text', data: { text: 'c' } }] },
+    ];
+    const page2: OB11Message[] = [
+      { time: 1700000004, message: [{ type: 'text', data: { text: 'd' } }] },
+      { message_seq: 2, time: 1700000002, message: [{ type: 'text', data: { text: 'b' } }] }, // 与上一页重叠
+    ];
+    let n = 0;
+    const c = await historyClient(stubClient((action) => {
+      if (action === 'get_group_msg_history') return { messages: n++ === 0 ? page1 : page2 };
+      throw new Error(`unexpected ${action}`);
+    }));
+    const r = await c.callTool({
+      name: 'napcat_get_history',
+      arguments: { chatKind: 'group', chatId: '1', count: 10 },
+    });
+    const p = payload(r);
+    const texts = p.messages.map((m: { text: string }) => m.text).sort();
+    expect(texts).toEqual(['a', 'b', 'c', 'd']); // 三条无 seq 的消息都在
   });
 
   it('reports an error when the upstream call fails', async () => {

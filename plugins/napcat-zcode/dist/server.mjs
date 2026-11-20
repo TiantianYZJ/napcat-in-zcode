@@ -21742,6 +21742,13 @@ function rawSeqOf(raw) {
   const s = raw.message_seq;
   return typeof s === "number" && Number.isFinite(s) ? s : void 0;
 }
+function dedupKey(raw) {
+  const seq = rawSeqOf(raw);
+  if (seq !== void 0) return `s${seq}`;
+  const id = raw.message_id ?? raw.real_id;
+  if (typeof id === "number" && Number.isFinite(id)) return `i${id}`;
+  return void 0;
+}
 async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, until) {
   const out = [];
   const outSeqs = [];
@@ -21754,13 +21761,14 @@ async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, un
       exhausted = true;
       break;
     }
-    const norm = page.map((raw, index) => ({ raw, index, msg: normalizeMessage(raw) })).sort((a, b) => a.msg.seq - b.msg.seq);
+    const norm = page.map((raw) => ({ raw, msg: normalizeMessage(raw) })).sort((a, b) => a.msg.seq - b.msg.seq);
     let belowSince = false;
-    for (const item of norm) {
-      const rawSeq = rawSeqOf(item.raw);
-      const key = rawSeq !== void 0 ? `s${rawSeq}` : `x${item.msg.id || item.index}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+    for (const item of [...norm].reverse()) {
+      const key = dedupKey(item.raw);
+      if (key !== void 0) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
       if (until !== void 0 && item.msg.time > until) continue;
       if (since !== void 0 && item.msg.time < since) {
         exhausted = true;
@@ -21769,6 +21777,7 @@ async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, un
       }
       if (out.length < want) {
         out.push(item.msg);
+        const rawSeq = rawSeqOf(item.raw);
         if (rawSeq !== void 0) outSeqs.push(rawSeq);
       }
     }
@@ -21778,8 +21787,8 @@ async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, un
     const minSeq = Math.min(...pageSeqs);
     if (cursor !== void 0 && minSeq >= cursor) break;
     cursor = minSeq;
-    if (norm.length < want) exhausted = true;
   }
+  if (out.length < want) exhausted = true;
   out.sort((a, b) => a.seq - b.seq);
   const nextBeforeSeq = outSeqs.length > 0 ? Math.min(...outSeqs) : null;
   return { messages: out, nextBeforeSeq, exhausted };
@@ -21788,7 +21797,7 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_status",
     {
-      description: "NapCat \u8FDE\u63A5\u72B6\u6001\u4E0E\u767B\u5F55\u4FE1\u606F",
+      description: "NapCat \u8FDE\u63A5\u72B6\u6001\u4E0E\u767B\u5F55\u4FE1\u606F\uFF08\u8FDE\u63A5\u5931\u8D25\u65F6\u8FD4\u56DE {connected:false, error}\uFF0C\u6B64\u65F6 isError \u4E3A false \u2014\u2014 \u8FD9\u662F\u72B6\u6001\uFF0C\u4E0D\u662F\u5DE5\u5177\u9519\u8BEF\uFF09",
       inputSchema: {}
     },
     async () => {
@@ -22289,15 +22298,20 @@ var AppState = class {
   /**
    * 保存端点/令牌并重连，返回登录信息。
    *
-   * 顺序：先落盘（写失败 → 内存态与连接都不动），再换连接，最后取登录信息。
-   * 端点连不上时抛错（工具层转成 isError），但配置已按用户意图保存。
+   * 顺序：**先校验端点 → 再落盘 → 再换连接 → 最后取登录信息**。
+   * - 校验：`createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来。
+   *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
+   * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
+   * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
    */
   async setConnection(endpoint, token) {
+    const probed = createClient({ endpoint, token: token || void 0 });
     this.saveConnection(endpoint, token);
     const old = this.client;
     this.client = null;
     await old?.close();
     this.config.connection = { ...this.config.connection, endpoint, token };
+    this.client = this.clientOverride ? null : probed;
     const c = await this.ensureClient();
     return getLoginInfo(c);
   }

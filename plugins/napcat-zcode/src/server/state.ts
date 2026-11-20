@@ -101,17 +101,28 @@ export class AppState {
   /**
    * 保存端点/令牌并重连，返回登录信息。
    *
-   * 顺序：先落盘（写失败 → 内存态与连接都不动），再换连接，最后取登录信息。
-   * 端点连不上时抛错（工具层转成 isError），但配置已按用户意图保存。
+   * 顺序：**先校验端点 → 再落盘 → 再换连接 → 最后取登录信息**。
+   * - 校验：`createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来。
+   *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
+   * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
+   * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
    */
   async setConnection(endpoint: string, token: string): Promise<OB11LoginInfo> {
+    // ① 端点校验（不通过就直接抛，文件与内存态都不动）
+    const probed = createClient({ endpoint, token: token || undefined });
+
+    // ② 校验通过 → patch 式落盘（只写 connection 段）
     this.saveConnection(endpoint, token);
 
+    // ③ 换连接：关掉旧连接，用新端点重建
     const old = this.client;
     this.client = null;
     await old?.close();
-
     this.config.connection = { ...this.config.connection, endpoint, token };
+    // 注入替身时用它（probed 不会被连接，直接丢弃）；否则用刚校验过的客户端
+    this.client = this.clientOverride ? null : probed;
+
+    // ④ 取登录信息（连不上会抛 → 工具层转 isError）
     const c = await this.ensureClient();
     return getLoginInfo(c);
   }

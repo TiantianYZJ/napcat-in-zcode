@@ -36,6 +36,20 @@ function rawSeqOf(raw: OB11Message): number | undefined {
   return typeof s === 'number' && Number.isFinite(s) ? s : undefined;
 }
 
+/**
+ * 去重键：优先 `message_seq`，其次 `message_id` / `real_id`。
+ *
+ * 两者都没有时返回 undefined —— 这条消息**不参与去重**。
+ * 不能拿「页内下标」当键：跨页的同一条消息下标相同，会被误判成重复而静默丢弃。
+ */
+function dedupKey(raw: OB11Message): string | undefined {
+  const seq = rawSeqOf(raw);
+  if (seq !== undefined) return `s${seq}`;
+  const id = raw.message_id ?? raw.real_id;
+  if (typeof id === 'number' && Number.isFinite(id)) return `i${id}`;
+  return undefined;
+}
+
 interface HistoryResult {
   messages: Message[];
   nextBeforeSeq: number | null;
@@ -45,11 +59,13 @@ interface HistoryResult {
 /**
  * 拉取历史消息（游标分页，时间正序返回）。
  *
- * 终止条件：攒够 `want` 条（过滤之后）、翻到空页、或页数触顶。
- * - `seen` 按 seq 去重：服务端在页边界上重叠同一条消息时不会重复返回；
+ * 取窗规则：**页内按 seq 降序挑选，取最新的 `want` 条**（最终输出仍按 seq 升序）。
+ * - 为什么取最新：配额在页中途填满时，被挤掉的是该页**更旧**的消息，
+ *   它们落在 `nextBeforeSeq` 之前 → 下一次向前翻页正好能取回来。
+ *   若反过来取最旧，被挤掉的就是**更新**的消息，而游标已经越过它们 → 永久取不回（还会在窗口里留空洞）。
+ * - `seen` 按稳定键去重（`message_seq` 优先、`message_id` 次之）：服务端在页边界上重叠同一条消息时不会重复返回；
  * - `since` / `until` 是**服务端没有的时间过滤**，只能翻页后在本地过滤；
- * - `nextBeforeSeq` = 返回窗口里最小的 seq —— 传回给下一次调用即可取更早的消息；
- * - `exhausted` = 已经翻不到更早的消息（空页 / 短页 / 越过 since 边界）。
+ * - `exhausted` = 没攒满 `want` 条（已经没有更早的消息了）。
  */
 async function fetchHistory(
   client: OneBotClient,
@@ -74,15 +90,17 @@ async function fetchHistory(
     }
 
     const norm = page
-      .map((raw, index) => ({ raw, index, msg: normalizeMessage(raw) }))
+      .map((raw) => ({ raw, msg: normalizeMessage(raw) }))
       .sort((a, b) => a.msg.seq - b.msg.seq);
 
     let belowSince = false;
-    for (const item of norm) {
-      const rawSeq = rawSeqOf(item.raw);
-      const key = rawSeq !== undefined ? `s${rawSeq}` : `x${item.msg.id || item.index}`;
-      if (seen.has(key)) continue; // 页边界可能重叠同一条消息
-      seen.add(key);
+    // 降序遍历：先收最新的，配额满了就停（更旧的留给下一次翻页）
+    for (const item of [...norm].reverse()) {
+      const key = dedupKey(item.raw);
+      if (key !== undefined) {
+        if (seen.has(key)) continue; // 页边界可能重叠同一条消息
+        seen.add(key);
+      }
       if (until !== undefined && item.msg.time > until) continue;
       if (since !== undefined && item.msg.time < since) {
         exhausted = true;
@@ -91,6 +109,7 @@ async function fetchHistory(
       }
       if (out.length < want) {
         out.push(item.msg);
+        const rawSeq = rawSeqOf(item.raw);
         if (rawSeq !== undefined) outSeqs.push(rawSeq);
       }
     }
@@ -101,10 +120,21 @@ async function fetchHistory(
     const minSeq = Math.min(...pageSeqs);
     if (cursor !== undefined && minSeq >= cursor) break; // 游标没有前进（服务端不认 message_seq）→ 停
     cursor = minSeq;
-    if (norm.length < want) exhausted = true; // 短页：服务端已经没有更早的消息了
   }
 
+  // 没攒满 → 已经翻到底了。
+  // （不能在循环里按「短页」就置 exhausted：循环还会继续翻页并返回更多消息，那样 exhausted 与数据自相矛盾。）
+  if (out.length < want) exhausted = true;
+
   out.sort((a, b) => a.seq - b.seq);
+  /**
+   * 翻页游标：返回窗口里最小的 seq。
+   *
+   * 语义假设：服务端的 `message_seq` 是**独占**边界（传 s 返回 seq < s 的消息）。
+   * `onebot/actions.ts` 的 `fetchMessagesBetween` 对「含 / 不含」两种语义都做了防御，
+   * 这里只按独占实现 —— 若真实 NapCat 是「含」边界，调用方（面板）需要按 seq 跨调用去重，
+   * 否则边界那条会被重复返回（真实语义待 T14 实测确认）。
+   */
   const nextBeforeSeq = outSeqs.length > 0 ? Math.min(...outSeqs) : null;
   return { messages: out, nextBeforeSeq, exhausted };
 }
@@ -119,7 +149,8 @@ export function registerTools(server: McpServer, state: AppState): void {
   server.registerTool(
     'napcat_status',
     {
-      description: 'NapCat 连接状态与登录信息',
+      description:
+        'NapCat 连接状态与登录信息（连接失败时返回 {connected:false, error}，此时 isError 为 false —— 这是状态，不是工具错误）',
       inputSchema: {},
     },
     async () => {
