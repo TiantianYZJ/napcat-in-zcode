@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config';
 // 让 vitest 以插件根为根、发现 tests/ 下的测试。
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts'],
+    // .tsx 是面板组件测试（testing-library）；.ts 是服务端与桥的测试。
+    include: ['tests/**/*.test.{ts,tsx}'],
   },
 });
