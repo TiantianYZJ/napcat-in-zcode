@@ -22634,7 +22634,7 @@ function registerTools(server2, state) {
       description: "\u62C9\u53D6\u4F1A\u8BDD\u5386\u53F2\u6D88\u606F\uFF08\u6E38\u6807\u5206\u9875\uFF0C\u65F6\u95F4\u6B63\u5E8F\u8FD4\u56DE\uFF09",
       inputSchema: {
         chatKind: external_exports.enum(["group", "friend"]),
-        chatId: external_exports.string(),
+        chatId: external_exports.union([external_exports.string(), external_exports.number()]).describe("\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
         beforeSeq: external_exports.number().optional().describe("\u4F20\u5165\u4E0A\u4E00\u9875\u8FD4\u56DE\u7684 nextBeforeSeq \u83B7\u53D6\u66F4\u65E9\u6D88\u606F"),
         count: external_exports.number().optional().default(100).describe("1-200"),
         since: external_exports.number().optional().describe("\u8D77\u59CB\u65F6\u95F4 epoch \u79D2\uFF08\u542B\uFF09"),
@@ -22645,7 +22645,7 @@ function registerTools(server2, state) {
       try {
         const c = await state.ensureClient();
         const want = Math.min(Math.max(Math.floor(count ?? 100), 1), MAX_COUNT);
-        const result = await fetchHistory(c, chatKind, chatId, beforeSeq, want, since, until);
+        const result = await fetchHistory(c, chatKind, String(chatId), beforeSeq, want, since, until);
         return ok(result);
       } catch (e) {
         return fail(state, e);
@@ -22658,7 +22658,7 @@ function registerTools(server2, state) {
       description: "\u4F1A\u8BDD\u5185\u5173\u952E\u8BCD\u641C\u7D22\uFF1A\u5411\u66F4\u65E9\u7FFB\u9875\u626B\u63CF\u540E\u6309\u6B63\u6587\u8FC7\u6EE4\uFF08OneBot 11 \u65E0\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u626B\u63CF\u8303\u56F4\u6709\u9650\uFF09\u3002\u8FD4\u56DE {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}\uFF1Bscanned = \u626B\u8FC7\u7684\u4E0D\u540C\u6D88\u606F\u6761\u6570\uFF1Bpages = \u7FFB\u8FC7\u7684\u9875\u6570\uFF08\u542B\u53EF\u80FD\u7684\u6700\u540E\u4E00\u7A7A\u9875\uFF09\uFF1BcontextBefore \u662F\u547D\u4E2D\u6D88\u606F\u5728\u65F6\u95F4\u4E0A\u7D27\u90BB\u5176\u524D\uFF08\u66F4\u65E9\uFF09\u7684\u90A3\u6761\uFF1Bexhausted \u4E3A\u4E09\u5408\u4E00\u8BED\u4E49\uFF08\u5386\u53F2\u8017\u5C3D / \u6E38\u6807\u63A8\u4E0D\u52A8 / \u7FFB\u9875\u89E6\u9876 maxPages \u4E0A\u9650\uFF09\uFF0C\u4E0D\u7B49\u4E8E\u300C\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u300D\u2014\u2014\u5224\u65AD\u8FD8\u6709\u66F4\u65E9\u6D88\u606F\u8BF7\u770B\u300C\u518D\u7FFB\u4E00\u9875\u662F\u5426\u8FD4\u56DE\u7A7A\u300D\uFF1B\u547D\u4E2D\u6570\u8FBE\u4E0A\u9650\u800C\u63D0\u524D\u505C\u6B62\u65F6 exhausted \u4E3A false\uFF08\u90A3\u65F6\u662F hitsTruncated \u5728\u8BF4\u660E\uFF09\u3002",
       inputSchema: {
         chatKind: external_exports.enum(["group", "friend"]),
-        chatId: external_exports.string(),
+        chatId: external_exports.union([external_exports.string(), external_exports.number()]).describe("\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
         query: external_exports.string().describe("\u5173\u952E\u8BCD\uFF08\u5927\u5C0F\u5199\u4E0D\u654F\u611F\uFF0C\u6309\u6D88\u606F\u6B63\u6587\u5339\u914D\uFF09"),
         startSeq: external_exports.number().optional().describe("\u8D77\u59CB\u6E38\u6807\uFF1A\u53EA\u626B\u63CF message_seq \u5C0F\u4E8E\u5B83\u7684\u6D88\u606F\uFF1B\u7F3A\u7701\u4ECE\u6700\u65B0\u4E00\u6761\u5F00\u59CB"),
         maxPages: external_exports.number().optional().default(SEARCH_DEFAULT_MAX_PAGES).describe(`\u6700\u591A\u7FFB\u591A\u5C11\u9875\uFF081-${SEARCH_MAX_PAGES}\uFF0C\u9ED8\u8BA4 ${SEARCH_DEFAULT_MAX_PAGES}\uFF09`)
@@ -22670,7 +22670,7 @@ function registerTools(server2, state) {
         if (!q) return fail(state, new Error("\u641C\u7D22\u5173\u952E\u8BCD\u4E0D\u80FD\u4E3A\u7A7A"));
         const pages = Math.min(Math.max(Math.floor(maxPages ?? SEARCH_DEFAULT_MAX_PAGES), 1), SEARCH_MAX_PAGES);
         const c = await state.ensureClient();
-        return ok(await searchMessages(c, chatKind, chatId, q, startSeq, pages));
+        return ok(await searchMessages(c, chatKind, String(chatId), q, startSeq, pages));
       } catch (e) {
         return fail(state, e);
       }
@@ -22708,7 +22708,7 @@ function registerTools(server2, state) {
         // （归一化成字符串仍在 coerceChat 里做，比较时统一用归一后的字符串）。
         chat: external_exports.object({ kind: external_exports.string(), id: external_exports.union([external_exports.string(), external_exports.number()]), name: external_exports.string() }).partial().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: external_exports.enum(["group", "friend"]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD\u7C7B\u578B"),
-        chatId: external_exports.string().optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD id"),
+        chatId: external_exports.union([external_exports.string(), external_exports.number()]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
         fromSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u8D77\u59CB message_seq\uFF08\u542B\uFF09"),
         toSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u7ED3\u675F message_seq\uFF08\u542B\uFF09"),
         dir: external_exports.enum(["user", "workspace"]).optional().describe("\u5BFC\u51FA\u76EE\u5F55\uFF1B\u7F3A\u7701\u53D6\u914D\u7F6E export.dir"),
@@ -22725,16 +22725,17 @@ function registerTools(server2, state) {
           if (a.chatKind === void 0 || a.chatId === void 0 || a.fromSeq === void 0 || a.toSeq === void 0) {
             throw new Error("\u7F3A\u5C11 messages \u65F6\u9700\u8981\u540C\u65F6\u7ED9\u51FA chatKind\u3001chatId\u3001fromSeq\u3001toSeq\uFF08\u73B0\u62C9\u8BE5 seq \u533A\u95F4\uFF09");
           }
+          const fetchId = String(a.chatId);
           if (a.fromSeq > a.toSeq) {
             throw new Error(`fromSeq\uFF08${a.fromSeq}\uFF09\u4E0D\u80FD\u5927\u4E8E toSeq\uFF08${a.toSeq}\uFF09`);
           }
-          if (chat.kind !== a.chatKind || chat.id !== a.chatId) {
+          if (chat.kind !== a.chatKind || chat.id !== fetchId) {
             throw new Error(
-              `chat\uFF08${chat.kind}/${chat.id}\uFF09\u4E0E\u73B0\u62C9\u53C2\u6570\uFF08${a.chatKind}/${a.chatId}\uFF09\u4E0D\u4E00\u81F4`
+              `chat\uFF08${chat.kind}/${chat.id}\uFF09\u4E0E\u73B0\u62C9\u53C2\u6570\uFF08${a.chatKind}/${fetchId}\uFF09\u4E0D\u4E00\u81F4`
             );
           }
           const c = await state.ensureClient();
-          msgs = (await fetchMessagesBetween(c, a.chatKind, a.chatId, a.fromSeq, a.toSeq)).map(normalizeMessage);
+          msgs = (await fetchMessagesBetween(c, a.chatKind, fetchId, a.fromSeq, a.toSeq)).map(normalizeMessage);
         } else {
           msgs = coerceMessages(a.messages);
         }

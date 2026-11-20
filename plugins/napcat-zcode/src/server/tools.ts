@@ -444,7 +444,7 @@ export function registerTools(server: McpServer, state: AppState): void {
       description: '拉取会话历史消息（游标分页，时间正序返回）',
       inputSchema: {
         chatKind: z.enum(['group', 'friend']),
-        chatId: z.string(),
+        chatId: z.union([z.string(), z.number()]).describe('会话 id（QQ 群号/好友号是数字型，允许传数字）'),
         beforeSeq: z.number().optional().describe('传入上一页返回的 nextBeforeSeq 获取更早消息'),
         count: z.number().optional().default(100).describe('1-200'),
         since: z.number().optional().describe('起始时间 epoch 秒（含）'),
@@ -455,7 +455,8 @@ export function registerTools(server: McpServer, state: AppState): void {
       try {
         const c = await state.ensureClient();
         const want = Math.min(Math.max(Math.floor(count ?? 100), 1), MAX_COUNT);
-        const result = await fetchHistory(c, chatKind, chatId, beforeSeq, want, since, until);
+        // 会话 id 允许传数字 → 下发前统一归一成字符串（OneBot 的 group_id/user_id 是字符串型）
+        const result = await fetchHistory(c, chatKind, String(chatId), beforeSeq, want, since, until);
         return ok(result);
       } catch (e) {
         return fail(state, e);
@@ -476,7 +477,7 @@ export function registerTools(server: McpServer, state: AppState): void {
         '命中数达上限而提前停止时 exhausted 为 false（那时是 hitsTruncated 在说明）。',
       inputSchema: {
         chatKind: z.enum(['group', 'friend']),
-        chatId: z.string(),
+        chatId: z.union([z.string(), z.number()]).describe('会话 id（QQ 群号/好友号是数字型，允许传数字）'),
         query: z.string().describe('关键词（大小写不敏感，按消息正文匹配）'),
         startSeq: z.number().optional().describe('起始游标：只扫描 message_seq 小于它的消息；缺省从最新一条开始'),
         maxPages: z
@@ -492,7 +493,7 @@ export function registerTools(server: McpServer, state: AppState): void {
         if (!q) return fail(state, new Error('搜索关键词不能为空'));
         const pages = Math.min(Math.max(Math.floor(maxPages ?? SEARCH_DEFAULT_MAX_PAGES), 1), SEARCH_MAX_PAGES);
         const c = await state.ensureClient();
-        return ok(await searchMessages(c, chatKind, chatId, q, startSeq, pages));
+        return ok(await searchMessages(c, chatKind, String(chatId), q, startSeq, pages));
       } catch (e) {
         return fail(state, e);
       }
@@ -546,7 +547,7 @@ export function registerTools(server: McpServer, state: AppState): void {
           .partial()
           .describe('会话引用 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: z.enum(['group', 'friend']).optional().describe('现拉时的会话类型'),
-        chatId: z.string().optional().describe('现拉时的会话 id'),
+        chatId: z.union([z.string(), z.number()]).optional().describe('现拉时的会话 id（QQ 群号/好友号是数字型，允许传数字）'),
         fromSeq: z.number().optional().describe('现拉时的起始 message_seq（含）'),
         toSeq: z.number().optional().describe('现拉时的结束 message_seq（含）'),
         dir: z.enum(['user', 'workspace']).optional().describe('导出目录；缺省取配置 export.dir'),
@@ -565,6 +566,9 @@ export function registerTools(server: McpServer, state: AppState): void {
           if (a.chatKind === undefined || a.chatId === undefined || a.fromSeq === undefined || a.toSeq === undefined) {
             throw new Error('缺少 messages 时需要同时给出 chatKind、chatId、fromSeq、toSeq（现拉该 seq 区间）');
           }
+          // 会话 id 允许传数字 → 统一归一成字符串再比较/下发
+          // （`chat.id` 已由 coerceChat 归一；这里归一 chatId，两边比的是归一后的字符串）。
+          const fetchId = String(a.chatId);
           // 区间反了 → 明确报错。否则 fetchMessagesBetween 会返回空数组，
           // 工具静默写出一对 `{会话名}_empty` 的空文件（看着像导出成功，其实是空的）。
           if (a.fromSeq > a.toSeq) {
@@ -572,13 +576,13 @@ export function registerTools(server: McpServer, state: AppState): void {
           }
           // 交叉校验：现拉的会话必须与 chat 指向同一个会话。
           // 不校验就能把 B 群的区间写进 A 群名下的文件（张冠李戴，且事后看不出来）。
-          if (chat.kind !== a.chatKind || chat.id !== a.chatId) {
+          if (chat.kind !== a.chatKind || chat.id !== fetchId) {
             throw new Error(
-              `chat（${chat.kind}/${chat.id}）与现拉参数（${a.chatKind}/${a.chatId}）不一致`,
+              `chat（${chat.kind}/${chat.id}）与现拉参数（${a.chatKind}/${fetchId}）不一致`,
             );
           }
           const c = await state.ensureClient();
-          msgs = (await fetchMessagesBetween(c, a.chatKind, a.chatId, a.fromSeq, a.toSeq)).map(normalizeMessage);
+          msgs = (await fetchMessagesBetween(c, a.chatKind, fetchId, a.fromSeq, a.toSeq)).map(normalizeMessage);
         } else {
           msgs = coerceMessages(a.messages);
         }

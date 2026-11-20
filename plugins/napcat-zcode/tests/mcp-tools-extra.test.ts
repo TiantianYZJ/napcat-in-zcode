@@ -231,6 +231,15 @@ describe('napcat_search_messages', () => {
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('关键词');
   });
+
+  it('accepts a numeric chat id', async () => {
+    // QQ 群号是数字型 → chatId 允许传数字（下发前归一成字符串）
+    const c = await makeClient();
+    const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: 1, query: '场地' } });
+    const p = payload(r);
+    expect(isError(r)).toBe(false);
+    expect(p.hits).toHaveLength(1);
+  });
 });
 
 describe('napcat_format_selection', () => {
@@ -419,6 +428,28 @@ describe('napcat_export', () => {
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');
   });
+
+  it('accepts a numeric chatId and compares it with the normalised chat id', async () => {
+    // chatId 与 chat.id 是同一个 id 的两个入口 → 都必须接受数字（QQ 号本来就是数字型）
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: '123', name: '产品群' }, chatKind: 'group', chatId: 123, fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(false);
+    const p = payload(r);
+    expect(p.mdPath).toContain(tmp);
+  });
+
+  it('rejects a numeric chatId that disagrees with the chat id', async () => {
+    const c = await makeClient();
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: { chat: { kind: 'group', id: '456', name: '产品群' }, chatKind: 'group', chatId: 123, fromSeq: 6, toSeq: 10 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('不一致');
+  });
 });
 
 describe('napcat_get_config', () => {
@@ -468,6 +499,16 @@ describe('napcat_get_config', () => {
     expect(text).not.toContain('super-secret');
     expect(text).not.toContain('pass');
     expect(payload(r).autoDetect.endpoints[0]).toContain('127.0.0.1:3000');
+  });
+});
+
+describe('session id inputs accept numbers', () => {
+  it('napcat_get_history accepts a numeric chat id', async () => {
+    // 与 chat.id / chatId 对齐：会话 id 的数字形态一律可用
+    const c = await makeClient();
+    const r = await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: 1 } });
+    expect(isError(r)).toBe(false);
+    expect(payload(r).messages.length).toBeGreaterThan(0);
   });
 });
 
