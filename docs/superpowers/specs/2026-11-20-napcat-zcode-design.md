@@ -164,11 +164,12 @@ type Message = {
 | 工具 | 作用 |
 |------|------|
 | `napcat_status` | 连接状态、当前模式、登录账号 |
-| `napcat_list_chats` | 群列表 / 好友列表（`kind` 参数） |
+| `napcat_configure` | 配置 OneBot 端点与 token（校验通过才落盘）；返回 `{configured, connected, login}` |
+| `napcat_list_chats` | 群列表 / 好友列表（`kind: 'group'|'friend'`） |
 | `napcat_get_history` | 拉取会话历史消息：`chatKind`、`chatId`、`beforeSeq?`、`count?`（默认 100、上限 200）、`since?/until?`（时间过滤由插件 server 侧完成——OneBot 无时间过滤参数，仍按游标翻页后过滤）。返回 `{messages, nextBeforeSeq, exhausted}`；取窗按**最新优先**（页内配额用满时保留较新的消息，被挤出的更旧消息由下一次向前翻页取回） |
-| `napcat_search_messages` | 会话内关键词搜索：从 `startSeq` 向更早翻页过滤，`maxPages` 限制扫描量（默认 20 页），返回命中及上下文各 1 条 |
-| `napcat_format_selection` | 输入消息对象数组或 `chat + seqRange`，返回注入/导出统一格式的 Markdown 与统计 |
-| `napcat_export` | 导出为 md+json：`chat`、`messages 或 seqRange`、`dir(user|workspace|绝对路径)`、`includeImages`；返回两个文件绝对路径 |
+| `napcat_search_messages` | 会话内关键词搜索：`chatKind`、`chatId`、`query`、`startSeq?`、`maxPages?`（默认 20 页）。OneBot 无服务端搜索，只能向更早翻页后过滤，因此扫描量有限；返回 `{hits: [{message, contextBefore}], scanned, exhausted}` |
+| `napcat_format_selection` | 把选定消息格式化为注入文本：`messages`（Message 对象数组）、`chatName`、`maxChars?`（默认取配置 `inject.maxInjectChars`）。返回 `{text, count, truncated}`；`text` 首行是不可信第三方内容声明，不得截断 |
+| `napcat_export` | 导出 md+json：`chat`（`{kind, id, name}`）、`messages?`（缺省则用 `chatKind`/`chatId`/`fromSeq`/`toSeq` 现拉）、`dir?`（`user`/`workspace`，默认取配置）、`includeImages?`；返回 `{mdPath, jsonPath, gitignoreUpdated}` |
 
 工具返回一律为紧凑 JSON（含截断标志），超长文本不在工具结果里整段铺开——注入走面板，持久化走导出。
 
