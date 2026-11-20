@@ -22088,11 +22088,16 @@ var HttpTransport = class {
   async close() {
   }
 };
+function safeEndpointLabel(endpoint) {
+  const [noQuery] = endpoint.split("?");
+  const at = noQuery.lastIndexOf("@");
+  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
+}
 function createClient(cfg) {
   const timeoutMs = cfg.timeoutMs ?? 3e4;
   if (/^https?:\/\//i.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
   if (/^wss?:\/\//i.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
-  throw new Error(`unsupported endpoint scheme: ${cfg.endpoint}`);
+  throw new Error(`unsupported endpoint scheme: ${safeEndpointLabel(cfg.endpoint)}`);
 }
 
 // src/server/config.ts
@@ -22233,11 +22238,6 @@ function errText(e) {
 }
 function isPlainObject3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function safeEndpointLabel(endpoint) {
-  const [noQuery] = endpoint.split("?");
-  const at = noQuery.lastIndexOf("@");
-  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
 }
 function assertUsableEndpoint(endpoint) {
   let url;

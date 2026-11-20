@@ -42,11 +42,25 @@ class HttpTransport implements OneBotClient {
   async close(): Promise<void> {}
 }
 
+/**
+ * 端点标签（用于错误信息）：去掉 query 与 userinfo。
+ *
+ * 端点里可能带 access_token（OneBot 的 ws 约定走 query）或 `user:pass`——
+ * 原样回显等于把凭据写进工具返回值、模型上下文与日志。
+ *
+ * 共享给 `state.ts` 的端点校验用，保证两处错误信息的脱敏口径一致。
+ */
+export function safeEndpointLabel(endpoint: string): string {
+  const [noQuery] = endpoint.split('?');
+  const at = noQuery.lastIndexOf('@');
+  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
+}
+
 export function createClient(cfg: ClientConfig): OneBotClient {
   const timeoutMs = cfg.timeoutMs ?? 30_000;
   // scheme 大小写不敏感：`HTTP://host` / `WS://host` 是合法端点，
   // 之前只匹配小写会被误判成「unsupported endpoint scheme」。
   if (/^https?:\/\//i.test(cfg.endpoint)) return new HttpTransport(cfg, timeoutMs);
   if (/^wss?:\/\//i.test(cfg.endpoint)) return new WsTransport(cfg, timeoutMs);
-  throw new Error(`unsupported endpoint scheme: ${cfg.endpoint}`);
+  throw new Error(`unsupported endpoint scheme: ${safeEndpointLabel(cfg.endpoint)}`);
 }

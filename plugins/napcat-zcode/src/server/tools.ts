@@ -65,7 +65,7 @@ interface HistoryResult {
  *   若反过来取最旧，被挤掉的就是**更新**的消息，而游标已经越过它们 → 永久取不回（还会在窗口里留空洞）。
  * - `seen` 按稳定键去重（`message_seq` 优先、`message_id` 次之）：服务端在页边界上重叠同一条消息时不会重复返回；
  * - `since` / `until` 是**服务端没有的时间过滤**，只能翻页后在本地过滤；
- * - `exhausted` = 没攒满 `want` 条（已经没有更早的消息了）。
+ * - `exhausted` = 没攒满 `want` 条（**三合一语义**，详见下方说明——不要读作「已经没有更早的消息了」）。
  */
 async function fetchHistory(
   client: OneBotClient,
@@ -129,7 +129,14 @@ async function fetchHistory(
    * ③ 翻页数触顶（MAX_PAGES）。
    *
    * 下游不要把它读作「已经没有更早的消息了」——窗口满时它为 false，
-   * 而窗口不满也可能是 ②/③ 而不是 ①。要判断「真的到底」得看 `nextBeforeSeq` 是否为 null。
+   * 而窗口不满也可能是 ②/③ 而不是 ①。
+   *
+   * 目前**没有**可靠的「真的到底」信号：
+   * - `nextBeforeSeq` 只表示窗口内最小 seq——窗口为空、或窗口内消息都没有 `message_seq` 时它是 null
+   *   （那时历史可能还有消息），而真正翻到底时它通常反而**非** null；
+   * - `exhausted` 是上面的三合一语义。
+   * 要等真实 NapCat 的 `message_seq` 边界语义实测（T14）后才能定。
+   * 面板若要判断「还有没有更早的消息」，以「**再翻一页返回空**」为准。
    */
   if (out.length < want) exhausted = true;
 

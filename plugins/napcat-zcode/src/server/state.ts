@@ -1,4 +1,4 @@
-import { createClient, type OneBotClient } from './onebot/client.js';
+import { createClient, safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import { getLoginInfo } from './onebot/actions.js';
 import type { OB11LoginInfo } from './onebot/types.js';
 import { dataDir, loadConfigData, loadConfigWithRaw, saveConfig, type PluginConfig } from './config.js';
@@ -27,15 +27,6 @@ function errText(e: unknown): string {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-/**
- * 端点里可能带 access_token（OneBot 的 ws 约定）或 `user:pass` —— 报错时不能原样打出来。
- */
-function safeEndpointLabel(endpoint: string): string {
-  const [noQuery] = endpoint.split('?');
-  const at = noQuery.lastIndexOf('@');
-  return at >= 0 ? noQuery.slice(at + 1) : noQuery;
 }
 
 /**

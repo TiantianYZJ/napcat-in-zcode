@@ -602,6 +602,29 @@ describe('endpoint scheme handling', () => {
     expect(() => createClient({ endpoint: 'ftp://127.0.0.1:3000' })).toThrow(/unsupported endpoint scheme/);
   });
 
+  it('redacts the endpoint in the scheme error', () => {
+    // 端点里可能带 access_token / user:pass —— 报错里不能原样回显
+    let err: unknown;
+    try {
+      createClient({ endpoint: 'ftp://user:pass@127.0.0.1:3000?access_token=super-secret-token' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    expect(msg).toContain('unsupported endpoint scheme'); // 结构不变
+    expect(msg).not.toContain('super-secret-token');
+    expect(msg).not.toContain('pass');
+    expect(msg).toContain('127.0.0.1:3000'); // 只去掉 query 与 userinfo
+  });
+
+  it('keeps the token out of the scheme error returned by the tool', async () => {
+    const { r } = await configureEndpoint('ftp://127.0.0.1:3000?access_token=super-secret-token');
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('unsupported endpoint scheme');
+    expect(toolText(r)).not.toContain('super-secret-token');
+  });
+
   it('connects with an uppercase scheme end to end', async () => {
     const server = createServer((req, res) => {
       let chunks: Buffer[] = [];
