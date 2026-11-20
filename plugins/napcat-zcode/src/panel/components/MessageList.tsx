@@ -78,8 +78,10 @@ export function MessageList({
       </div>
       {messages.map((m, i) => (
         <div
-          key={m.id}
-          data-testid={`msg-${m.id}`}
+          // key / testid 用 msgKey：服务端的 id 在缺 message_id/real_id/message_seq 时是空串
+          // → 直接用 m.id 会让多条消息撞 key（React 警告）并串选中态、撞 testid。
+          key={msgKey(m)}
+          data-testid={`msg-${msgKey(m)}`}
           className={`msg ${selection.has(msgKey(m)) ? 'sel' : ''}`}
           onClick={(e) => {
             const mode = e.ctrlKey || e.metaKey ? 'ctrl' : e.shiftKey ? 'shift' : 'click';

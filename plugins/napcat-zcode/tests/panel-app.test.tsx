@@ -178,6 +178,42 @@ describe('App 能力降级', () => {
     expect(exportBtn.disabled).toBe(true);
     expect(exportBtn.getAttribute('data-reason')).toContain('T13');
   });
+
+  it('连接中（init）相位的不可用原因是「正在连接宿主…」', async () => {
+    let release: (v: typeof ALL_CAPS) => void = () => {};
+    mock.handshake.mockReturnValue(
+      new Promise((res) => {
+        release = res;
+      }),
+    );
+    await act(async () => {
+      render(<App />);
+    });
+    expect(screen.getByTestId('act-export').getAttribute('data-reason')).toContain('正在连接宿主');
+    release(ALL_CAPS);
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
+  });
+
+  it('未配置相位的不可用原因是「尚未配置 OneBot 端点」', async () => {
+    mock.status.mockResolvedValue({ configured: false, connected: false, mode: 'unconfigured' });
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未配置'));
+    expect(screen.getByTestId('act-export').getAttribute('data-reason')).toContain('尚未配置 OneBot 端点');
+  });
+
+  it('连接失败（error）相位的不可用原因是「连接失败」而不是「正在连接宿主」', async () => {
+    mock.status.mockResolvedValue({
+      configured: true,
+      connected: false,
+      mode: 'external',
+      error: '连接超时',
+    });
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('连接超时'));
+    const reason = screen.getByTestId('act-export').getAttribute('data-reason') ?? '';
+    expect(reason).toContain('连接失败');
+    expect(reason).not.toContain('正在连接宿主');
+  });
 });
 
 describe('App 会话与消息流', () => {
@@ -261,6 +297,24 @@ describe('App 会话与消息流', () => {
     const cb = screen.getByTestId('filter-images') as HTMLInputElement;
     expect(cb.disabled).toBe(true);
     expect(cb.closest('label')?.textContent).toContain('M1 暂不下载');
+  });
+
+  it('切换会话会清掉上一段残留的失败提示', async () => {
+    mock.getHistory.mockRejectedValueOnce(new Error('拉取历史失败'));
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
+    expect(screen.getByTestId('toast').textContent).toContain('拉取历史失败');
+
+    mock.getHistory.mockResolvedValueOnce({
+      messages: [msg('z', 9, 2000)],
+      nextBeforeSeq: 9,
+      exhausted: false,
+    });
+    fireEvent.click(screen.getByTestId('chat-2'));
+    await waitFor(() => expect(screen.getByTestId('msg-z')).toBeTruthy());
+    expect(screen.queryByTestId('toast')).toBeNull();
   });
 });
 

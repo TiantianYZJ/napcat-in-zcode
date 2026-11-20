@@ -178,6 +178,8 @@ export function App() {
     noMoreRef.current = false;
     setNoMore(false);
     setOlderNote('');
+    // 换会话就把上一段残留的提示清掉（否则上一段的失败提示会一直挂在面板上）
+    setNotice('');
     try {
       const r = await api.getHistory(chat.kind, chat.id, undefined, PAGE_SIZE);
       if (activeRef.current !== chat) return; // 用户已经切到别的会话了
@@ -389,7 +391,7 @@ export function App() {
         chat={active}
         caps={caps}
         setNotice={setNotice}
-        ready={phase === 'ready'}
+        phase={phase}
       />
       {notice && phase !== 'error' && (
         <div className="toast" data-testid="toast" onClick={() => setNotice('')}>

@@ -70,4 +70,17 @@ describe('MessageList selection', () => {
     );
     expect(queryByTestId('load-older')).toBeNull();
   });
+
+  it('id 为空串的消息按 seq 区分（key / testid 不撞车）', () => {
+    // 服务端 normalizeMessage 在 message_id/real_id/message_seq 全缺时 id='' → 直接用 id 会撞车
+    const noId: Msg[] = [
+      { ...MSGS[0], id: '', seq: 1 },
+      { ...MSGS[1], id: '', seq: 2 },
+    ];
+    const { getByTestId } = render(
+      <MessageList messages={noId} selection={new Set()} onToggle={vi.fn()} onLoadOlder={vi.fn()} />,
+    );
+    expect(getByTestId('msg-seq:1')).toBeTruthy();
+    expect(getByTestId('msg-seq:2')).toBeTruthy();
+  });
 });

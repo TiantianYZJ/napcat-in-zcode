@@ -48,8 +48,11 @@ function textResult(text: string, isError?: boolean) {
 
 describe('callToolJson 错误解析', () => {
   it('isError + JSON 载荷 → 抛出 JSON 里的 error 字段', async () => {
-    host.callTool.mockResolvedValue(textResult(JSON.stringify({ error: '未配置 OneBot 端点' }), true));
+    const raw = textResult(JSON.stringify({ error: '未配置 OneBot 端点' }), true);
+    host.callTool.mockResolvedValue(raw);
     await expect(mod.callToolJson('napcat_status', {})).rejects.toThrow('未配置 OneBot 端点');
+    // 原始载荷不丢：`raw` 保留宿主给的原样结果，`tool` 标出是哪个工具失败
+    await expect(mod.callToolJson('napcat_status', {})).rejects.toMatchObject({ tool: 'napcat_status', raw });
   });
 
   it('isError + 非 JSON 载荷 → 把原文当错误消息（不崩）', async () => {
@@ -60,15 +63,24 @@ describe('callToolJson 错误解析', () => {
   });
 
   it('工具调用 reject（SDK/zod 校验失败）→ 逐字保留原始文案', async () => {
-    const err = Object.assign(new Error('MCP error -32602: Input validation error: chatId'), {
+    // 形状与桥一致（protocol-notes §3）：reject 的 Error 带 `code` 与 `payload`（原始 JSON-RPC 帧）
+    const frame = {
       code: -32602,
-      payload: { code: -32602, message: 'MCP error -32602: Input validation error: chatId' },
-    });
+      message: 'MCP error -32602: Input validation error: chatId',
+      data: { tool: 'napcat_get_history' },
+    };
+    const err = Object.assign(new Error(frame.message), { code: frame.code, payload: frame });
     host.callTool.mockRejectedValue(err);
     await expect(mod.callToolJson('napcat_get_history', {})).rejects.toThrow(
       'MCP error -32602: Input validation error: chatId',
     );
     await expect(mod.callToolJson('napcat_get_history', {})).rejects.toMatchObject({ code: -32602 });
+    // 交接 #1：原始帧（payload）必须原样带出，不能被压扁成一句话
+    await expect(mod.callToolJson('napcat_get_history', {})).rejects.toMatchObject({
+      tool: 'napcat_get_history',
+      code: -32602,
+      payload: frame,
+    });
   });
 
   it('成功载荷不是 JSON → 抛错而不是让面板崩掉', async () => {

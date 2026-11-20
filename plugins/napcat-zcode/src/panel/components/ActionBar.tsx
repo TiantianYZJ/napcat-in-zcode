@@ -19,15 +19,20 @@ const ACTIONS = [
 /**
  * 按钮不可用的原因（**必须给出原因，不许静默失败**）。
  *
- * 优先级：面板没就绪 → 宿主不支持该能力 → 动作本身还没实现（本任务只做占位）。
+ * 优先级：面板没就绪（**按相位给准确措辞**）→ 宿主不支持该能力 → 动作本身还没实现（本任务只做占位）。
+ *
+ * 相位措辞不能混用：`init` 时是「正在连接宿主…」，`error` 时是「连接失败」（不是「正在连接」），
+ * `unconfigured` 时是「尚未配置端点」。
  */
 export function disabledReason(
   cap: keyof HostCaps,
   method: string,
   caps: HostCaps,
-  ready: boolean,
+  phase: string,
 ): string {
-  if (!ready) return '面板尚未就绪（正在连接宿主…）';
+  if (phase === 'init') return '正在连接宿主…（握手未完成）';
+  if (phase === 'unconfigured') return '尚未配置 OneBot 端点';
+  if (phase === 'error') return '连接失败（可点「重试」重试连接）';
   if (!caps[cap]) return `宿主不支持 ${method}（缺少能力位 ${cap}）`;
   return '占位：T13 实现';
 }
@@ -54,16 +59,16 @@ export function ActionBar({
   selected,
   chat,
   caps,
-  ready,
+  phase,
 }: {
   selected: Msg[];
   chat: Chat | null;
   caps: HostCaps;
   setNotice: (s: string) => void;
-  /** 面板是否已就绪（握手完成 + 已连接）。 */
-  ready?: boolean;
+  /** 面板相位（`init` / `unconfigured` / `error` / `ready`）——决定按钮不可用的措辞。 */
+  phase?: string;
 }) {
-  const isReady = ready !== false;
+  const p = phase ?? 'ready';
   return (
     <div className="actionbar">
       <span data-testid="sel-count">已选 {selected.length} 条</span>
@@ -71,7 +76,7 @@ export function ActionBar({
       {chat && <span className="chat-name">{chat.name}</span>}
       <div className="acts">
         {ACTIONS.map((a) => {
-          const reason = disabledReason(a.cap, a.method, caps, isReady);
+          const reason = disabledReason(a.cap, a.method, caps, p);
           return (
             <button
               key={a.id}
