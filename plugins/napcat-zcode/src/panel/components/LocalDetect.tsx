@@ -111,8 +111,12 @@ export function LocalDetect({
             <div className="detect-failed" data-testid="detect-failed">
               {failures.map((f, i) => (
                 <div className="detect-fail" key={`${f.endpoint}-${i}`} data-testid={`detect-fail-${i}`}>
-                  {/* 超时（目标在那儿但不答话）与连不上（端口上根本没服务）是两回事 */}
-                  <span className="label">{f.unresponsive === true ? '目标无响应（超时）' : '连不上'}</span>
+                  {/*
+                    超时（目标在那儿但不答话）与其它失败是**两回事**，不能合并成一句。
+                    其它失败里既有「根本连不上」，也有「连上了但被拒绝（鉴权/无权限）」——
+                    后者可能因裁剪没进 tokenRequired，所以措辞要**同时覆盖两种**。
+                  */}
+                  <span className="label">{f.unresponsive === true ? '目标无响应（超时）' : '连不上或被拒绝'}</span>
                   <span className="ep">{f.endpoint}</span>
                   {f.error && <span className="detail">{f.error}</span>}
                 </div>

@@ -504,6 +504,23 @@ describe('napcat_get_config', () => {
     expect(text).not.toContain('pass');
     expect(payload(r).autoDetect.endpoints[0]).toContain('127.0.0.1:3000');
   });
+
+  // B9：工具返回值会进 agent 的上下文 → 本机绝对路径不该出现在里面。
+  it('does not leak local absolute paths (autoDetect.paths) — only the count', async () => {
+    const c = await makeClient();
+    writeFileSync(
+      join(tmp, 'config.json'),
+      JSON.stringify({ autoDetect: { paths: ['D:\\SecretNapCatDir', 'D:\\AnotherSecretDir'] } }),
+    );
+    const r = await c.callTool({ name: 'napcat_get_config', arguments: {} });
+    const text = (r.content as Array<{ text: string }>)[0].text;
+    expect(text).not.toContain('SecretNapCatDir');
+    expect(text).not.toContain('AnotherSecretDir');
+    expect(text).not.toContain('D:\\\\');
+    // 只给条数
+    expect(payload(r).autoDetect.pathsCount).toBe(2);
+    expect(payload(r).autoDetect.paths).toBeUndefined();
+  });
 });
 
 describe('session id inputs accept numbers', () => {

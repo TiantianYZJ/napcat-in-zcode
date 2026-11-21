@@ -24326,7 +24326,7 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_get_config",
     {
-      description: "\u8BFB\u53D6\u63D2\u4EF6\u5F53\u524D\u914D\u7F6E\uFF08\u9762\u677F\u8BBE\u7F6E\u9875\u7528\uFF09\uFF1A\u6BCF\u6B21\u8C03\u7528\u90FD\u4F1A\u91CD\u65B0\u8BFB\u53D6 config.json \u5E76\u5E94\u7528\u73AF\u5883\u53D8\u91CF\u8986\u76D6\uFF1Btoken \u4E00\u5F8B\u4EE5 *** \u906E\u853D\uFF0C\u7AEF\u70B9\u6309\u8131\u654F\u5F62\u5F0F\u8FD4\u56DE\uFF08\u53BB\u6389 query \u4E0E userinfo\uFF09\u3002",
+      description: "\u8BFB\u53D6\u63D2\u4EF6\u5F53\u524D\u914D\u7F6E\uFF08\u9762\u677F\u8BBE\u7F6E\u9875\u7528\uFF09\uFF1A\u6BCF\u6B21\u8C03\u7528\u90FD\u4F1A\u91CD\u65B0\u8BFB\u53D6 config.json \u5E76\u5E94\u7528\u73AF\u5883\u53D8\u91CF\u8986\u76D6\uFF1Btoken \u4E00\u5F8B\u4EE5 *** \u906E\u853D\uFF0C\u7AEF\u70B9\u6309\u8131\u654F\u5F62\u5F0F\u8FD4\u56DE\uFF08\u53BB\u6389 query \u4E0E userinfo\uFF09\uFF1BautoDetect.paths\uFF08\u672C\u673A\u7EDD\u5BF9\u8DEF\u5F84\uFF09**\u4E0D\u8FD4\u56DE**\uFF0C\u53EA\u7ED9\u6761\u6570 autoDetect.pathsCount\u3002",
       inputSchema: {}
     },
     async () => {
@@ -24336,6 +24336,7 @@ function registerTools(server2, state) {
         const token = cfg.connection?.token ?? "";
         const endpoint = cfg.connection?.endpoint ?? "";
         const maskEndpoint = (ep) => state.redact(safeEndpointLabel(ep));
+        const { paths: _localPaths, ...autoDetectRest } = cfg.autoDetect ?? {};
         const masked = {
           ...cfg,
           connection: {
@@ -24344,8 +24345,10 @@ function registerTools(server2, state) {
             token: token ? "***" : ""
           },
           autoDetect: {
-            ...cfg.autoDetect,
-            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint)
+            ...autoDetectRest,
+            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint),
+            /** 本机扫描路径的**条数**（路径本身不外泄）。 */
+            pathsCount: (cfg.autoDetect?.paths ?? []).length
           }
         };
         return ok(masked);

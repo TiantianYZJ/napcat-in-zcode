@@ -15,12 +15,24 @@ import { modeLabel } from './Statusbar.js';
  * 此前只能手改 `config.json`，用户没有入口。
  * 保存时调 `napcat_configure`（带 `paths`）——**端点留空**表示「只更新扫描路径、
  * 不动已有连接」（用户还没配端点时也要能改路径）。
+ *
+ * **面板不回显已配置的路径**：服务端的 `napcat_get_config` **不返回**本机绝对路径
+ * （B9：路径只给用户看，不给 agent 看；工具返回值会进 agent 的上下文）。
+ * 面板只显示**条数**（`autoDetect.pathsCount`），路径内容以**用户自己填的**为准
+ * （由 App 记住，见 `pathsText`）。
  */
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
+export function SettingsPanel({
+  onClose,
+  pathsText,
+  onPathsText,
+}: {
+  onClose: () => void;
+  /** 扫描路径输入框的内容（**面板自己记着**，不是从工具回读的）。 */
+  pathsText: string;
+  onPathsText: (value: string) => void;
+}) {
   const [cfg, setCfg] = useState<ConfigInfo | null>(null);
   const [err, setErr] = useState('');
-  /** 扫描路径输入框的内容（每行一个路径）。 */
-  const [pathsText, setPathsText] = useState('');
   const [pathsSaving, setPathsSaving] = useState(false);
   const [pathsMsg, setPathsMsg] = useState('');
   const [pathsErr, setPathsErr] = useState('');
@@ -30,10 +42,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     api
       .getConfig()
       .then((c) => {
-        if (!alive) return;
-        setCfg(c);
-        const auto = c.autoDetect as { paths?: string[] } | undefined;
-        setPathsText((auto?.paths ?? []).join('\n'));
+        if (alive) setCfg(c);
       })
       .catch((e: unknown) => {
         if (alive) setErr(e instanceof Error ? e.message : String(e));
@@ -47,6 +56,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const conn = cfg?.connection as { mode?: string; endpoint?: string; token?: string } | undefined;
   const exp = cfg?.export as { dir?: string; includeImages?: boolean } | undefined;
   const inj = cfg?.inject as { maxInjectChars?: number } | undefined;
+  /** 已配置的扫描路径**条数**（路径本身服务端不返回，见文件头注释）。 */
+  const auto = cfg?.autoDetect as { pathsCount?: number } | undefined;
+  const pathsCount = typeof auto?.pathsCount === 'number' ? auto.pathsCount : undefined;
 
   /** 保存扫描路径（每行一个路径）。 */
   const savePaths = async (): Promise<void> => {
@@ -62,7 +74,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       // token 传空串 = 保留已保存的 token（服务端语义，面板不碰凭据）。
       const r = await api.configure('', '', undefined, paths);
       const saved = r.paths ?? paths;
-      setPathsMsg(`已保存 ${saved.length} 条扫描路径（下次检测生效）`);
+      // 空 = 清空全部：明确说出来（别让它变成一次无声的配置变更）
+      setPathsMsg(
+        saved.length === 0
+          ? '已清空全部扫描路径（下次检测生效）'
+          : `已保存 ${saved.length} 条扫描路径（下次检测生效）`,
+      );
     } catch (e) {
       setPathsErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -106,15 +123,28 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       )}
       <div className="settings-paths">
         <label htmlFor="paths-input">本机 NapCat 扫描路径（每行一个绝对路径）</label>
+        {pathsCount !== undefined && (
+          <div className="paths-count" data-testid="paths-count">
+            当前已配置 {pathsCount} 条扫描路径
+          </div>
+        )}
         <textarea
           id="paths-input"
           data-testid="paths-input"
           rows={3}
           value={pathsText}
           placeholder={'D:\\NapCat\nD:\\QQChatExporter'}
-          onChange={(e) => setPathsText(e.target.value)}
+          onChange={(e) => onPathsText(e.target.value)}
         />
-        <button data-testid="paths-save" disabled={pathsSaving} onClick={() => void savePaths()}>
+        {/*
+          **配置没加载完不许保存**：那时输入框还是空的（内容由 App 记住，
+          面板自己也不知道已配置了几条）→ 早点一下就会把 autoDetect.paths 清空。
+        */}
+        <button
+          data-testid="paths-save"
+          disabled={pathsSaving || cfg === null}
+          onClick={() => void savePaths()}
+        >
           {pathsSaving ? '保存中…' : '保存扫描路径'}
         </button>
         {pathsMsg && (
@@ -130,7 +160,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
       <p className="hint">
         端点与 token 请在「未配置 / 连接失败」时的表单里修改；token 明文不会出现在面板上。
-        扫描路径必须是绝对路径（相对路径会随工作目录变化）。
+        扫描路径必须是绝对路径（相对路径会随工作目录变化）。保存会**替换**全部已配置路径
+        （留空 = 清空）；面板不回显已配置的路径，避免把本机绝对路径交给工具。
       </p>
     </div>
   );

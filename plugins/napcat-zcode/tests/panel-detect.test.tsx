@@ -65,6 +65,7 @@ vi.mock('../src/panel/api.js', async (importOriginal) => {
 });
 
 import { App } from '../src/panel/App.js';
+import { detectionSummary } from '../src/panel/components/Statusbar.js';
 
 afterEach(cleanup);
 
@@ -466,14 +467,23 @@ describe('B8：设置面板里改 autoDetect.paths', () => {
       connection: { mode: 'external', endpoint: 'http://127.0.0.1:3000', token: '***' },
       export: { dir: 'user', includeImages: false },
       inject: { maxInjectChars: 40000 },
-      autoDetect: { ports: [3000], endpoints: [], paths: ['D:\\NapCat'], probeTimeoutMs: 1200 },
+      autoDetect: {
+        ports: [3000],
+        endpoints: [],
+        // 服务端**不返回**本机绝对路径（N7）；这里故意塞一条，验证面板不会把它显示出来
+        paths: ['D:\\NapCat'],
+        pathsCount: 1,
+        probeTimeoutMs: 1200,
+      },
     });
     await mount();
     fireEvent.click(screen.getByTestId('settings-btn'));
     await waitFor(() => expect(screen.getByTestId('settings-panel')).toBeTruthy());
     const input = (await screen.findByTestId('paths-input')) as HTMLTextAreaElement;
-    // 预填当前路径
-    expect(input.value).toContain('D:\\NapCat');
+    // N7：本机绝对路径不进工具返回值 → 面板也不许回显它
+    expect(input.value).not.toContain('D:\\NapCat');
+    // 只显示条数（用户至少知道「已经配了 1 条」）
+    expect(screen.getByTestId('paths-count').textContent).toContain('1');
     await act(async () => {
       fireEvent.change(input, { target: { value: 'D:\\NapCat\nD:\\QQChatExporter' } });
     });
@@ -516,5 +526,215 @@ describe('B8：设置面板里改 autoDetect.paths', () => {
     });
     const err = await screen.findByTestId('paths-error');
     expect(err.textContent).toContain('必须是绝对路径');
+  });
+});
+
+/* ===================== 审查收尾修正（N1–N7） ===================== */
+
+describe('N1：失败态的「重新配置端点」表单也能刷新状态条摘要', () => {
+  it('失败态表单里检测 → 状态条摘要更新，且表单不被收起来', async () => {
+    mock.status.mockResolvedValue({
+      configured: true,
+      connected: false,
+      mode: 'external',
+      error: '连接超时',
+    });
+    // 失败态没有配置表单（要用户点「重新配置端点」才展开）→ 不能用 mount() 等 setup-form
+    await act(async () => {
+      render(<App />);
+    });
+    await waitFor(() => expect(screen.getByTestId('phase-error')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('reconfigure-btn'));
+    await waitFor(() => expect(screen.getByTestId('setup-form')).toBeTruthy());
+
+    // 探测完成后服务端缓存了结论 → 随后的 status 带出 detection
+    mock.status.mockResolvedValue({
+      configured: true,
+      connected: false,
+      mode: 'external',
+      error: '连接超时',
+      detection: { found: true, napcatRunning: true, endpoint: 'http://127.0.0.1:3000' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('detect-btn'));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('detect-summary').textContent).toContain('检测到本机 NapCat'),
+    );
+    // 探测不该把用户正在用的表单收掉（结果还要看）
+    expect(screen.getByTestId('setup-form')).toBeTruthy();
+  });
+});
+
+describe('N2：配置没加载完不许保存扫描路径', () => {
+  it('配置尚未加载完成 → 保存按钮不可点（否则会误把路径清空）', async () => {
+    // 永不 resolve：模拟「配置还在路上」
+    mock.getConfig.mockReturnValue(new Promise(() => {}));
+    await mount();
+    fireEvent.click(screen.getByTestId('settings-btn'));
+    await waitFor(() => expect(screen.getByTestId('settings-panel')).toBeTruthy());
+    const save = screen.getByTestId('paths-save') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    // 禁用期间不许触发保存（更不会把 autoDetect.paths 清空）
+    await act(async () => {
+      fireEvent.click(save);
+    });
+    expect(mock.configure).not.toHaveBeenCalled();
+  });
+});
+
+describe('N3：并发探测闸门（ref）', () => {
+  it('同一个事件循环内连点两次「检测」→ 只发一次探测', async () => {
+    let release: (v: unknown) => void = () => {};
+    mock.detectLocal.mockReturnValue(
+      new Promise((res) => {
+        release = res;
+      }),
+    );
+    await mount();
+    const btn = screen.getByTestId('detect-btn');
+    // 两次点击在**同一个 act() 内**：此时 React 还没把按钮置灰 →
+    // 两次都会进 handler → 只有 ref 闸门能挡住第二次
+    await act(async () => {
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+    });
+    expect(mock.detectLocal).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      release(detectResult());
+    });
+  });
+
+  it('探测失败 → 按钮恢复可用，文案回到「检测本机 NapCat」', async () => {
+    mock.detectLocal.mockRejectedValueOnce(new Error('探测失败：host unreachable'));
+    await mount();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('detect-btn'));
+    });
+    await waitFor(() => expect(screen.getByTestId('detect-error')).toBeTruthy());
+    const btn = screen.getByTestId('detect-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('检测本机 NapCat');
+    expect(btn.textContent).not.toContain('检测中');
+  });
+});
+
+describe('N4：阳性结论优先（预算耗尽不该把「检测到了」藏起来）', () => {
+  it('扫到端点但预算也耗尽 → 摘要两件事都表达', async () => {
+    mock.status.mockResolvedValue({
+      configured: false,
+      connected: false,
+      mode: 'unconfigured',
+      detection: {
+        found: true,
+        napcatRunning: true,
+        endpoint: 'http://127.0.0.1:3000',
+        budgetExhausted: true,
+      },
+    });
+    await mount();
+    const summary = await screen.findByTestId('detect-summary');
+    expect(summary.textContent).toContain('检测到本机 NapCat');
+    expect(summary.textContent).toContain('http://127.0.0.1:3000');
+    expect(summary.textContent).toContain('未完成');
+  });
+});
+
+describe('N5：非超时失败的措辞要覆盖「连不上」与「被拒绝」', () => {
+  it('失败条目用「连不上或被拒绝」（不是断言式的「连不上」）', async () => {
+    mock.detectLocal.mockResolvedValue(
+      detectResult({
+        failed: [
+          {
+            endpoint: 'http://127.0.0.1:3000',
+            transport: 'http',
+            source: 'port',
+            error: '127.0.0.1:3000：OneBot 错误 1404（unauthorized）',
+          },
+        ],
+      }),
+    );
+    await mount();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('detect-btn'));
+    });
+    await waitFor(() => expect(screen.getByTestId('detect-failed')).toBeTruthy());
+    const text = screen.getByTestId('detect-failed').textContent ?? '';
+    expect(text).toContain('被拒绝');
+    expect(text).not.toContain('目标无响应'); // 非超时不许被说成超时
+  });
+});
+
+describe('N6：detectionSummary 的直接单元用例', () => {
+  it.each([
+    [
+      'detection 键缺失 + 从没探过 → 尚未检测',
+      undefined,
+      false,
+      (s: string) => s.includes('尚未检测') && !s.includes('未检测到'),
+    ],
+    [
+      'detection 键缺失 + 探过（结论过期）→ 结论已过期，请重新检测',
+      undefined,
+      true,
+      (s: string) => s.includes('结论已过期') && s.includes('重新检测') && !s.includes('未检测到'),
+    ],
+    [
+      'found → 检测到本机 NapCat（端点）',
+      { found: true, napcatRunning: true, endpoint: 'http://127.0.0.1:3000' },
+      false,
+      (s: string) => s.includes('检测到本机 NapCat') && s.includes('http://127.0.0.1:3000'),
+    ],
+    [
+      'found + 预算耗尽 → 两件事都表达',
+      { found: true, napcatRunning: true, endpoint: 'http://127.0.0.1:3000', budgetExhausted: true },
+      false,
+      (s: string) =>
+        s.includes('检测到本机 NapCat') &&
+        s.includes('http://127.0.0.1:3000') &&
+        s.includes('未完成') &&
+        !s.includes('不能据此判断本机没有 NapCat'),
+    ],
+    [
+      'NapCat 在跑但没开 OneBot Server',
+      { found: false, napcatRunning: true },
+      false,
+      (s: string) => s.includes('检测到 NapCat（未开启 OneBot Server）'),
+    ],
+    [
+      '什么都没找到 → 未检测到本机 NapCat',
+      { found: false, napcatRunning: false },
+      false,
+      (s: string) => s === '未检测到本机 NapCat',
+    ],
+    [
+      '预算耗尽且没找到 → 绝不说「未检测到本机 NapCat」',
+      { found: false, napcatRunning: false, budgetExhausted: true },
+      false,
+      (s: string) =>
+        s.includes('探测未完成') &&
+        s.includes('不能据此判断本机没有 NapCat') &&
+        !s.includes('未检测到本机 NapCat'),
+    ],
+  ])('%s', (_name, detection, hadDetection, check) => {
+    const text = detectionSummary(detection as never, hadDetection as boolean);
+    expect(check(text)).toBe(true);
+  });
+});
+
+describe('N7（面板侧）：不回显本机绝对路径', () => {
+  it('设置面板不显示工具返回的路径串，只显示条数', async () => {
+    mock.getConfig.mockResolvedValue({
+      connection: { mode: 'external', endpoint: 'http://127.0.0.1:3000', token: '***' },
+      export: { dir: 'user', includeImages: false },
+      inject: { maxInjectChars: 40000 },
+      autoDetect: { ports: [3000], endpoints: [], paths: ['D:\\SecretDir'], pathsCount: 2 },
+    });
+    await mount();
+    fireEvent.click(screen.getByTestId('settings-btn'));
+    await waitFor(() => expect(screen.getByTestId('settings-panel')).toBeTruthy());
+    const panel = screen.getByTestId('settings-panel').textContent ?? '';
+    expect(panel).not.toContain('D:\\SecretDir');
+    expect(screen.getByTestId('paths-count').textContent).toContain('2');
   });
 });

@@ -125,6 +125,14 @@ export function App() {
    */
   const [hadDetection, setHadDetection] = useState(false);
   /**
+   * 设置面板里的扫描路径输入框内容（**面板自己记着**）。
+   *
+   * 服务端的 `napcat_get_config` **不返回**本机绝对路径（B9：路径只给用户看，
+   * 不给 agent 看）→ 面板拿不到「已配置的路径」，只能记住**用户自己填过**的那些。
+   * 放在 App 里（而不是设置面板的局部 state）→ 面板关掉再打开，内容还在。
+   */
+  const [pathsText, setPathsText] = useState('');
+  /**
    * 配置里的导出目的地（跟随 `export.dir`）。
    *
    * **只影响文案**：目的地由服务端按配置决定（面板不传 `dir`），
@@ -180,6 +188,23 @@ export function App() {
     } catch (e) {
       showNotice(errText(e));
       setPhase('error');
+    }
+  }, []);
+
+  /**
+   * 只刷新状态（**不动相位机**）。
+   *
+   * 探测之后用它拿状态条摘要：失败态里 `reload()` 会把「重新配置端点」表单收起来
+   * （`setReconfiguring(false)`）—— 探测的结果会随表单一起消失，用户白点一次。
+   */
+  const refreshStatus = useCallback(async () => {
+    try {
+      const st = await api.status();
+      setStatus(st);
+      // 见过结论就记一笔：之后结论消失（配置变了 → 服务端清了缓存）要说「结论已过期」
+      if (st.detection) setHadDetection(true);
+    } catch {
+      /* 状态刷新失败不影响其它功能 */
     }
   }, []);
 
@@ -441,18 +466,16 @@ export function App() {
             </div>
           )}
           {phase === 'unconfigured' && (
-            <UnconfiguredForm
-              onDone={() => void reload()}
-              onDetected={() => {
-                // 探测结论缓存在服务端 → 重拉一次状态，状态条才拿得到那份摘要
-                void reload();
-              }}
-            />
+            <UnconfiguredForm onDone={() => void reload()} onDetected={() => void refreshStatus()} />
           )}
           {phase === 'error' &&
             (reconfiguring ? (
               // 端点填错了/换机器了 → 让用户直接改（不预填，免得无声覆盖已有配置）
-              <UnconfiguredForm onDone={() => void reload()} initialEndpoint="" />
+              <UnconfiguredForm
+                onDone={() => void reload()}
+                onDetected={() => void refreshStatus()}
+                initialEndpoint=""
+              />
             ) : (
               <div className="placeholder" data-testid="phase-error">
                 <p>{notice?.text || status?.error || '连接失败'}</p>
@@ -538,7 +561,13 @@ export function App() {
           )}
         </div>
       )}
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsPanel
+          onClose={() => setShowSettings(false)}
+          pathsText={pathsText}
+          onPathsText={setPathsText}
+        />
+      )}
     </div>
   );
 }

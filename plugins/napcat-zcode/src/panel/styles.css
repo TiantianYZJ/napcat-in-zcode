@@ -485,6 +485,11 @@ button[disabled] {
   color: var(--fg-dim);
 }
 
+.settings-panel .settings-paths .paths-count {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
 .settings-panel .settings-paths textarea {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

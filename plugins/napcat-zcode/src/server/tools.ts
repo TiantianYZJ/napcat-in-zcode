@@ -722,7 +722,8 @@ export function registerTools(server: McpServer, state: AppState): void {
     {
       description:
         '读取插件当前配置（面板设置页用）：每次调用都会重新读取 config.json 并应用环境变量覆盖；' +
-        'token 一律以 *** 遮蔽，端点按脱敏形式返回（去掉 query 与 userinfo）。',
+        'token 一律以 *** 遮蔽，端点按脱敏形式返回（去掉 query 与 userinfo）；' +
+        'autoDetect.paths（本机绝对路径）**不返回**，只给条数 autoDetect.pathsCount。',
       inputSchema: {},
     },
     async () => {
@@ -738,6 +739,14 @@ export function registerTools(server: McpServer, state: AppState): void {
          * 否则用户把带凭据的 URL 放进候选列表就会明文出现在面板里。
          */
         const maskEndpoint = (ep: string): string => state.redact(safeEndpointLabel(ep));
+        /**
+         * `autoDetect.paths` 是**本机绝对路径**（用户装 NapCat 的目录）。
+         *
+         * 它**不进工具返回值**：工具返回值会进 agent 的上下文，
+         * 本机目录结构不该外泄（B9：绝对路径只给用户看，不给模型看）。
+         * 只给**条数**——面板要显示「已配置 N 条」够用了。
+         */
+        const { paths: _localPaths, ...autoDetectRest } = cfg.autoDetect ?? {};
         const masked = {
           ...cfg,
           connection: {
@@ -746,8 +755,10 @@ export function registerTools(server: McpServer, state: AppState): void {
             token: token ? '***' : '',
           },
           autoDetect: {
-            ...cfg.autoDetect,
+            ...autoDetectRest,
             endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint),
+            /** 本机扫描路径的**条数**（路径本身不外泄）。 */
+            pathsCount: (cfg.autoDetect?.paths ?? []).length,
           },
         };
         return ok(masked);

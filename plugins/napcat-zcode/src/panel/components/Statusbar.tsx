@@ -32,16 +32,25 @@ export function modeLabel(mode: string): string {
  * - 探过、什么都没找到 → 「未检测到本机 NapCat」；
  * - 预算耗尽 → 「探测未完成（扫描预算耗尽）…不能据此判断本机没有 NapCat」
  *   （**绝不可**写成「未检测到本机 NapCat」：那轮扫描根本没扫完）。
+ *
+ * **阳性结论优先**：扫到了可用端点时，即使预算也耗尽，也要先说「检测到了」
+ * （只是把「结果可能不全」补在后面）——把阳性结论藏起来是信息有损，
+ * 而「预算耗尽」并不否定已经扫到的东西。
  */
 export function detectionSummary(
   detection: StatusInfo['detection'],
   hadDetection: boolean,
 ): string {
   if (!detection) return hadDetection ? '结论已过期，请重新检测' : '尚未检测';
+  if (detection.found) {
+    const base = `检测到本机 NapCat（${detection.endpoint ?? '未知端点'}）`;
+    return detection.budgetExhausted === true
+      ? `${base}；但本轮扫描未完成，结果可能不全`
+      : base;
+  }
   if (detection.budgetExhausted === true) {
     return '探测未完成（扫描预算耗尽），结果可能不全 —— 不能据此判断本机没有 NapCat';
   }
-  if (detection.found) return `检测到本机 NapCat（${detection.endpoint ?? '未知端点'}）`;
   if (detection.napcatRunning) return '检测到 NapCat（未开启 OneBot Server）';
   return '未检测到本机 NapCat';
 }
