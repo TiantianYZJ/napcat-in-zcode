@@ -34,7 +34,7 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
 
 - **M1（本 spec 的实现主体）**：OneBot 客户端（外部端点 HTTP/WS）+ 数据层 + 侧栏面板 + 注入 + 导出。
   **状态：已实现（2026-11-21）**——仅「外部端点」路径；交付说明见仓库根 `README.md`，
-  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 554 条（vitest）全绿。
+  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 571 条（vitest，另有 2 条仅 POSIX 可跑）全绿。
 - **M1.1（增量）**：媒体下载（`includeImages` 真正生效、`media/` 子目录）与合并转发展开
   （`get_forward_msg` 懒加载）。**不在 M1 范围**：M1 的导出 JSON 已含全部媒体 URL，
   转发段以 `[合并转发]` 占位。详见 §5.8。
