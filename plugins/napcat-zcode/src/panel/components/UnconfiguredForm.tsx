@@ -143,11 +143,11 @@ export function UnconfiguredForm({
         </div>
       )}
       <p className="hint">
-        在 NapCat WebUI → 网络配置中启用 HTTP Server。本机回环可不设 token；局域网监听必须设置 token。
+        先在 NapCat 的 WebUI 网络配置里启用 HTTP Server，再回到这里连接。本机使用可以不设 token。
       </p>
       {onGoHost && (
         <button className="btn" data-testid="go-host-btn" onClick={onGoHost}>
-          还没装 NapCat？到「宿主」页下载安装 →
+          没有 NapCat？去「宿主」页安装
         </button>
       )}
     </div>

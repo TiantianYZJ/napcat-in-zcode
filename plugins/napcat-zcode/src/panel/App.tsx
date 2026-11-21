@@ -318,14 +318,14 @@ export function App() {
       if (page.length === 0) {
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('没有更早的消息了（服务端返回空页）');
+        setOlderNote('没有更早的消息了');
         return;
       }
       if (typeof r.nextBeforeTime !== 'number') {
         // 服务端没能给出时间游标（窗口里的消息没有有效 time）→ 没法继续向前翻
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）');
+        setOlderNote('暂时无法加载更早的消息');
         return;
       }
       cursorRef.current = r.nextBeforeTime;
@@ -355,7 +355,7 @@ export function App() {
       if (page.length === 0) {
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('没有更早的消息了（服务端返回空页）');
+        setOlderNote('没有更早的消息了');
         return;
       }
       const { merged, added } = mergeOlder(messagesRef.current, page);
@@ -363,7 +363,7 @@ export function App() {
         // 全是重复（边界那条被重复返回）→ 再翻也是同一页，停。
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('本轮没有返回新消息（边界重复或已到历史开头）');
+        setOlderNote('没有更早的消息了');
         return;
       }
       messagesRef.current = merged;
@@ -371,14 +371,14 @@ export function App() {
       if (typeof r.nextBeforeTime !== 'number') {
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）');
+        setOlderNote('暂时无法加载更早的消息');
         return;
       }
       if (before !== undefined && r.nextBeforeTime >= before) {
         // 时间游标没有前进 → 再翻也是同一页，停。
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('时间游标没有前进（服务端未接受该游标），无法加载更早的消息');
+        setOlderNote('暂时无法加载更早的消息');
         return;
       }
       cursorRef.current = r.nextBeforeTime;
@@ -557,7 +557,8 @@ export function App() {
           )}
           {phase === 'init' && (
             <div className="placeholder" data-testid="phase-init">
-              正在连接宿主…（首次握手最坏约 46 秒）
+              <div className="title">正在连接宿主…</div>
+              <div className="desc">第一次连接可能需要十几秒</div>
             </div>
           )}
           {phase === 'unconfigured' && (

@@ -61,10 +61,7 @@ export function Toolbar({
         <option value="7d">近 7 天</option>
         <option value="30d">近 30 天</option>
       </select>
-      <label
-        className="images"
-        title="M1 尚未实现媒体下载：这个开关当前不改变任何产物（图片在导出里只是占位符 + URL）"
-      >
+      <label className="images" title="导出时包含图片（当前版本导出仍以链接代替图片文件）">
         <input
           type="checkbox"
           checked={includeImages}
@@ -72,7 +69,7 @@ export function Toolbar({
           data-testid="filter-images"
           disabled
         />
-        含图（暂不下载）
+        含图
       </label>
     </div>
   );

@@ -34,7 +34,7 @@ const bundle = m[1];
 const html = raw.replace(/<script type="module"[^>]*>[\s\S]*?<\/script>/, '');
 
 const TOOL_RESULTS = {
-  napcat_status: { configured: true, connected: true, mode: 'external', login: { user_id: '1', nickname: '模拟宿主' } },
+  napcat_status: { configured: true, connected: true, mode: 'external', login: { user_id: '99', nickname: '模拟宿主' } },
   napcat_list_chats: (args) => ({
     chats: args?.kind === 'group'
       ? [{ kind: 'group', id: '12345', name: '冒烟群' }, { kind: 'group', id: '222', name: '另一个群' }]

@@ -116,7 +116,8 @@ export function LocalDetect({
           )}
           {!result.found && result.napcatRunning !== true && result.budgetExhausted !== true && (
             <div className="detect-notfound" data-testid="detect-notfound">
-              未检测到本机 NapCat
+              <div className="empty-title">没有找到正在运行的 NapCat</div>
+              <div className="empty-desc">启动 NapCat 后重新检测，或到「宿主」页安装一个</div>
             </div>
           )}
           {candidates.length > 0 && (
@@ -147,13 +148,15 @@ export function LocalDetect({
           )}
           {failures.length > 0 && (
             <div className="detect-failed" data-testid="detect-failed">
-              {/* 默认只给一行摘要：失败端点逐个摆出来全是噪音（用户截图的痛点） */}
+              {/* 默认只给一行摘要：失败端点逐个摆出来全是噪音 */}
               <button
                 className="detect-failed-toggle"
                 data-testid="detect-failed-toggle"
                 onClick={() => setShowFailed((v) => !v)}
               >
-                {showFailed ? '收起' : `尝试了 ${failures.length} 个地址，均未连接（NapCat 可能没在运行）`} ▾
+                {showFailed
+                  ? '收起失败的地址'
+                  : `${failures.length} 个地址没有响应，NapCat 可能没有运行`}
               </button>
               {showFailed &&
                 failures.map((f, i) => (
@@ -163,7 +166,7 @@ export function LocalDetect({
                       其它失败里既有「根本连不上」，也有「连上了但被拒绝（鉴权/无权限）」——
                       后者可能因裁剪没进 tokenRequired，所以措辞要**同时覆盖两种**。
                     */}
-                    <span className="label">{f.unresponsive === true ? '目标无响应（超时）' : '连不上或被拒绝'}</span>
+                    <span className="label">{f.unresponsive === true ? '连接超时' : '无法连接'}</span>
                     <span className="ep">{f.endpoint}</span>
                     {f.error && <span className="detail">{f.error}</span>}
                   </div>
@@ -172,7 +175,7 @@ export function LocalDetect({
           )}
           {(result.installs ?? []).length > 0 && (
             <div className="detect-installs" data-testid="detect-installs">
-              <div className="detect-installs-title">检测到本机安装（可接管：登记后由插件启动 / 停止）</div>
+              <div className="detect-installs-title">检测到本机安装，可以接管后直接启动</div>
               {result.installs.map((inst, i) => (
                 <div className="detect-install" key={`${inst.configDir}-${i}`} data-testid={`detect-install-${i}`}>
                   <div className="detect-install-info">
@@ -185,10 +188,10 @@ export function LocalDetect({
                     className="btn"
                     data-testid={`detect-adopt-${i}`}
                     disabled={adoptBusy !== ''}
-                    title="登记进受管台账（不重新下载），然后用注入模式启动。QQ 9.9.36+ 可能因完整性检查启动失败。"
+                    title="登记这个安装，然后用注入模式启动"
                     onClick={() => void adoptAndStart(inst.configDir, inst.webuiPort)}
                   >
-                    {adoptBusy === inst.configDir ? '接管中…' : '接管并启动'}
+                    {adoptBusy === inst.configDir ? '启动中…' : '接管并启动'}
                   </button>
                 </div>
               ))}

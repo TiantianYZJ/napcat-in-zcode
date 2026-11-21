@@ -180,18 +180,20 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <div className="detect" data-testid="host-panel">
-      <div className="section-title">受管宿主（插件自己下载安装的 NapCat）</div>
+      <div className="section-title">NapCat 宿主</div>
+      <div className="section-desc">在这里安装 NapCat，随时启动和停止</div>
 
       {installs.length > 0 && (
         <div className="host-summary" data-testid="host-summary">
-          {installs.length} 个受管安装 ·{' '}
+          {installs.length} 个安装 ·{' '}
           {statuses.filter((s) => ['running', 'starting', 'degraded'].includes(s.state)).length} 个运行中
         </div>
       )}
 
       {installs.length === 0 && !job && (
         <div className="detect-notfound" data-testid="host-empty">
-          还没装过 NapCat。装好之后就能在这里一键启动 / 停止，不用再手动敲命令。
+          <div className="empty-title">还没有安装 NapCat</div>
+          <div className="empty-desc">在下方选择版本，一键下载安装</div>
         </div>
       )}
 
@@ -285,26 +287,21 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
             </div>
             {s.state === 'running' && !s.login && s.webuiPort && (
               <div className="host-login-guide" data-testid="host-login-guide">
-                <div className="guide-title">还没有登录 QQ</div>
-                <div className="host-msg">
-                  NapCat 已启动，但还没有登录 QQ（拉取消息要先登录）。打开 WebUI →「QQ 登录」页，用手机 QQ
-                  扫码登录。
-                </div>
+                <div className="guide-title">扫码登录 QQ</div>
+                <div className="host-msg">打开 NapCat 的 WebUI，用手机 QQ 扫码登录</div>
                 <div className="host-acts">
                   <button
                     className="btn primary"
                     data-testid="guide-open-webui"
                     disabled={!bridge.capabilities.openLinks || busy !== ''}
                     title={
-                      bridge.capabilities.openLinks
-                        ? '在默认浏览器打开本机 NapCat WebUI'
-                        : '宿主不支持打开外部链接'
+                      bridge.capabilities.openLinks ? '在浏览器打开 NapCat WebUI' : '当前环境不支持打开网页'
                     }
                     onClick={() =>
                       void run('open-webui', () => bridge.openLocalLink(`http://127.0.0.1:${s.webuiPort}`))
                     }
                   >
-                    打开 WebUI 扫码
+                    打开 WebUI
                   </button>
                   <button
                     className="btn"
@@ -312,18 +309,17 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                     disabled={busy !== ''}
                     onClick={() => void refresh()}
                   >
-                    我已登录，刷新状态
+                    已登录，刷新
                   </button>
                 </div>
                 {s.install?.dir && (
                   <div className="host-msg" data-testid="host-login-token-hint">
-                    登录 WebUI 需要访问令牌：插件已把随机令牌写在安装目录的
-                    <code>webui.json</code>
-                    里（面板不回显明文{(() => {
+                    登录 WebUI 用的访问令牌在安装目录的
+                    <code>webui.json</code> 里{(() => {
                       const masked = s.install?.webuiTokenMasked;
-                      return masked ? `；掩码 ${masked}，可用来核对` : '';
+                      return masked ? `（${masked}）` : '';
                     })()}
-                    ）。
+                    。
                   </div>
                 )}
               </div>
@@ -416,7 +412,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
       {!job || job.state !== 'running' ? (
         <div className="host-card" data-testid="host-install">
           <div className="host-head">
-            <span className="host-name">下载并安装 NapCat</span>
+            <span className="host-name">安装 NapCat</span>
           </div>
           <label className="host-msg">
             版本
@@ -468,14 +464,11 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
               disabled={busy !== ''}
               onClick={() => void install()}
             >
-              {busy === 'install' ? '开始中…' : '下载并安装'}
+              {busy === 'install' ? '安装中…' : '下载并安装'}
             </button>
             <button className="btn" data-testid="host-refresh" disabled={busy !== ''} onClick={() => void refresh()}>
-              刷新状态
+              刷新
             </button>
-          </div>
-          <div className="host-msg">
-            制品来自归档镜像（上游已清空），sha256 已钉死，校验不过会直接丢弃。
           </div>
         </div>
       ) : null}

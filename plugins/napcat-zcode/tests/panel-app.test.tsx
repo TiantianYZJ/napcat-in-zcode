@@ -341,12 +341,12 @@ describe('App 会话与消息流', () => {
     expect(screen.getByTestId('msg-a')).toBeTruthy();
   });
 
-  it('「含图」开关说明当前不下载媒体且不可用', async () => {
+  it('「含图」开关不可用（当前版本导出不下载媒体）', async () => {
     await mount();
     await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
     const cb = screen.getByTestId('filter-images') as HTMLInputElement;
     expect(cb.disabled).toBe(true);
-    expect(cb.closest('label')?.textContent).toContain('暂不下载');
+    expect(cb.closest('label')?.textContent).toContain('含图');
   });
 
   it('切换会话会清掉上一段残留的失败提示', async () => {

@@ -235,13 +235,13 @@ describe('B3：NapCat 在跑但没开 OneBot Server', () => {
 });
 
 describe('B4：什么都没找到', () => {
-  it('说「未检测到本机 NapCat」，且手填端点的表单仍在', async () => {
+  it('给出友好空态，且手填端点的表单仍在', async () => {
     await mount();
     await act(async () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     await waitFor(() => expect(screen.getByTestId('detect-notfound')).toBeTruthy());
-    expect(screen.getByTestId('detect-notfound').textContent).toContain('未检测到本机 NapCat');
+    expect(screen.getByTestId('detect-notfound').textContent).toContain('没有找到正在运行的 NapCat');
     // 表单不许被藏起来
     expect(screen.getByTestId('connect-btn')).toBeTruthy();
     expect(screen.getByPlaceholderText('http://127.0.0.1:3000 或 ws://127.0.0.1:3001')).toBeTruthy();
@@ -325,10 +325,10 @@ describe('B6：文案规则', () => {
     // 默认折叠（一行摘要），展开后逐条详情仍遵守「超时与其它失败分开说」
     fireEvent.click(screen.getByTestId('detect-failed-toggle'));
     const text = screen.getByTestId('detect-failed').textContent ?? '';
-    expect(text).toContain('目标无响应（超时）');
-    expect(text).toContain('连不上');
+    expect(text).toContain('连接超时');
+    expect(text).toContain('无法连接');
     // 两句不许合并成一句
-    expect(text).not.toContain('连不上或超时');
+    expect(text).not.toContain('超时或无法连接');
   });
 
   it('tokenRequired 只作角标，且不出现断言式「需要 access token」', async () => {
@@ -665,8 +665,8 @@ describe('N5：非超时失败的措辞要覆盖「连不上」与「被拒绝�
     await waitFor(() => expect(screen.getByTestId('detect-failed')).toBeTruthy());
     fireEvent.click(screen.getByTestId('detect-failed-toggle')); // 展开折叠的失败详情
     const text = screen.getByTestId('detect-failed').textContent ?? '';
-    expect(text).toContain('被拒绝');
-    expect(text).not.toContain('目标无响应'); // 非超时不许被说成超时
+    expect(text).toContain('无法连接');
+    expect(text).not.toContain('连接超时'); // 非超时不许被说成超时
   });
 });
 

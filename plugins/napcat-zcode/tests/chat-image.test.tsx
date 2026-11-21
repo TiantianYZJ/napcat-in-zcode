@@ -33,11 +33,12 @@ describe('ChatImage（聊天图片段）', () => {
     expect(screen.queryByTestId('msg-image-loading')).toBeNull();
   });
 
-  it('加载失败回退占位符（含原因），不渲染破图', async () => {
+  it('加载失败回退占位符（原因悬停可见），不渲染破图', async () => {
     mocks.readImage.mockRejectedValue(new Error('图片超过 8 MB，不予加载。'));
     render(<ChatImage url="https://x/big.png" />);
     const fallback = await screen.findByTestId('msg-image-failed');
-    expect(fallback.textContent).toContain('8 MB');
+    expect(fallback.textContent).toContain('图片未能加载');
+    expect(fallback.getAttribute('title')).toContain('8 MB');
     expect(document.querySelector('img')).toBeNull();
   });
 

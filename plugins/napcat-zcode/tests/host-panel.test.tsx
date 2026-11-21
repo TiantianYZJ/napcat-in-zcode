@@ -185,7 +185,7 @@ describe('HostPanel', () => {
     );
     render(<HostPanel />);
     const guide = await screen.findByTestId('host-login-guide');
-    expect(guide.textContent).toContain('还没有登录 QQ');
+    expect(guide.textContent).toContain('扫码登录 QQ');
     expect(guide.textContent).toContain('webui.json');
     // 掩码可展示、明文绝不出现
     expect(guide.textContent).not.toMatch(/webuiToken=|token:["']/i);
@@ -209,7 +209,7 @@ describe('HostPanel', () => {
     render(<HostPanel />);
     const openBtn = (await screen.findByTestId('guide-open-webui')) as HTMLButtonElement;
     expect(openBtn.disabled).toBe(true);
-    expect(openBtn.title).toContain('宿主不支持');
+    expect(openBtn.title).toContain('不支持打开网页');
     // 刷新按钮不受 openLinks 影响（用户手动确认登录后可以刷新）
     const refreshBtn = screen.getByTestId('guide-refresh') as HTMLButtonElement;
     expect(refreshBtn.disabled).toBe(false);

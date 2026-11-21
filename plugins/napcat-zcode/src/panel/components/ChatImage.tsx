@@ -45,8 +45,8 @@ export function ChatImage({ url }: { url: string }) {
   }
   if (failed) {
     return (
-      <div className="msg-img-fallback" data-testid="msg-image-failed">
-        [图片]（未能加载：{failed}）
+      <div className="msg-img-fallback" data-testid="msg-image-failed" title={failed}>
+        图片未能加载
       </div>
     );
   }

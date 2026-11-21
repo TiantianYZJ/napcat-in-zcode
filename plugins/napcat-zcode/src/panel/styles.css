@@ -607,26 +607,38 @@ textarea {
 .msggroup {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: 8px;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+/* 自己的消息组：整体靠右（原生气泡语言，对齐 ai-elements/message） */
+.msggroup.mine {
+  align-items: flex-end;
 }
 
 .msggroup .who {
   font-size: var(--text-ui-xs);
   color: var(--color-foreground-subtlest);
   padding: 0 2px 2px;
+  display: flex;
+  gap: 8px;
   font-variant-numeric: tabular-nums; /* 时间戳等宽排列，滚动时列不抖 */
 }
 
+/*
+ * 消息气泡（对齐 ai-elements/message 的规格）：
+ * 宽度随内容（w-fit）、不超过满宽；无边框，靠填充色分层；
+ * 自己的 = bg-secondary 右对齐，别人的 = surface 左对齐
+ */
 .msg {
-  display: block;
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   text-align: left;
-  padding: 7px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  border-top-left-radius: var(--radius-sm);
-  background: var(--color-card);
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
   color: var(--color-foreground);
   font-size: var(--text-ui-base);
   line-height: 1.55;
@@ -635,28 +647,31 @@ textarea {
   white-space: pre-wrap;
   transition:
     background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
 }
 
-/* 我的消息：ZCode 的 user-message-bubble 填充 + 同样的圆角层级 */
 .msg.mine {
-  background: var(--color-user-message-bubble);
+  background: var(--color-secondary);
 }
 
 .msg:hover {
-  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.msg.mine:hover {
+  background: var(--color-secondary);
+  box-shadow: var(--shadow-sm);
 }
 
 .msg:active {
   transform: scale(0.995);
 }
 
-/* 选中：accent 底 + 左边一道实心标尺（不用整圈描边） */
+/* 选中：外圈细描边 + 弱底，不抢内容 */
 .msg.sel {
   background: var(--color-accent);
-  border-color: var(--color-foreground-subtlest);
-  box-shadow: inset 2px 0 0 0 var(--color-foreground);
+  box-shadow: 0 0 0 1.5px var(--color-ring-primary);
 }
 
 .msg:focus-visible {
@@ -848,6 +863,35 @@ textarea {
   text-align: center;
   color: var(--color-foreground-subtle);
   font-size: var(--text-ui-sm);
+}
+
+.placeholder .desc {
+  color: var(--color-foreground-subtlest);
+  font-size: var(--text-ui-xs);
+}
+
+/* 空态（检测/宿主共用）：居中标题 + 引导行 */
+.empty-title {
+  font-size: var(--text-ui-sm);
+  font-weight: 500;
+  color: var(--color-foreground);
+}
+
+.empty-desc {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+}
+
+.section-desc {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  margin: -6px 0 4px;
+}
+
+.detect .detect-notfound {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 /* 连接失败的错误卡：标题 + 人话详情 + 动作行，比裸占位符可读 */
@@ -1225,6 +1269,26 @@ textarea {
 .host-card .host-warn {
   font-size: var(--text-ui-xs);
   color: var(--color-warning-surface-foreground);
+}
+
+/* 窄侧栏（可变宽度）的降级：事实网格单列、行卡按钮换行 */
+@media (max-width: 420px) {
+  .host-card .host-grid {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .host-card .host-grid .k {
+    margin-top: 4px;
+  }
+
+  .detect .detect-install {
+    flex-wrap: wrap;
+  }
+
+  .detect .detect-install .btn {
+    width: 100%;
+  }
 }
 
 @media (max-width: 380px) {
