@@ -617,6 +617,7 @@ npm run typecheck    # tsc --noEmit
 npm test             # vitest run（376 条）
 npm run build        # = build:server + build:panel
 npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
+npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只能推断的 NapCat 语义
 ```
 
 `npm run smoke` 跑两套**不依赖真实 QQ** 的端到端检查（单测全走 `InMemoryTransport`，覆盖不到这两层）：
@@ -627,6 +628,14 @@ npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面
 | `scripts/smoke-panel.mjs` | 把构建出的 `dist/ui/panel.html` 装进 DOM，由一个说 MCP-UI 协议的模拟宿主驱动：握手、会话列表、消息流、选择状态机（未打开会话 → 未选择消息 → 可点） |
 
 两个脚本都不连真实 QQ，跑完即退出（退出码 0 = 全通过）。
+
+`npm run verify:live` 需要**真实 NapCat 在跑**（见上文「配置 NapCat」），它会：
+
+1. 直连 OneBot 端点，**实测**三条此前只能靠推断的语义——`message_seq` 是独占还是包含边界、`count` 是否被守约、`message_seq=0` 的行为、以及语音段时长的真实字段名；
+2. 用构建产物把插件的完整工具链跑一遍（连真 NapCat → 拉真会话 → 拉真消息 → 游标翻页 → 注入文本 → 真实导出）；
+3. 打印一张结论表 + 一份 JSON 报告（落在临时目录）。
+
+导出落在临时 HOME，不污染用户真实导出目录。
 
 `npm run build` 的产物：
 

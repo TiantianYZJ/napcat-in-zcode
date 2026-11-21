@@ -12,7 +12,8 @@
     "build:panel": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "smoke": "node scripts/smoke-stdio.mjs && node scripts/smoke-panel.mjs"
+    "smoke": "node scripts/smoke-stdio.mjs && node scripts/smoke-panel.mjs",
+    "verify:live": "node scripts/verify-live-napcat.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
