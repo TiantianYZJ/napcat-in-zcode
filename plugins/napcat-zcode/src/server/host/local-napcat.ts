@@ -488,8 +488,19 @@ export function installPathsOf(installed: InstalledNapCat[]): string[] {
   return [...out];
 }
 
-/** 盘根枚举得到的候选根上限（防止某个盘根下有成百上千个带 `config` 的目录）。 */
+/** 盘根枚举得到的候选根上限（**每个盘各自计数**；防止某个盘根下有成百上千个带 `config` 的目录）。 */
 export const MAX_DISCOVERED_ROOTS = 32;
+/**
+ * 候选根的**总量闸门**（跨所有盘）。
+ *
+ * 与 `MAX_DISCOVERED_ROOTS`（每盘上限）的关系：
+ * `每盘上限 × 盘数` 仍然可能远超总量（Windows 最多 26 个盘），
+ * 所以**总量闸门是最终兜底**——它决定实际扫描多少个候选根。
+ *
+ * 生效的总量上限 = `min(每盘上限, 本常量)`；
+ * `每盘上限` 为 0 时（禁用盘根发现）本常量不参与。
+ */
+export const MAX_ROOTS_TOTAL = 64;
 /** 安装目录名像 NapCat 的判定（`*NapCat*` / `*NapCatQQ*`，忽略大小写）。 */
 const NAPCAT_DIR_NAME_RE = /napcat/i;
 
@@ -577,11 +588,16 @@ function resolveMaxRoots(value: unknown): number {
  *
  * 成本有界：每个盘根一次 `readdir` + 每个一级子目录一次 `stat`；**不做**全盘递归。
  *
- * **上限按盘各自计数**（不是跨盘全局）：`C:\` 上攒满候选根不该把 `D:\` 上的真机安装挤掉
- * （那是假阴性）。盘内顺序为「名字像 NapCat 的优先」，故每个盘的前 `maxRoots` 个里
- * 一定包含那个名字像 NapCat 的真安装。
+ * **两道闸门**：
+ * 1. **每盘上限**（`opts.maxRoots`，默认 `MAX_DISCOVERED_ROOTS`=32）：`C:\` 上攒满候选根不该把
+ *    `D:\` 上的真机安装挤掉（那是假阴性）。盘内顺序为「名字像 NapCat 的优先」，
+ *    故每个盘的前 `maxRoots` 个里一定包含那个名字像 NapCat 的真安装。
+ * 2. **总量闸门**（`MAX_ROOTS_TOTAL`=64，最终兜底）：`每盘上限 × 盘数` 仍可能远超总量。
  *
- * `opts.maxRoots` = 每个盘的候选根上限（`0` = **禁用盘根发现**）；`opts.driveRoots` 供测试注入。
+ * **填充方式：按盘轮转**——各盘的候选分组后，轮流从每个盘取一个。
+ * 若按「先把一个盘填满再填下一个」，第一个盘就能吃掉全部额度（那正是要避免的跨盘挤占）。
+ *
+ * `opts.maxRoots` = 每盘上限（`0` = **禁用盘根发现**）；`opts.driveRoots` 供测试注入。
  */
 export function discoverNapCatInstallRootsDetailed(
   platform: NodeJS.Platform = process.platform,
@@ -589,15 +605,33 @@ export function discoverNapCatInstallRootsDetailed(
 ): NapCatRootDiscovery {
   const maxRoots = resolveMaxRoots(opts.maxRoots);
   if (maxRoots === 0) return { roots: [], truncated: false }; // 0 = 禁用盘根发现
+  const totalLimit = Math.min(maxRoots, MAX_ROOTS_TOTAL);
   const drives = Array.isArray(opts.driveRoots) ? opts.driveRoots : napCatDriveRoots(platform);
-  const roots: string[] = [];
+
+  // ① 每盘收集候选（每盘不超过 maxRoots），按盘分组
+  const perDrive: string[][] = [];
   let truncated = false;
   for (const drive of drives) {
     if (!dirExists(drive)) continue;
     const candidates = napCatCandidateDirs(drive);
     if (candidates.length > maxRoots) truncated = true; // 这个盘触顶了 → 有安装可能被漏掉
-    for (const c of candidates.slice(0, maxRoots)) roots.push(c);
+    perDrive.push(candidates.slice(0, maxRoots));
   }
+
+  // ② 轮转填充：轮流从每个盘取一个，直到总量闸门或所有盘取完
+  const roots: string[] = [];
+  const maxPerDrive = perDrive.reduce((n, c) => Math.max(n, c.length), 0);
+  for (let i = 0; i < maxPerDrive && roots.length < totalLimit; i++) {
+    for (const candidates of perDrive) {
+      if (roots.length >= totalLimit) break;
+      if (i < candidates.length) roots.push(candidates[i]);
+    }
+  }
+
+  // ③ 触顶信号：还有候选没进来（总量闸门生效了）
+  const available = perDrive.reduce((n, c) => n + c.length, 0);
+  if (available > roots.length) truncated = true;
+
   return { roots, truncated };
 }
 

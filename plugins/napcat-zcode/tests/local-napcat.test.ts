@@ -21,6 +21,7 @@ import {
   MAX_DISCOVERED_ROOTS,
   MAX_ENDPOINTS_PER_INSTALL,
   MAX_ENDPOINTS_TOTAL,
+  MAX_ROOTS_TOTAL,
   napCatCandidateDirs,
   napCatDriveRoots,
   toInstallCandidates,
@@ -560,6 +561,52 @@ describe('drive root discovery', () => {
 
     expect(Array.isArray(roots)).toBe(true);
     expect(roots.every((r) => typeof r === 'string')).toBe(true);
+  });
+
+  it('caps the total number of roots across all drives', () => {
+    const drive = join(tmp, 'drive');
+    for (let i = 0; i < 70; i++) mkdirSync(join(drive, `NapCat${i}`, 'config'), { recursive: true });
+
+    // 每盘上限放大到 512（不触顶），但总量闸门是最终兜底 → 64
+    const hit = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [drive], maxRoots: 512 });
+    expect(hit.roots).toHaveLength(MAX_ROOTS_TOTAL);
+    expect(hit.roots).toHaveLength(64); // 故意写死数字，改常量必须同步改这里
+    // 总量闸门触顶 → 必须有信号
+    expect(hit.truncated).toBe(true);
+  });
+
+  it('fills the total budget round robin so no drive takes it all', () => {
+    const driveA = join(tmp, 'A');
+    const driveB = join(tmp, 'B');
+    const a0 = join(driveA, 'NapCatA0');
+    const a1 = join(driveA, 'NapCatA1');
+    const b0 = join(driveB, 'NapCatB0');
+    for (const d of [a0, a1, b0]) mkdirSync(join(d, 'config'), { recursive: true });
+
+    // 总量只够 2 个：A 盘有 2 个候选、B 盘有 1 个 → 轮转后 B 的那个必须在里面
+    const roots = discoverNapCatInstallRoots('linux', { driveRoots: [driveA, driveB], maxRoots: 2 });
+
+    expect(roots).toHaveLength(2);
+    expect(roots).toContain(b0);
+    // 轮转顺序：A 的第一个、B 的第一个（而不是 A 的两个）
+    expect(roots[0]).toBe(a0);
+    expect(roots[1]).toBe(b0);
+    expect(roots).not.toContain(a1);
+  });
+
+  it('reports truncation when only the total budget binds', () => {
+    const drive = join(tmp, 'drive');
+    for (let i = 0; i < 70; i++) mkdirSync(join(drive, `NapCat${i}`, 'config'), { recursive: true });
+
+    // 每盘上限 512（不触顶）→ 只有总量闸门生效
+    const hit = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [drive], maxRoots: 512 });
+    expect(hit.truncated).toBe(true);
+
+    // 全部放得下 → 不该报截断
+    const small = join(tmp, 'small');
+    mkdirSync(join(small, 'NapCat', 'config'), { recursive: true });
+    const ok = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [small], maxRoots: 512 });
+    expect(ok.truncated).toBe(false);
   });
 });
 
