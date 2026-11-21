@@ -1,15 +1,21 @@
 {
   "name": "napcat-zcode-market",
-  "owner": { "name": "TiantianYZJ" },
+  "owner": {
+    "name": "TiantianYZJ"
+  },
   "plugins": [
     {
       "name": "napcat-zcode",
       "source": "./plugins/napcat-zcode",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "Inject selected QQ chat records into ZCode context and save them as attachments via NapCat (OneBot 11).",
       "displayName": "Napcat in ZCode",
-      "displayName_i18n": { "zh-CN": "Napcat in ZCode" },
-      "description_i18n": { "zh-CN": "把选定的 QQ 聊天记录注入 ZCode 上下文，或保存为输入框附件，基于 NapCat（OneBot 11）。" },
+      "displayName_i18n": {
+        "zh-CN": "Napcat in ZCode"
+      },
+      "description_i18n": {
+        "zh-CN": "把选定的 QQ 聊天记录注入 ZCode 上下文，或保存为输入框附件，基于 NapCat（OneBot 11）。"
+      },
       "category": "productivity"
     }
   ]

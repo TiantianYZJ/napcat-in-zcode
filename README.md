@@ -78,25 +78,28 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 
 **M1 不提供 NapCat 本体。** 插件不会下载、安装或拉起 NapCat。
 
-### 方式一：本地目录市场（当前唯一可用路径）
+### 方式一：GitHub 市场（跨设备推荐）
 
-仓库根目录同时就是「市场清单根」（`marketplace.json`），所以可以直接作为本地目录市场添加：
+仓库根的 `marketplace.json` 是合法的市场清单，推到 GitHub 后即可按 GitHub 市场添加：
+
+1. ZCode → **插件市场** → **添加市场** → 填仓库地址 `TiantianYZJ/napcat-in-zcode`；
+2. 在市场里找到 **Napcat in ZCode**（插件名 `napcat-zcode`）→ **安装**；
+3. **重启会话**（面板的 `availability` 是 `session`，安装后需要新会话才出现）。
+
+目标机器**不需要预装 Node.js**：清单用 `command: "node"`，ZCode 会回退到内置的 Electron-as-Node 运行时
+（见下文「可移植性」）。
+
+### 方式二：本地目录市场
+
+仓库根目录同时就是「市场清单根」（`marketplace.json`），所以也可以直接作为本地目录市场添加：
 
 1. ZCode → **插件市场** → **添加本地市场**；
 2. 粘贴仓库根目录路径，例如 `D:/Develop/Napcat in ZCode`；
 3. 在市场里找到 **Napcat in ZCode**（插件名 `napcat-zcode`）→ **安装**；
-4. **重启会话**（面板的 `availability` 是 `session`，安装后需要新会话才出现）。
+4. **重启会话**。
 
 安装后侧栏会出现 **QQ 聊天记录** 面板（`ui.surfaces[0].id = "napcat-zcode"`，
 `title` 中英文分别为「QQ 聊天记录」/「QQ Chat Records」）。
-
-### 方式二：GitHub 市场
-
-仓库根有合法的 `marketplace.json`，推送到 GitHub 后可以直接按 GitHub 市场添加
-（添加时填 GitHub 仓库地址即可）：
-
-> **当前仓库没有配置远端**（`git remote` 为空），所以 M1 阶段实际可用的只有上面的本地目录市场。
-> 推送后：ZCode → **插件市场** → **添加市场** → 填 GitHub 仓库地址 → 安装 `napcat-zcode` → 重启会话。
 
 ### 验证安装
 
