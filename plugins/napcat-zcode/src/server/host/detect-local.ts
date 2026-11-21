@@ -464,19 +464,22 @@ export async function detectLocalWithInstalls(
     return unresponsive ? { ...f, unresponsive: true } : { ...f };
   });
   /**
-   * **降噪：活着的 HTTP 端口，它的 `ws://` 孪生端点不是候选。**
+   * **降噪：活着的 HTTP 端口，它的 `ws://` 孪生端点不进候选。**
    *
    * 降噪层只做 TCP 可达性检查 → `ws://127.0.0.1:3000` 打到 HTTP 服务时端口**确实在监听**
    * → 标成「可能需要 token」→ 进 `tokenRequired` → 面板把它列为带「使用这个」的候选。
    * 在默认路径上（NapCat HTTP 在 3000、WebUI 在 6099）用户会看到 3 个候选、其中 2 个是假的。
    *
    * 判定（**确定性的，不需要额外网络往返**）：同一 `host:port` 上，
-   * `http://` 变体**探测成功**（在 `live` 里）→ 该端口是 HTTP 服务，
-   * 它的 `ws://` 变体不是 WebSocket 服务 → 从候选里剔除。
+   * `http://` 变体**探测成功**（在 `live` 里）→ 该端口上的 `ws://` 变体
+   * **探测未通过** → 从候选里剔除。
    *
    * **取舍**：同一个端口**同时**跑 HTTP 与 WS（NapCat 默认分两个端口）时，
    * WS 变体会被一并剔除（假阴性）。这是刻意的：多一个假候选比少一个真候选更吵，
    * 而被剔除的那条**仍留在失败列表里**（用户看得见它、也拿得到完整错误）。
+   *
+   * ⚠️ 因此**不能**断言「该端口的 WebSocket 变体不是 WebSocket 服务」——
+   * 同端口双协议时它是合法的，只是探测没通过。notes 里只说「探测未通过 + 该候选不可用」。
    */
   const liveHttpKeys = new Set<string>();
   for (const l of redacted.live ?? []) {
@@ -557,7 +560,8 @@ export async function detectLocalWithInstalls(
   }
   if (notWebSocket.length > 0) {
     notes.push(
-      `同一端口的 HTTP 端点可用 → 其 WebSocket 变体不是 WebSocket 服务，已从候选中剔除：` +
+      `同一端口的 HTTP 端点可用 → 该端口上的 WebSocket 变体探测未通过（同端口双协议时可能被误剔），` +
+        `已从候选中剔除（该候选不可用）：` +
         notWebSocket.join('、'),
     );
   }

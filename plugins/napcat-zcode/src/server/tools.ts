@@ -752,8 +752,11 @@ export function registerTools(server: McpServer, state: AppState): void {
          * `autoDetect.paths` 是**本机绝对路径**（用户装 NapCat 的目录）。
          *
          * 它**不进工具返回值**：工具返回值会进 agent 的上下文，
-         * 本机目录结构不该外泄（B9：绝对路径只给用户看，不给模型看）。
-         * 只给**条数**——面板要显示「已配置 N 条」够用了。
+         * 本机目录结构不该外泄。
+         *
+         * 口径（B9）：**配置类返回值只给条数**（用户偏好项不进模型上下文）；
+         * **诊断类返回值里的绝对路径是溯源信息，只用于解释来源**。
+         * 这里属于配置类 → 只给**条数**——面板要显示「已配置 N 条」够用了。
          */
         const { paths: _localPaths, ...autoDetectRest } = cfg.autoDetect ?? {};
         const masked = {

@@ -14,7 +14,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 （NapCat 官方仓库已归档，可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release —— 见[已知限制](#已知限制与路线图)第 7 条。）
 
 > **当前状态（M2 已落地）**：外部 OneBot 端点（HTTP / WebSocket）路径与**本机 NapCat 自动探测**
-> （面板里的「检测本机 NapCat」）均已实现，有 554 条自动化测试覆盖。
+> （面板里的「检测本机 NapCat」）均已实现，有 571 条自动化测试覆盖。
 > 插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）**尚未实现**，
 > 详见[已知限制与路线图](#已知限制与路线图)。
 
@@ -477,7 +477,7 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 | `napcat_search_messages` | `{chatKind, chatId, query, startSeq?, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
 | `napcat_format_selection` | `{messages, chatName, maxChars?}` | `{text, count, truncated}`。`text` 首行恒为不可信声明；`count` 是**实际渲染进正文的条数**；`maxChars` 缺省取配置 |
 | `napcat_export` | `{chat, messages?, chatKind?, chatId?, fromSeq?, toSeq?, dir?, includeImages?, workspaceDir?}` | `{mdPath, jsonPath, gitignoreUpdated}` |
-| `napcat_get_config` | 无 | 当前配置；**token 设了时显示为 `***`、未设置时是空串**，端点按脱敏形态返回（去掉 query 与 userinfo） |
+| `napcat_get_config` | 无 | 当前配置；**token 设了时显示为 `***`、未设置时是空串**，端点按脱敏形态返回（去掉 query 与 userinfo）；**扫描路径只给条数**（`autoDetect.pathsCount`，不返回路径内容） |
 
 `napcat_export` 的细则：
 
@@ -505,13 +505,19 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 - **出参有上界**：候选端点、探测成功的端点（`live`）与扫描端口各最多展示 **20** 条，
   **完整计数写在 `notes` 里**；
 - **失败桶按来源裁剪**：每个来源最多展示 **5** 条失败候选，其余只给计数；
-- **HTTP 活端口的 `ws://` 孪生端点不是候选**：同一端口上的 HTTP 端点探测成功 →
-  它的 WebSocket 变体必然不是 WebSocket 服务 → 直接从候选里剔除（面板上少几个假候选）；
+- **HTTP 活端口的 `ws://` 孪生端点不进候选**：同一端口上的 HTTP 端点探测成功 →
+  该端口上的 WebSocket 变体**探测未通过**（同端口双协议时可能被误剔）→ 直接从候选里剔除
+  （面板上少几个假候选）；这条候选**不可用**；
 - **超时 ≠ 连不上**：超时的候选/失败条目标「目标无响应（超时）」，与「连不上或被拒绝」分开说；
 - `notes` 是人类可读说明（预算耗尽、被丢弃的非回环端点、多个 WebUI 端口、裁剪计数、
   **盘根发现生效上限**、安装发现的截断说明…），**原样读即可**，不要自己按数组长度重算数量。
-- ⚠️ 返回里**含本机绝对路径**（`installs[].configDir`、`scanned.paths`、`candidates[].detail`、
-  `droppedEndpoints[].detail`）——它们**只用于解释「这个端点是从哪来的」**，不要拿它做别的用途。
+- ⚠️ **本机绝对路径的给法**（统一口径）：
+  **配置类返回值只给条数**（用户偏好项不进模型上下文）；
+  **诊断类返回值里的绝对路径是溯源信息，只用于解释来源**。
+  具体说：`napcat_get_config` 属于配置类 → `autoDetect.paths` **不返回内容**，
+  只给条数 `autoDetect.pathsCount`；`napcat_detect_local` 属于诊断类 →
+  返回里**含本机绝对路径**（`installs[].configDir`、`scanned.paths`、`candidates[].detail`、
+  `droppedEndpoints[].detail`），它们**只用于解释「这个端点是从哪来的」**，不要拿它做别的用途。
 
 ---
 
@@ -594,6 +600,11 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
     避免第一个盘把额度吃光）；`maxRoots=0` 表示禁用盘根发现。
     触顶时面板会提示「可能漏掉某些 NapCat 安装目录」，并显示**生效上限**。
     装在**自定义目录**里的 NapCat，靠 `autoDetect.paths` 指定绝对路径最可靠。
+17. **同端口双协议会被误剔。** 同一个端口**同时**跑 HTTP 与 WS 时
+    （NapCat 默认 HTTP 与 WebSocket 分两个端口，所以正常不会踩到），
+    它的 `ws://` 变体会因为「同端口的 HTTP 探测成功」被**一并剔除** → 这条候选**不可用**。
+    这时候需要**手工填写** ws 端点（设置里直接填 `ws://host:port`），别指望自动探测把它列出来。
+    （被剔除的那条仍留在失败列表里，信息不丢。）
 
 ### 路线图
 
@@ -718,7 +729,7 @@ D:/Develop/Napcat in ZCode/
 │     ├─ src/
 │     │  ├─ server/                 # MCP server（stdio）
 │     │  │  ├─ index.ts             # 入口
-│     │  │  ├─ tools.ts             # 8 个工具的注册与实现
+│     │  │  ├─ tools.ts             # 9 个工具的注册与实现
 │     │  │  ├─ state.ts             # 运行期状态 / 端点校验 / 落盘
 │     │  │  ├─ config.ts            # 配置读写（config.json，0600，原子写）
 │     │  │  ├─ uiresource.ts        # ui://napcat-zcode/panel.html 资源
@@ -730,7 +741,7 @@ D:/Develop/Napcat in ZCode/
 │     ├─ dist/                      # 构建产物（随插件分发）
 │     │  ├─ server.mjs
 │     │  └─ ui/panel.html
-│     └─ tests/                     # vitest（554 条）
+│     └─ tests/                     # vitest（571 条 + 2 条平台相关跳过）
 ├─ docs/
 │  ├─ acceptance-m1.md              # M1 实机验收清单（+ M2 验收项）
 │  └─ superpowers/{plans,specs}/    # 计划与设计文档
@@ -744,7 +755,7 @@ D:/Develop/Napcat in ZCode/
 cd plugins/napcat-zcode
 npm install          # 首次
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run（554 条）
+npm test             # vitest run（571 条 + 2 条平台相关跳过）
 npm run build        # = build:server + build:panel
 npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
 npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只能推断的 NapCat 语义

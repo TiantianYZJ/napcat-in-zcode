@@ -11,7 +11,7 @@
 - 配套文档：[仓库根 README](../README.md)、[设计文档](superpowers/specs/2026-11-20-napcat-zcode-design.md)
 
 > **关于「实测」的边界**：本清单是给**人工**在真实 NapCat 上跑的。
-> 自动化部分（554 条 vitest）覆盖的是协议形状、配置读写、导出器与面板逻辑，
+> 自动化部分（571 条 vitest）覆盖的是协议形状、配置读写、导出器与面板逻辑，
 > **不覆盖**真实 NapCat 的 `message_seq` 边界语义 —— 那一项在 §5.12 单独列出。
 > §13 的 M2 验收项同样面向人工：自动化覆盖的是探测内核与面板文案，
 > **「真的找到本机 NapCat」这一步只能在装了 NapCat 的机器上验**。
@@ -532,9 +532,13 @@
       `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`
 - [ ] **13.8.2** 探测结论会出现在 `napcat_status` 的 `detection` 字段里（**缓存**：
       `napcat_status` 自己**不会**触发扫描）
-- [ ] **13.8.3** `installs[].configDir`、`scanned.paths`、`candidates[].detail`
-      与 `droppedEndpoints[].detail` 是**本机绝对路径**
-      （只用于解释「这个端点是从哪来的」）
+- [ ] **13.8.3** **口径**：**配置类返回值只给条数**（用户偏好项不进模型上下文）；
+      **诊断类返回值里的绝对路径是溯源信息，只用于解释来源**。
+      `napcat_detect_local` 属于诊断类 → `installs[].configDir`、`scanned.paths`、
+      `candidates[].detail` 与 `droppedEndpoints[].detail` 是**本机绝对路径**，
+      但**只用于解释「这个端点是从哪来的」**；
+      `napcat_get_config` 属于配置类 → `autoDetect.paths` **不返回内容**，
+      只给条数 `autoDetect.pathsCount`
 - [ ] **13.8.4** 探测**不扫描局域网**：安装配置里发现的非回环端点出现在 `droppedEndpoints`
       里（`reason: "nonLoopback"`），而不是被悄悄丢掉
 - [ ] **13.8.5** `napcat_configure` 的 `paths` 语义：**不传 = 不改**；传 `[]` = **清空**；
@@ -544,7 +548,7 @@
       `?access_token=` 悄悄抹掉）
 - [ ] **13.8.7** 同一端口的 `http://` 端点**探测成功**时，它的 `ws://` 孪生端点
       **不在候选里**（面板候选 = `live` + `tokenRequired`）：
-      端口上跑的是 HTTP 服务时，WS 变体必然不是 WebSocket 服务
+      该端口上的 WebSocket 变体**探测未通过**（同端口双协议时可能被误剔）→ 该候选**不可用**
 - [ ] **13.8.8** `notes` 里能看到**盘根发现的生效上限**（如「盘根发现生效上限 32 个候选根」）
       与安装发现的截断说明 —— 面板只渲染 `notes`，写在里面才看得见
 
