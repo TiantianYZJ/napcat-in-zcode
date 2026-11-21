@@ -13,7 +13,7 @@
 NapCat 与 QQ 始终是插件之外的独立进程。
 （NapCat 官方仓库已归档，可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release —— 见[已知限制](#已知限制与路线图)第 7 条。）
 
-> **M1 状态**：外部 OneBot 端点（HTTP / WebSocket）路径已实现并有 322 条自动化测试覆盖。
+> **M1 状态**：外部 OneBot 端点（HTTP / WebSocket）路径已实现并有 376 条自动化测试覆盖。
 > 本机 NapCat 自动探测（M2）、插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）
 > **尚未实现**，详见[已知限制与路线图](#已知限制与路线图)。
 
@@ -600,7 +600,7 @@ D:/Develop/Napcat in ZCode/
 │     ├─ dist/                      # 构建产物（随插件分发）
 │     │  ├─ server.mjs
 │     │  └─ ui/panel.html
-│     └─ tests/                     # vitest（322 条）
+│     └─ tests/                     # vitest（376 条）
 ├─ docs/
 │  ├─ acceptance-m1.md              # M1 实机验收清单
 │  └─ superpowers/{plans,specs}/    # 计划与设计文档
@@ -614,9 +614,19 @@ D:/Develop/Napcat in ZCode/
 cd plugins/napcat-zcode
 npm install          # 首次
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run（322 条）
+npm test             # vitest run（376 条）
 npm run build        # = build:server + build:panel
+npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
 ```
+
+`npm run smoke` 跑两套**不依赖真实 QQ** 的端到端检查（单测全走 `InMemoryTransport`，覆盖不到这两层）：
+
+| 脚本 | 检查什么 |
+|------|----------|
+| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：8 个工具的出入参契约、游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
+| `scripts/smoke-panel.mjs` | 把构建出的 `dist/ui/panel.html` 装进 DOM，由一个说 MCP-UI 协议的模拟宿主驱动：握手、会话列表、消息流、选择状态机（未打开会话 → 未选择消息 → 可点） |
+
+两个脚本都不连真实 QQ，跑完即退出（退出码 0 = 全通过）。
 
 `npm run build` 的产物：
 

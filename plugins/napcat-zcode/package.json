@@ -11,7 +11,8 @@
     "build:server": "node scripts/build-server.mjs",
     "build:panel": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke": "node scripts/smoke-stdio.mjs && node scripts/smoke-panel.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
