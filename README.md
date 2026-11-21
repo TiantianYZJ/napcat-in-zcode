@@ -373,7 +373,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 | 设置项 | 清单键 | 合法值 | 注入的环境变量 |
 |--------|--------|--------|----------------|
 | 导出目录 | `exportDir` | `user` / `workspace` | `NAPCAT_EXPORT_DIR` |
-| 包含图片 | `includeImages` | `true` / `false`（**只认小写**） | `NAPCAT_INCLUDE_IMAGES` |
+| 包含图片 | `includeImages` | `true` / `false` / `1` / `0` / `yes` / `no` / `on` / `off`（**大小写不敏感**） | `NAPCAT_INCLUDE_IMAGES` |
 
 两项在清单里的 `default` 都是**空串**。
 

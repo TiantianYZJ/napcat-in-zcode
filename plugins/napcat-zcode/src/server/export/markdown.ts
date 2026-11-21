@@ -1,6 +1,6 @@
 import { segmentsText } from '../model/message.js';
 import { UNTRUSTED_NOTICE } from '../model/notice.js';
-import type { ChatRef, Message, Segment } from '../model/types.js';
+import { hasValidTime, type ChatRef, type Message, type Segment } from '../model/types.js';
 
 function two(n: number): string { return String(n).padStart(2, '0'); }
 
@@ -100,7 +100,14 @@ function segmentText(s: Segment): string {
 export function renderMarkdown(messages: Message[], chat: ChatRef): string {
   const out: string[] = [`# ${flatten(chat.name ?? '')}`, '', UNTRUSTED_NOTICE, ''];
   let lastDay = '';
+  /** 真正渲染出去的条数（跳过无有效时间的消息后）。 */
+  let rendered = 0;
+  /** 因为没有有效时间而被跳过的条数（不静默丢，尾注里如实写出）。 */
+  let skipped = 0;
   for (const m of messages) {
+    // 没有有效时间的消息**跳过**：日分隔与 `[HH:mm]` 都依赖它，
+    // 硬渲染会产出 `## NaN-NaN-NaN` 与 `[NaN:NaN]` 这种假信息。
+    if (!hasValidTime(m)) { skipped++; continue; }
     const day = ymd(m.time);
     if (day !== lastDay) { out.push(`## ${day}`, ''); lastDay = day; }
     const body = (m.segments ?? []).map(segmentText).join('');
@@ -108,7 +115,9 @@ export function renderMarkdown(messages: Message[], chat: ChatRef): string {
     const preview = m.replyTo ? flatten(m.replyTo.preview ?? '') : '';
     if (preview) out.push(`> ${preview}`);
     out.push(`[${hm(m.time)}] ${flatten(m.senderName ?? '')}：${body}`);
+    rendered++;
   }
-  out.push('', `> 导出时间：${fullDate(Math.floor(Date.now() / 1000))} (${utcOffsetLabel(new Date())}) · 共 ${messages.length} 条`);
+  const skipNote = skipped > 0 ? `（另有 ${skipped} 条缺少有效时间，未渲染）` : '';
+  out.push('', `> 导出时间：${fullDate(Math.floor(Date.now() / 1000))} (${utcOffsetLabel(new Date())}) · 共 ${rendered} 条${skipNote}`);
   return out.join('\n') + '\n';
 }

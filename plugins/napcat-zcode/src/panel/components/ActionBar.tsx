@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, bridge, type Chat, type Msg } from '../api.js';
 import type { HostCaps } from '../bridge.js';
+// 只取类型（`import type` 会被编译期抹掉）→ 不会与 App.tsx 形成运行期循环依赖。
+import type { Phase } from '../App.js';
 import { hm } from './MessageList.js';
 
 /**
@@ -53,7 +55,7 @@ export function disabledReason(
   cap: keyof HostCaps,
   method: string,
   caps: HostCaps,
-  phase: string,
+  phase: Phase,
   precondition = '',
 ): string {
   if (phase === 'init') return '正在连接宿主…（握手未完成）';
@@ -157,7 +159,7 @@ export function ActionBar({
   /** 抛提示（字符串或带「复制」入口的结构化提示）。 */
   setNotice: (s: string | Notice) => void;
   /** 面板相位（`init` / `unconfigured` / `error` / `ready`）——决定按钮不可用的措辞。 */
-  phase?: string;
+  phase?: Phase;
   /**
    * 配置里的导出目的地（跟随 `export.dir`）。
    *

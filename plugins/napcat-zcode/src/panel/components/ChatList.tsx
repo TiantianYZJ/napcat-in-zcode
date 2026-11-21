@@ -22,7 +22,9 @@ export function ChatList({
   const row = (c: Chat) => (
     <div
       key={c.kind + c.id}
-      data-testid={`chat-${c.id}`}
+      // testid 带 **kind**：群与好友的 id 是两套编号空间，数值可以完全相同
+      // （群 123 与好友 123）。只写 id 会让选择器命中两个元素（测试与自动化都拿不准）。
+      data-testid={`chat-${c.kind}-${c.id}`}
       data-kind={c.kind}
       className={`chat ${active?.id === c.id && active?.kind === c.kind ? 'on' : ''}`}
       onClick={() => onOpen(c)}

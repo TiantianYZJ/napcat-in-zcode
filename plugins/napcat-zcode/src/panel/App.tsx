@@ -321,20 +321,37 @@ export function App() {
   }, [messages, query, sender, range]);
 
   /**
+   * 能进消息列表的消息：时间可信 **且** 有可区分的键。
+   *
+   * - 没有有效时间的消息渲染出来是 `NaN:NaN`（假时间戳），不能进列表；
+   * - 没有稳定键的消息（既无 id、又无 seq、连时间都不可信）无法与别的消息区分，
+   *   渲染出来只能共用一个 key → 选中态会串成一片。
+   *
+   * 两条都是在**渲染层**挡掉，数据本身仍留在 `messages` 里（导出/搜索不受影响）。
+   */
+  const renderable = useMemo(
+    () => filtered.filter((m) => Number.isFinite(m.time) && msgKey(m) !== null),
+    [filtered],
+  );
+
+  /**
    * 渲染上限：超出只渲染**最近** RENDER_CAP 条（更早的仍在 `messages` 里，
    * 导出/搜索照样能处理）。
    */
-  const capped = filtered.length > RENDER_CAP;
+  const capped = renderable.length > RENDER_CAP;
   const visible = useMemo(
-    () => (capped ? filtered.slice(filtered.length - RENDER_CAP) : filtered),
-    [capped, filtered],
+    () => (capped ? renderable.slice(renderable.length - RENDER_CAP) : renderable),
+    [capped, renderable],
   );
 
   useEffect(() => {
-    orderRef.current = visible.map((m) => msgKey(m));
+    orderRef.current = visible.map((m) => msgKey(m) ?? '');
   }, [visible]);
 
-  const selected = useMemo(() => messages.filter((m) => selection.has(msgKey(m))), [messages, selection]);
+  const selected = useMemo(
+    () => messages.filter((m) => selection.has(msgKey(m) ?? '')),
+    [messages, selection],
+  );
 
   /**
    * 选择规则：单击单选、Shift 连选（按可见列表序）、Ctrl/Cmd 点选。

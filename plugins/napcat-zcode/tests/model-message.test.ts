@@ -259,4 +259,88 @@ describe('normalizeMessage', () => {
     expect(segmentsText([{ kind: 'at', qq: '10001', name: '' }])).toBe('@10001');
     expect(segmentsText([{ kind: 'at', qq: '10001' }])).toBe('@10001');
   });
+
+  // M1.1-3：seq / time 也走 toNum —— 非数值字符串不再得到 NaN。
+  // NaN 会一路传染到排序、游标比较、去重键与时间渲染。
+  it('never produces NaN for a non-numeric seq or time', () => {
+    const raw: OB11Message = {
+      message_id: 13,
+      message_seq: 'not-a-number' as unknown as number,
+      time: 'not-a-number' as unknown as number,
+      sender: { user_id: 13, nickname: 'Mallory' },
+      message: [{ type: 'text', data: { text: 'hi' } }],
+    };
+    const m = normalizeMessage(raw);
+    expect(Number.isNaN(m.seq)).toBe(false);
+    expect(m.seq).toBe(0); // 没有可用的 message_seq → 没有游标（0），不是 NaN
+    expect(m.time).toBeUndefined(); // 没有有效时间 → undefined（不是 NaN，也不是假的 epoch 0）
+  });
+
+  it('keeps numeric strings as numbers and drops a missing time', () => {
+    const raw: OB11Message = {
+      message_id: 14,
+      message_seq: '77' as unknown as number,
+      time: '1700000099' as unknown as number,
+      sender: { user_id: 14, nickname: 'Nina' },
+      message: [{ type: 'text', data: { text: 'hi' } }],
+    };
+    const m = normalizeMessage(raw);
+    expect(m.seq).toBe(77);
+    expect(m.time).toBe(1700000099);
+
+    const noTime = normalizeMessage({
+      message_id: 15,
+      message_seq: 78,
+      sender: { user_id: 15, nickname: 'Owen' },
+      message: [{ type: 'text', data: { text: 'hi' } }],
+    } as OB11Message);
+    expect(noTime.time).toBeUndefined();
+  });
+
+  // M1.1-4：record 段的 `time` 字段可能装的是**绝对时间戳**（epoch 秒），
+  // 那样算出来的「时长」是几百万秒 —— 一眼假的数字。
+  it('only treats a record time below one hour as a duration', () => {
+    const base = {
+      message_id: 16,
+      message_seq: 79,
+      time: 1700000012,
+      sender: { user_id: 16, nickname: 'Paul' },
+    };
+    const short = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '7' } }] });
+    expect(short.segments[0]).toEqual({ kind: 'voice', duration: 7 });
+
+    const exactly = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '3600' } }] });
+    expect(exactly.segments[0]).toEqual({ kind: 'voice', duration: undefined });
+
+    const timestamp = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '1700000000' } }] });
+    expect(timestamp.segments[0]).toEqual({ kind: 'voice', duration: undefined });
+
+    // seconds / duration 是明确的时长字段名 → 不受这个上限影响
+    const explicit = normalizeMessage({ ...base, message: [{ type: 'record', data: { seconds: '7200' } }] });
+    expect(explicit.segments[0]).toEqual({ kind: 'voice', duration: 7200 });
+  });
+
+  // M1.1-5：段数组路径的 text 段也要还原 CQ 转义（与 CQ 路径口径一致）。
+  // 同一条消息因 NapCat 交付形态不同而残留不同的转义 → 搜索与导出表现不一致。
+  it('unescapes CQ escapes in the segment-array path too', () => {
+    const asSegments = normalizeMessage({
+      message_id: 17,
+      message_seq: 80,
+      time: 1700000013,
+      sender: { user_id: 17, nickname: 'Quinn' },
+      message: [{ type: 'text', data: { text: 'AT&amp;T &#91;括号&#93; &#44;' } }],
+    });
+    expect(asSegments.text).toBe('AT&T [括号] ,');
+    expect(asSegments.segments).toEqual([{ kind: 'text', text: 'AT&T [括号] ,' }]);
+
+    // 同一段内容走 CQ 路径必须得到**逐字相同**的结果
+    const asCq = normalizeMessage({
+      message_id: 18,
+      message_seq: 81,
+      time: 1700000014,
+      sender: { user_id: 18, nickname: 'Quinn' },
+      message: 'AT&amp;T &#91;括号&#93; &#44;',
+    });
+    expect(asCq.text).toBe(asSegments.text);
+  });
 });

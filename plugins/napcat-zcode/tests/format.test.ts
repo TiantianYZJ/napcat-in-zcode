@@ -133,4 +133,36 @@ describe('formatSelection', () => {
     const r = formatSelection([longMsg(1, body)], { chatName: 'G' });
     expect(r.text).toContain(body);
   });
+
+  // M1.1-2：time 缺失/非有限的消息**跳过**，并如实报出跳过了几条。
+  // 以前直接拿 m.time 渲染 → `NaN-NaN-NaN`（模型看到的是一行假时间戳）。
+  it('skips messages without a valid time and reports how many were skipped', () => {
+    const noTime = { ...msg({}), time: undefined } as unknown as Message;
+    const nanTime = { ...msg({}), time: Number.NaN } as unknown as Message;
+    const r = formatSelection([msg({ seq: 1 }), noTime, nanTime], { chatName: 'G' });
+    expect(r.count).toBe(1);
+    expect(r.text).toContain('跳过 2 条');
+    // 绝不产出 NaN 字样
+    expect(r.text).not.toContain('NaN');
+    expect(r.text).toContain('[12:00] A：hi');
+  });
+
+  // M1.1-2：全部消息都没有有效时间 → 空注入体也要说清楚「跳过了几条」，不能装作是空选区。
+  it('reports the skipped count even when every message is skipped', () => {
+    const broken = { ...msg({}), time: Number.NaN } as unknown as Message;
+    const r = formatSelection([broken], { chatName: 'G' });
+    expect(r.count).toBe(0);
+    expect(r.text).toContain('（0 条）');
+    expect(r.text).toContain('跳过 1 条');
+    expect(r.text).not.toContain('NaN');
+  });
+
+  // M1.1-2：replyTo 缺 preview 是常见形态（只给了被回复的 id）→ 视为空串，不抛。
+  it('treats a missing reply preview as an empty string', () => {
+    const noPreview = { ...msg({}), replyTo: { messageId: '1' } } as unknown as Message;
+    const r = formatSelection([noPreview], { chatName: 'G' });
+    expect(r.count).toBe(1);
+    expect(r.text).toContain('[12:00] A：hi');
+    expect(r.text).not.toContain('undefined');
+  });
 });

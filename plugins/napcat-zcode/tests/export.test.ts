@@ -15,11 +15,15 @@ import type { ChatRef, Message } from '../src/server/model/types.js';
  *
  * 顺带**记录**每次 write/mkdir 的选项：权限位（MF-4）在 Windows 上无法从 `stat` 观察到
  * （那里没有 POSIX mode），但「写盘时传了什么 mode」是跨平台可断言的。
+ *
+ * 另外记录 readFileSync 的调用路径：M1.1 起既有导出 JSON **不再被整读**
+ * （只读头部若干 KB），这条断言就是那个性能约束的承重用例。
  */
 const fsState = vi.hoisted(() => ({
   failJsonWrite: false,
   writes: [] as Array<{ path: string; options: any }>,
   mkdirs: [] as Array<{ path: string; options: any }>,
+  reads: [] as string[],
 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -35,6 +39,10 @@ vi.mock('node:fs', async (importOriginal) => {
         throw new Error('EACCES: permission denied');
       }
       return actual.writeFileSync(path, data, options);
+    },
+    readFileSync: (path: any, ...rest: any[]) => {
+      fsState.reads.push(String(path));
+      return (actual.readFileSync as any)(path, ...rest);
     },
   };
 });
@@ -65,6 +73,7 @@ beforeEach(() => {
   fsState.failJsonWrite = false;
   fsState.writes.length = 0;
   fsState.mkdirs.length = 0;
+  fsState.reads.length = 0;
 });
 afterEach(() => { fsState.failJsonWrite = false; rmSync(tmp, { recursive: true, force: true }); });
 
@@ -471,6 +480,69 @@ describe('exportSelection · 同名会话消歧（I1）', () => {
     const c = await exportSelection({ messages: MSGS, chat: { kind: 'group', id: '222', name: '产品群' }, dir: 'abs', absPath: dir });
     expect(c.mdPath).toContain(`${base}_222_2`);
     expect(JSON.parse(readFileSync(c.jsonPath, 'utf-8')).chat.id).toBe('222');
+  });
+
+  // M1.1-1：群与好友的 id 是两套编号空间，**数值可以完全相同**（群 123 与好友 123）。
+  // 只比 id 的话，两者同名同 id 时会互相覆盖 → 内容错配 + 静默数据丢失。
+  it('群与好友同 id 同名 → 产出两个不同文件，互不覆盖', async () => {
+    const dir = join(tmp, 'out');
+    const g = await exportSelection({ messages: MSGS, chat: { kind: 'group', id: '123', name: '产品群' }, dir: 'abs', absPath: dir });
+    const f = await exportSelection({ messages: MSGS, chat: { kind: 'friend', id: '123', name: '产品群' }, dir: 'abs', absPath: dir });
+    expect(f.mdPath).not.toBe(g.mdPath);
+    expect(f.jsonPath).not.toBe(g.jsonPath);
+    expect(existsSync(g.mdPath)).toBe(true);
+    expect(existsSync(f.mdPath)).toBe(true);
+    // 各自的内容归属正确：群那份没被好友那份改写（也没有反过来）
+    expect(JSON.parse(readFileSync(g.jsonPath, 'utf-8')).chat).toEqual({ kind: 'group', id: '123', name: '产品群' });
+    expect(JSON.parse(readFileSync(f.jsonPath, 'utf-8')).chat).toEqual({ kind: 'friend', id: '123', name: '产品群' });
+  });
+
+  // M1.1-1：老版本导出的 JSON 里没有 kind → 按「id 相同即同一会话」处理（向后兼容，
+  // 不能因为升级就给用户凭空多出一堆重复文件）。
+  it('既有导出没有 kind 字段时按 id 相同视为同一会话（老版本兼容，原地覆盖）', async () => {
+    const dir = join(tmp, 'out');
+    const base = exportBaseName(CHAT, MSGS);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${base}.json`), JSON.stringify({ chat: { id: '123' }, count: 0, messages: [] }));
+    const r = await exportSelection({ messages: MSGS, chat: { kind: 'group', id: '123', name: '产品群' }, dir: 'abs', absPath: dir });
+    expect(r.jsonPath).toBe(join(dir, `${base}.json`)); // 没有多出 _123 后缀
+    expect(JSON.parse(readFileSync(r.jsonPath, 'utf-8')).chat.kind).toBe('group');
+  });
+
+  // M1.1-11：既有导出 JSON 不再被整读 + JSON.parse（只读头部若干 KB）。
+  it('既有导出 JSON 只读头部，不再被整读进内存', async () => {
+    const dir = join(tmp, 'out');
+    const base = exportBaseName(CHAT, MSGS);
+    mkdirSync(dir, { recursive: true });
+    const big = JSON.stringify({
+      chat: { kind: 'group', id: '999', name: '产品群' },
+      count: 1,
+      messages: Array.from({ length: 5000 }, (_, i) => ({ id: String(i), seq: i, time: 1700000000, text: 'x'.repeat(200) })),
+    });
+    writeFileSync(join(dir, `${base}.json`), big);
+    const r = await exportSelection({ messages: MSGS, chat: { kind: 'group', id: '123', name: '产品群' }, dir: 'abs', absPath: dir });
+    // 消歧仍然生效（读到了头部里的 chat.id=999 → 不是同一个会话 → 加 id 后缀）
+    expect(r.jsonPath).toBe(join(dir, `${base}_123.json`));
+    // 关键断言：既有导出 JSON 没有被 readFileSync 整读
+    expect(fsState.reads.some((p) => p === join(dir, `${base}.json`))).toBe(false);
+  });
+
+  // M1.1-12：json 写失败时错误信息要带上路径（用户才知道是哪个文件没写成）。
+  it('json 写失败的错误信息里带上出错的路径', async () => {
+    const dir = join(tmp, 'out');
+    const base = exportBaseName(CHAT, MSGS);
+    fsState.failJsonWrite = true;
+    await expect(exportSelection({ messages: MSGS, chat: CHAT, dir: 'abs', absPath: dir }))
+      .rejects.toThrow(new RegExp(`export failed writing json .*${base}\\.json`));
+  });
+
+  // 会话名是用户可控的：名字里带花括号时，读既有导出 JSON 的「头部」仍要认得出会话。
+  it('会话名里带花括号也能认出既有导出属于同一会话', async () => {
+    const dir = join(tmp, 'out');
+    const chat = { kind: 'group' as const, id: '123', name: '群{1}测试' };
+    const first = await exportSelection({ messages: MSGS, chat, dir: 'abs', absPath: dir });
+    const second = await exportSelection({ messages: MSGS, chat, dir: 'abs', absPath: dir });
+    expect(second.jsonPath).toBe(first.jsonPath); // 同一会话 → 原地覆盖，不多出后缀文件
   });
 });
 

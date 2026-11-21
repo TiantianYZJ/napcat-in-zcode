@@ -169,3 +169,34 @@ describe('api 工具封装', () => {
     expect(host.callTool).not.toHaveBeenCalled();
   });
 });
+
+// M1.1-8：msgKey 退化时必须**带上可区分信息**，实在区分不了就返回 null（调用方跳过该条）。
+// 以前退化成 `seq:0`：多条「既无 message_id 又无 message_seq」的消息共用同一个 key
+// → React 重复 key、选中态串成一片、testid 撞车。
+describe('msgKey 的退化形态', () => {
+  const base = { id: 'x', seq: 1, time: 1700000000, senderId: '1', senderName: 'A', segments: [], text: '' };
+
+  it('有消息 id 时用 id', () => {
+    expect(mod.msgKey(base)).toBe('x');
+  });
+
+  it('没有 id 时退回 seq + time（s 命名空间与去重键同构）', () => {
+    expect(mod.msgKey({ ...base, id: '' })).toBe('s1@1700000000');
+  });
+
+  it('既没有 id 也没有有效 seq 时退回时间', () => {
+    expect(mod.msgKey({ ...base, id: '', seq: 0 })).toBe('t1700000000');
+  });
+
+  it('什么都区分不了时返回 null（调用方跳过该条，而不是共用一个 key）', () => {
+    expect(mod.msgKey({ ...base, id: '', seq: 0, time: Number.NaN })).toBeNull();
+  });
+
+  it('多条既无 id 又无 seq 的消息不会共用同一个 key', () => {
+    const a = mod.msgKey({ ...base, id: '', seq: 0, time: 1700000000 });
+    const b = mod.msgKey({ ...base, id: '', seq: 0, time: 1700000001 });
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toBe(b);
+  });
+});

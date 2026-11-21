@@ -249,27 +249,45 @@ return async n => {
 
 ### 6.2 宿主怎么给「另存为」对话框取建议文件名
 
+二进制里的**原文**（压缩后的 `app.asar`，逐字照抄）：
+
 ```js
-function Gye(uri) { return (uri.split(/[?#]/)[0] ?? '').split('/').filter(Boolean).at(-1) ?? ''; }  // uri 最后一段
-function Kye(name) { return name.replace(/[\\/\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim().slice(0, 120); }
-function x_({ name, uri, mimeType }, idx) {
-  const n = Kye(name?.trim() || (uri ? Gye(uri) : '') || `download-${idx+1}`);
-  const ext = EXT_BY_MIME[mimeType ?? ''];
-  return ext && !/\.[A-Za-z0-9]{1,8}$/.test(n) ? `${n}.${ext}` : n;
-}
+function Gye(e){let t=(e.split(/[?#]/)[0]??``).split(`/`).filter(Boolean).at(-1)??``;try{return decodeURIComponent(t)}catch{return t}}
+function Kye(e){return e.replace(/[\\/\u0000-\u001f]/g,`_`).replace(/^\.+/,``).trim().slice(0,120)}
+function x_(e,t){let n=Kye(e.name?.trim()||(e.uri?Gye(e.uri):``)||`download-${t+1}`),r=Uye[Wye(e.mimeType)??``];return r&&!/\.[A-Za-z0-9]{1,8}$/.test(n)?`${n}.${r}`:n}
 ```
 
-即：**建议文件名 = 内嵌资源 `uri` 的最后一段（URL 解码后）**，必要时按 mimeType 补扩展名。
+（上面三行是**未改写**的原文；此前的引文把 `Gye` 里的 `decodeURIComponent` 与 try/catch
+省略了 —— 那两处正是「uri 最后一段要做 URL 解码」的依据，不能省。）
+
+即：**建议文件名 = 内嵌资源 `uri` 的最后一段（URL 解码后；解码失败则用原样）**，
+必要时按 mimeType 补扩展名。
 （协议的内嵌资源 schema 里没有 `name` 字段，所以走 `uri` 这条路。）
 桥用的 `uri` 是 `ui://napcat-zcode/<encodeURIComponent(filename)>` → 解码后正好是原文件名。✓
 
 ### 6.3 复核命令
 
+⚠️ **同名定义**：整个 `app.asar` 里 `function Gye` 一共出现 3 处
+（`grep -a -b -o 'function Gye' app.asar`）：
+
+| # | 字节偏移 | 是什么 | 与本节的关系 |
+| --- | --- | --- | --- |
+| 1 | ~229431889 | TypeScript 编译器 bundle 里的 `binarySearch` | **无关** |
+| 2 | ~318521712 | `readPositiveInt`（`i(Gye,"readPositiveInt")`） | **无关** |
+| 3 | ~368377890 | uri 最后一段（本节这个） | ✅ **正确的就是第 3 个** |
+
+旧的复核命令 `grep -a -o 'function Gye(e){.\{0,700\}' app.asar | head -2` 只命中 **2 处**
+（第 2、3 个 —— 第 1 个的形参是 `(t,e,r)`），而且**先命中的是无关的那个**（`readPositiveInt`）。
+下面的命令改用**函数体特征**（`Gye(e){let t=`）作锚点，只会命中正确的那一处：
+
 ```bash
 cd /d/ZCode/resources
 grep -a -o 'saveFile({data:.\{0,200\}' app.asar | head -3
 grep -a -o '.\{600\}saveFile({data:n,suggestedName:o}).\{0,80\}' app.asar | head -2
-grep -a -o 'function Gye(e){.\{0,700\}' app.asar | head -2
+# 正确的那处 Gye（函数体特征锚定）：命中 1 条
+grep -a -o 'function Gye(e){let t=.\{0,240\}' app.asar
+# 同名的其它定义（对照用，命中 3 条）
+grep -a -b -o 'function Gye' app.asar
 ```
 
 ---
@@ -327,5 +345,7 @@ grep -a -o -m 4 '.\{300\}serverTools:{.\{0,300\}' app.asar
 # 宿主侧的 ui/download-file 处理器（§6.1 的实测来源）
 grep -a -o 'saveFile({data:.\{0,200\}' app.asar | head -3
 grep -a -o '.\{600\}saveFile({data:n,suggestedName:o}).\{0,80\}' app.asar | head -2
-grep -a -o 'function Gye(e){.\{0,700\}' app.asar | head -2
+# 建议文件名的取名函数（§6.2）：用函数体特征锚定，避开同名的另外两个定义
+grep -a -o 'function Gye(e){let t=.\{0,240\}' app.asar
+grep -a -b -o 'function Gye' app.asar   # 同名定义共 3 处，正确的是最后一处
 ```

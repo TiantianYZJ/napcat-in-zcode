@@ -208,8 +208,8 @@ describe('App 能力降级', () => {
       exhausted: false,
     });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
     fireEvent.click(screen.getByTestId('msg-a'));
     await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
@@ -274,9 +274,9 @@ describe('App 会话与消息流', () => {
       });
 
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
 
-    fireEvent.click(screen.getByTestId('chat-1'));
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(2));
 
     fireEvent.click(screen.getByTestId('load-older'));
@@ -296,8 +296,8 @@ describe('App 会话与消息流', () => {
       exhausted: false,
     });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(1));
     mock.getHistory.mockResolvedValueOnce({ messages: [], nextBeforeSeq: null, exhausted: true });
     fireEvent.click(screen.getByTestId('load-older'));
@@ -308,8 +308,8 @@ describe('App 会话与消息流', () => {
     const many = Array.from({ length: 2100 }, (_, i) => msg(`m${i}`, i + 1, 1000 + i));
     mock.getHistory.mockResolvedValueOnce({ messages: many, nextBeforeSeq: 1, exhausted: false });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('cap-note')).toBeTruthy());
     expect(screen.getByTestId('cap-note').textContent).toContain('2000');
     expect(screen.getAllByTestId(/^msg-/)).toHaveLength(2000);
@@ -325,8 +325,8 @@ describe('App 会话与消息流', () => {
       exhausted: false,
     });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(2));
     fireEvent.change(screen.getByTestId('filter-query'), { target: { value: '场地' } });
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(1));
@@ -344,8 +344,8 @@ describe('App 会话与消息流', () => {
   it('切换会话会清掉上一段残留的失败提示', async () => {
     mock.getHistory.mockRejectedValueOnce(new Error('拉取历史失败'));
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('toast')).toBeTruthy());
     expect(screen.getByTestId('toast').textContent).toContain('拉取历史失败');
 
@@ -354,9 +354,25 @@ describe('App 会话与消息流', () => {
       nextBeforeSeq: 9,
       exhausted: false,
     });
-    fireEvent.click(screen.getByTestId('chat-2'));
+    fireEvent.click(screen.getByTestId('chat-friend-2'));
     await waitFor(() => expect(screen.getByTestId('msg-z')).toBeTruthy());
     expect(screen.queryByTestId('toast')).toBeNull();
+  });
+
+  // M1.1-10：群与好友的 id 是两套编号空间，数值可以完全相同。
+  // 旧的 testid `chat-1` 会同时命中两个元素（选择器拿不准是哪一个）。
+  it('群与好友 id 相同时会话项的 testid 不撞车', async () => {
+    mock.listChats.mockImplementation(async (kind: string) =>
+      kind === 'group'
+        ? { chats: [{ kind: 'group', id: '1', name: '产品群' }] }
+        : { chats: [{ kind: 'friend', id: '1', name: '张三' }] },
+    );
+    await mount();
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    expect(screen.getByTestId('chat-friend-1')).toBeTruthy();
+    // 各自只命中一个元素
+    expect(screen.getAllByTestId('chat-group-1')).toHaveLength(1);
+    expect(screen.getAllByTestId('chat-friend-1')).toHaveLength(1);
   });
 });
 
@@ -371,8 +387,8 @@ describe('App 选择规则', () => {
 
   it('单击单选、Shift 连选、Ctrl 点选', async () => {
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(3));
 
     // 单击 → 单选
@@ -390,8 +406,8 @@ describe('App 选择规则', () => {
 
   it('切换会话会清空上一段的选择', async () => {
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/).length).toBeGreaterThan(0));
     fireEvent.click(screen.getByTestId('msg-a'));
     await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
@@ -401,15 +417,15 @@ describe('App 选择规则', () => {
       nextBeforeSeq: 9,
       exhausted: false,
     });
-    fireEvent.click(screen.getByTestId('chat-2'));
+    fireEvent.click(screen.getByTestId('chat-friend-2'));
     await waitFor(() => expect(screen.getByTestId('msg-z')).toBeTruthy());
     expect(screen.getByTestId('sel-count').textContent).toContain('已选 0 条');
   });
 
   it('拖拽划选：按住并划过其它消息 → 选中区间', async () => {
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(3));
 
     fireEvent.mouseDown(screen.getByTestId('msg-a'));
@@ -419,8 +435,8 @@ describe('App 选择规则', () => {
 
   it('拖拽划选带 Ctrl → 与已有选区合并', async () => {
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(3));
 
     fireEvent.click(screen.getByTestId('msg-a'));
@@ -470,8 +486,8 @@ describe('App 动作反馈', () => {
     mock.writeClipboard.mockResolvedValue(false);
 
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
     fireEvent.click(screen.getByTestId('msg-a'));
     await waitFor(() => expect(screen.getByTestId('sel-count').textContent).toContain('已选 1 条'));
@@ -497,8 +513,8 @@ describe('App 动作反馈', () => {
     mock.exportSel.mockRejectedValue(new Error('export failed writing markdown'));
 
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
     fireEvent.click(screen.getByTestId('msg-a'));
 
@@ -520,8 +536,8 @@ describe('App 动作反馈', () => {
     );
 
     await mount();
-    await waitFor(() => expect(screen.getByTestId('chat-1')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('chat-1'));
+    await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getByTestId('msg-a')).toBeTruthy());
     fireEvent.click(screen.getByTestId('msg-a'));
 

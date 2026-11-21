@@ -35,6 +35,26 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * 端点里是否**显式写了空端口**（如 `http://host:`）。
+ *
+ * `new URL('http://host:')` 的 `port` 是空串 —— 与「没写端口」**无法区分**
+ * （`http://host` 与 `http://host:80` 也都是空串：80 是默认端口，会被规范化掉）。
+ * 因此只能回头看**原始字符串**：authority 段以 `:` 结尾 ⇒ 写了端口但端口为空。
+ *
+ * 这种写法是非规范形式（同一个端点有多种写法），落进 config.json 后用户很难看出问题，
+ * 所以按非法处理（与端口越界同样的错误路径）。
+ */
+function hasExplicitEmptyPort(endpoint: string): boolean {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
+  if (!m) return false;
+  const authority = m[1];
+  // userinfo 里的冒号不是端口分隔符 → 只看最后一个 '@' 之后的部分
+  const at = authority.lastIndexOf('@');
+  const hostPort = at >= 0 ? authority.slice(at + 1) : authority;
+  return hostPort.endsWith(':');
+}
+
+/**
  * 端点**形状**校验（scheme 之外的第二道关）。
  *
  * `createClient` 的 scheme 判定只是正则白名单，**不做 URL 解析**：
@@ -57,6 +77,10 @@ function assertUsableEndpoint(endpoint: string): void {
   }
   if (!url.hostname) {
     throw new Error(`端点缺少主机名：${safeEndpointLabel(endpoint)}`);
+  }
+  // 显式空端口（`http://host:`）在 URL 解析里与「没写端口」长得一样 → 看原始字符串
+  if (hasExplicitEmptyPort(endpoint)) {
+    throw new Error(`端点端口为空（需在 1-65535 之间）：${safeEndpointLabel(endpoint)}`);
   }
   const port = url.port ? Number(url.port) : undefined;
   if (port !== undefined && (port < 1 || port > 65535)) {

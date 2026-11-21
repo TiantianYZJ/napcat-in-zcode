@@ -71,8 +71,9 @@ describe('MessageList selection', () => {
     expect(queryByTestId('load-older')).toBeNull();
   });
 
-  it('id 为空串的消息按 seq 区分（key / testid 不撞车）', () => {
-    // 服务端 normalizeMessage 在 message_id/real_id/message_seq 全缺时 id='' → 直接用 id 会撞车
+  it('id 为空串的消息按 seq + time 区分（key / testid 不撞车）', () => {
+    // 服务端 normalizeMessage 在 message_id/real_id/message_seq 全缺时 id='' → 直接用 id 会撞车；
+    // 只用 seq 也不够（服务端没有 message_seq 时 seq 恒为 0）→ 键里带上 seq 与 time。
     const noId: Msg[] = [
       { ...MSGS[0], id: '', seq: 1 },
       { ...MSGS[1], id: '', seq: 2 },
@@ -80,8 +81,20 @@ describe('MessageList selection', () => {
     const { getByTestId } = render(
       <MessageList messages={noId} selection={new Set()} onToggle={vi.fn()} onLoadOlder={vi.fn()} />,
     );
-    expect(getByTestId('msg-seq:1')).toBeTruthy();
-    expect(getByTestId('msg-seq:2')).toBeTruthy();
+    expect(getByTestId('msg-s1@1700000000')).toBeTruthy();
+    expect(getByTestId('msg-s2@1700000060')).toBeTruthy();
+  });
+
+  it('既无 id、又无 seq 与时间的消息直接不渲染（不共用一个 key）', () => {
+    // 服务端的消息既没有 message_id/real_id，也没有 message_seq，且 time 不可信
+    // → msgKey 返回 null：这条消息无法与别的消息区分，渲染出来只能撞 key。
+    const unusable: Msg[] = [
+      { ...MSGS[0], id: '', seq: 0, time: Number.NaN },
+    ];
+    const { queryAllByTestId } = render(
+      <MessageList messages={unusable} selection={new Set()} onToggle={vi.fn()} onLoadOlder={vi.fn()} />,
+    );
+    expect(queryAllByTestId(/^msg-/)).toHaveLength(0);
   });
 });
 

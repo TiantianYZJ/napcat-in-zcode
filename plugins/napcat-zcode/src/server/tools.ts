@@ -113,8 +113,10 @@ async function fetchHistory(
         if (seen.has(key)) continue; // 页边界可能重叠同一条消息
         seen.add(key);
       }
-      if (until !== undefined && item.msg.time > until) continue;
-      if (since !== undefined && item.msg.time < since) {
+      // 时间不可信的消息（`time` 缺失/非数值）不参与时间过滤：
+      // 它既无法证明在窗口内，也无法证明在窗口外 → 保留，由渲染层决定跳过。
+      if (until !== undefined && item.msg.time !== undefined && item.msg.time > until) continue;
+      if (since !== undefined && item.msg.time !== undefined && item.msg.time < since) {
         belowSince = true;
         continue; // 时间单调：更早的消息也都在 since 之前（exhausted 由循环后的统一判定给出）
       }

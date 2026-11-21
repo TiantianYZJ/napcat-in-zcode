@@ -321,9 +321,21 @@ describe('napcat_configure', () => {
     ['http://', '空主机'],
     ['http://host:99999', '端口越界'],
     ['http://host:0', '端口为 0'],
+    ['http://host:', '显式空端口'],
+    ['ws://host:', 'ws 显式空端口'],
     ['ws://', 'ws 空主机'],
   ])('rejects the malformed endpoint %s (%s)', async (endpoint) => {
     const { r, state } = await configureEndpoint(endpoint);
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('端点');
+    expect(existsSync(join(tmp, 'config.json'))).toBe(false); // 没有落盘
+    expect(state.config.connection.endpoint).toBe(''); // 内存态也没被改
+  });
+
+  // M1.1-7：`http://host:` 的端口是**空串** —— 与「没写端口」在 URL 解析里长得一样，
+  // 以前被当成合法端点落盘（非规范形式）。现在按非法处理（与端口越界同样的错误路径）。
+  it('rejects an explicitly empty port (http://host:)', async () => {
+    const { r, state } = await configureEndpoint('http://host:');
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('端点');
     expect(existsSync(join(tmp, 'config.json'))).toBe(false); // 没有落盘

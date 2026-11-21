@@ -108,7 +108,8 @@ try {
   const msgBtn = q('[data-testid="act-message"]');
   check('未打开会话时动作按钮置灰且有原因', msgBtn?.disabled === true && !!msgBtn.getAttribute('data-reason'), msgBtn?.getAttribute('data-reason'));
 
-  click(q('[data-testid="chat-12345"]'));
+  // 会话项的 testid 带 kind（群与好友的 id 是两套编号空间，数值可以完全相同）
+  click(q('[data-testid="chat-group-12345"]'));
   await sleep(400);
   const msgs = qa('[data-testid^="msg-"]');
   check('点击会话后消息流渲染出 3 条', msgs.length === 3, msgs.map((m) => m.getAttribute('data-testid')).join(','));

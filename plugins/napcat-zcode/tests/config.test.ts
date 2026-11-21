@@ -283,6 +283,41 @@ describe('config hardening', () => {
   });
 });
 
+// M1.1-6：清单里的 userConfig 是**自由文本**（用户在设置界面手打），
+// 只认小写 true/false 会让 True / 1 / yes 这些常见写法被**静默忽略**。
+describe('includeImages 的 env 取值判定', () => {
+  it('接受大小写不敏感的 true/1/yes/on', () => {
+    for (const v of ['true', 'True', 'TRUE', ' true ', '1', 'yes', 'Yes', 'on', 'ON']) {
+      const cfg = defaultConfig();
+      applyEnvOverrides(cfg, { NAPCAT_INCLUDE_IMAGES: v });
+      expect(cfg.export.includeImages).toBe(true);
+    }
+  });
+
+  it('接受大小写不敏感的 false/0/no/off', () => {
+    for (const v of ['false', 'False', 'FALSE', '0', 'no', 'No', 'off', 'OFF']) {
+      const cfg = defaultConfig();
+      cfg.export.includeImages = true;
+      applyEnvOverrides(cfg, { NAPCAT_INCLUDE_IMAGES: v });
+      expect(cfg.export.includeImages).toBe(false);
+    }
+  });
+
+  it('判不出来时保留文件里的值，且不抛错', () => {
+    const cfg = defaultConfig();
+    cfg.export.includeImages = true;
+    expect(() => applyEnvOverrides(cfg, { NAPCAT_INCLUDE_IMAGES: 'garbage' })).not.toThrow();
+    expect(cfg.export.includeImages).toBe(true);
+  });
+
+  it('空串（清单默认值 = 未设置）不覆盖文件里的值', () => {
+    const cfg = defaultConfig();
+    cfg.export.includeImages = true;
+    applyEnvOverrides(cfg, { NAPCAT_INCLUDE_IMAGES: '' });
+    expect(cfg.export.includeImages).toBe(true);
+  });
+});
+
 describe('config priority (legal env value wins, otherwise the file)', () => {
   it('lets a legal env value override the file value of export.dir', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace' } }));

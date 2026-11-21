@@ -33,6 +33,7 @@ vi.mock('../src/panel/api.js', async (importOriginal) => {
 
 import { ActionBar } from '../src/panel/components/ActionBar.js';
 import type { Chat, Msg } from '../src/panel/api.js';
+import type { Phase } from '../src/panel/App.js';
 
 const ALL_CAPS = { message: true, updateModelContext: true, downloadFile: true, serverTools: true };
 const NO_CAPS = { message: false, updateModelContext: false, downloadFile: false, serverTools: false };
@@ -100,7 +101,7 @@ function renderBar(opts?: {
   selected?: Msg[];
   chat?: Chat | null;
   caps?: typeof ALL_CAPS;
-  phase?: string;
+  phase?: Phase;
   /** 配置里的导出目的地（跟随配置 → 影响 .gitignore 说明）。 */
   exportDir?: 'user' | 'workspace';
 }) {

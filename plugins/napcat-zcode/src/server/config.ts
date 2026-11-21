@@ -153,6 +153,24 @@ export function loadConfig(dir: string): PluginConfig {
 }
 
 /**
+ * 布尔型 env 取值：大小写不敏感的 `true/false/1/0/yes/no/on/off`。
+ *
+ * 清单里的 `userConfig` 是**自由文本**（用户在设置界面里手打），只认小写 `true`/`false`
+ * 会让 `True`、`1`、`yes` 这些常见写法被**静默忽略**——用户以为改生效了，其实没有。
+ *
+ * 判不出来（空串、乱填）→ 返回 undefined：调用方**保留文件里的值**且**不抛错**
+ * （env 只是覆盖项，不该把插件整死）。
+ */
+function parseBoolEnv(v: string | undefined): boolean | undefined {
+  if (v === undefined) return undefined;
+  const s = v.trim().toLowerCase();
+  if (s === '') return undefined;
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return undefined;
+}
+
+/**
  * 环境变量覆盖（来源：清单 `userConfig` 经 `.mcp.json` 的 `env` 注入）。
  *
  * 优先级（spec §6 裁定，2026-11-21 修订）：**env 合法值优先**（env 覆盖 `config.json`）——
@@ -163,7 +181,8 @@ export function loadConfig(dir: string): PluginConfig {
  * 于是「没设置 / 注入默认值 / 注入空串 / 不注入」几种 ZCode 行为下结果都正确，
  * 不需要追踪「字段是否显式设置」。
  *
- * - 只在取值合法时覆盖：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}、`NAPCAT_INCLUDE_IMAGES` ∈ {true, false}；
+ * - 只在取值合法时覆盖：`NAPCAT_EXPORT_DIR` ∈ {user, workspace}；
+ *   `NAPCAT_INCLUDE_IMAGES` 接受大小写不敏感的 `true/false/1/0/yes/no/on/off`；
  *   非法值（含空串、未设置）一律不覆盖，保留 `config.json` 里的值，也不抛错。
  * - 就地改写并返回同一个对象（既支持 `applyEnvOverrides(cfg, env)`，也支持 `cfg = applyEnvOverrides(cfg)`）。
  * - 幂等：同样的 env 反复应用结果一致。
@@ -171,8 +190,8 @@ export function loadConfig(dir: string): PluginConfig {
 export function applyEnvOverrides(cfg: PluginConfig, env: NodeJS.ProcessEnv = process.env): PluginConfig {
   const dir = env.NAPCAT_EXPORT_DIR;
   if (dir === 'user' || dir === 'workspace') cfg.export.dir = dir;
-  const imgs = env.NAPCAT_INCLUDE_IMAGES;
-  if (imgs === 'true' || imgs === 'false') cfg.export.includeImages = imgs === 'true';
+  const imgs = parseBoolEnv(env.NAPCAT_INCLUDE_IMAGES);
+  if (imgs !== undefined) cfg.export.includeImages = imgs;
   return cfg;
 }
 

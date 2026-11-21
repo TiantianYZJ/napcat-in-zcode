@@ -1,6 +1,6 @@
 import { segmentsText } from './message.js';
 import { UNTRUSTED_NOTICE } from './notice.js';
-import type { Message } from './types.js';
+import { hasValidTime, type Message } from './types.js';
 
 /**
  * 注入头的不可信内容声明（spec §5.7 的安全要求）。
@@ -74,10 +74,13 @@ function flatten(s: string): string {
  *
  * m.segments / m.senderName 走兜底：调用方（T10 工具层）拿到的消息来自外部入参，
  * 类型系统拦不住「传进来的对象其实不是 Message」，缺字段时按空处理而不是抛异常。
+ *
+ * `replyTo.preview` 同样兜底成空串：预览缺失是常见形态（只给了被回复的 id），
+ * 直接 `flatten(undefined)` 会抛 TypeError，把整次格式化带崩。
  */
 function entryText(m: Message, t: TimeParts): string {
   const line = `[${t.hm}] ${flatten(m.senderName ?? '')}：${segmentsText(m.segments ?? [])}`;
-  const preview = m.replyTo ? flatten(m.replyTo.preview) : '';
+  const preview = m.replyTo ? flatten(m.replyTo.preview ?? '') : '';
   return preview ? `> ${preview}\n${line}` : line;
 }
 
@@ -86,8 +89,10 @@ function entryText(m: Message, t: TimeParts): string {
  *
  * 返回值语义（下游 T10/T13 按此对齐）：
  * - `text`：可直接注入的文本。首行恒为不可信内容声明，任何情况下都不截断、不改写。
- * - `count`：**实际渲染进正文的消息条数**（发生截断时小于入参条数）；
+ * - `count`：**实际渲染进正文的消息条数**（发生截断或跳过无有效时间的消息时小于入参条数）；
  *   标题里的「（N 条）」用的是它，截断尾注里的「共 N 条」才是选区总条数。
+ * - 没有有效时间（`time` 缺失/非有限）的消息**跳过**并在正文末尾报出「跳过 N 条」——
+ *   绝不允许渲染出 `NaN-NaN-NaN` 这种假时间戳。
  * - `truncated`：**选区里是否有消息没被纳入**。`truncated === false` ⇒ 选区消息全部纳入。
  *   但 `text.length` 仍可能超过 `maxChars`——单条消息本身就超限时，
  *   为保证「首条不被切掉」，该条整条保留（spec 把注入体上限称作软上限）。
@@ -109,12 +114,19 @@ export function formatSelection(
   const bodyBudget = Math.max(0, maxChars - headerReserve - TAIL_RESERVE);
 
   const blocks: string[] = [];
+  /** 已渲染消息的时间（**只**含真正渲染出去的那些）——标题的时间范围取自这里。 */
+  const times: number[] = [];
   let bodyLen = 0;
   let count = 0;
+  /** 因为没有有效时间而被跳过的条数（不静默丢，如实报出来）。 */
+  let skipped = 0;
   let truncated = false;
   let lastDay = '';
 
   for (const m of messages) {
+    // 没有有效时间的消息**跳过**（不渲染）：直接拿它算时间会得到 `NaN-NaN-NaN`，
+    // 那是模型看到的一行假时间戳，比少一条消息危险得多。
+    if (!hasValidTime(m)) { skipped++; continue; }
     const t = fmtTime(m.time);
     const daySep = t.day !== lastDay ? `—— ${t.date} ——` : '';
     const entry = entryText(m, t);
@@ -127,14 +139,17 @@ export function formatSelection(
     blocks.push(block);
     bodyLen += added;
     count++;
+    times.push(m.time);
     lastDay = t.day;
   }
 
-  const first = count > 0 ? fmtTime(messages[0].time) : null;
-  const last = count > 0 ? fmtTime(messages[count - 1].time) : null;
+  const first = count > 0 ? fmtTime(times[0]) : null;
+  const last = count > 0 ? fmtTime(times[count - 1]) : null;
   const range = first && last ? rangeText(first, last) : '空';
   const header = `${UNTRUSTED_NOTICE}\n\n${titleLine(chatName, range, count)}\n\n`;
   let text = header + blocks.join('\n');
+  // 跳过的条数要**说出来**：静默少几条会让模型以为记录本来就是这么少。
+  if (skipped > 0) text += `\n\n（跳过 ${skipped} 条：消息缺少有效时间）`;
   if (truncated) text += `\n\n（已截断，共 ${messages.length} 条，完整内容请导出后以附件引用）`;
   return { text, count, truncated };
 }

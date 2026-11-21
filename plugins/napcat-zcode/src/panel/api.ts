@@ -47,14 +47,28 @@ export interface Msg {
 }
 
 /**
- * 消息的**选择标识**（面板用来标选中态）。
+ * 消息的**选择标识**（面板用来标选中态 / React key / testid）。
  *
- * 正常情况就是 `id`（服务端给的 message_id）。
- * 极端情况（消息连 message_id 都没有 → `id` 是空串）退回 `seq`，
- * 否则好几条空 id 的消息会被当成同一条（选中一条等于选中一片）。
+ * 优先级：
+ * 1. `m.id`（服务端给的 message_id / real_id）—— 最稳，直接用；
+ * 2. 没有 id 时退回 `s{seq}`（**有** message_seq 的形态）：`s` 前缀与
+ *    面板的跨调用去重键（`s` / `i` 双命名空间，见 `App.tsx` 的 `dedupeKey`）同构；
+ * 3. 连 message_seq 都没有（服务端 `seq` 为 0）时，时间是唯一还能区分的线索 →
+ *    `s{seq}@{time}` / `t{time}`（**同时**带上 seq 与 time，避免同一条消息在不同字段上撞车）；
+ * 4. 连时间都不可信 → 返回 **null**：调用方必须**跳过**这一条。
+ *
+ * 为什么不能退化成 `seq:0`：服务端的 `seq` 只承载 `message_seq`（没有就是 0），
+ * 多条「既无 message_id 又无 message_seq」的消息会共用同一个 key →
+ * React 重复 key 警告、选中态串成一片、testid 撞车。
  */
-export function msgKey(m: Msg): string {
-  return m.id || `seq:${m.seq}`;
+export function msgKey(m: Msg): string | null {
+  if (m.id) return m.id;
+  const seq = typeof m.seq === 'number' && Number.isFinite(m.seq) && m.seq > 0 ? m.seq : undefined;
+  const time = typeof m.time === 'number' && Number.isFinite(m.time) ? m.time : undefined;
+  if (seq !== undefined && time !== undefined) return `s${seq}@${time}`;
+  if (seq !== undefined) return `s${seq}`;
+  if (time !== undefined) return `t${time}`;
+  return null; // 无法区分 → 调用方跳过这一条
 }
 
 /** `napcat_status` 的返回。 */
