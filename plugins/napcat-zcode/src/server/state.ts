@@ -63,6 +63,34 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * 稳定序列化（对象键排序）→ 用来比较两段配置**是否真的变了**。
+ *
+ * `JSON.stringify` 的键序取决于对象构造顺序，两次独立解析出来的同一个配置可能键序不同
+ * （`sanitize` 固定了键序，但 `setConnection` 是往内存对象上补键的）——
+ * 用它做「变了没有」的判断会误报。排序后键序固定，比较才可靠。
+ */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(',')}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * 配置指纹：**只**取会影响探测结论的两段。
+ *
+ * - `autoDetect`：决定探测范围（端口 / 端点 / 路径 / 超时）；
+ * - `connection`：决定探测目标之一（当前已配置的端点）。
+ *
+ * 指纹变了 = 探测范围或目标变了 → 之前那次探测的结论不再适用 → 必须清缓存。
+ */
+function configFingerprint(cfg: PluginConfig): string {
+  return stableStringify({ autoDetect: cfg.autoDetect, connection: cfg.connection });
+}
+
+/**
  * 端点里是否**显式写了空端口**（如 `http://host:`）。
  *
  * `new URL('http://host:')` 的 `port` 是空串 —— 与「没写端口」**无法区分**
@@ -182,8 +210,14 @@ export class AppState {
    * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
    */
   detection?: DetectionSummary;
-  /** 本进程见过的所有 token（脱敏用，见 `redact`）。 */
-  private knownTokens = new Set<string>();
+  /** 本进程见过的所有凭据值（token 及其他片段，脱敏用，见 `redact`）。 */
+  private knownSecrets = new Set<string>();
+  /**
+   * 上次加载到的配置指纹（`autoDetect` + `connection`）。
+   *
+   * 指纹变了 = 探测范围或探测目标变了 → 之前那次探测的结论不再适用 → 必须清缓存。
+   */
+  private loadedFingerprint = configFingerprint(this.config);
 
   constructor() {
     // 启动时配置里就有的 token 也要记住（之后任何出参里都要能遮蔽）
@@ -200,24 +234,43 @@ export class AppState {
    *
    * token 明文只允许存在于 `config.json`；工具返回值、日志、面板都不许出现。
    *
-   * 脱敏覆盖**本进程见过的所有 token**（`knownTokens`），不只是「当前配置里那个」：
+   * 脱敏覆盖**本进程见过的所有凭据值**（`knownSecrets`：access token 与
+   * 端点里带出来的密码/token 片段），不只是「当前配置里那个」：
    * 配置会在每次 `status()` 时重读（运行期外部改了 config.json 也要看得见），
    * 重读会把内存里的 token 换成文件里的值——只按当前值脱敏就会出现
-   * 「换了配置就漏出旧 token」的窗口。记住见过的每个 token 才能真正堵住。
+   * 「换了配置就漏出旧 token」的窗口。记住见过的每个凭据值才能真正堵住。
    */
   redact(text: string): string {
     let out = text;
-    for (const t of this.knownTokens) {
+    for (const t of this.knownSecrets) {
       if (t) out = out.split(t).join('***');
     }
     const cur = this.config.connection?.token ?? '';
-    if (cur && !this.knownTokens.has(cur)) out = out.split(cur).join('***');
+    if (cur && !this.knownSecrets.has(cur)) out = out.split(cur).join('***');
     return out;
   }
 
   /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
   private rememberToken(token: string | undefined): void {
-    if (token) this.knownTokens.add(token);
+    if (token) this.knownSecrets.add(token);
+  }
+
+  /**
+   * 记住一个见过的**凭据片段**（之后它出现在任何出参里都会被遮蔽）。
+   *
+   * 与 access token 共用同一个脱敏池：`redact` 的语义是「替换**本进程见过**的所有凭据值」。
+   *
+   * 典型来源：用户写在端点里的 userinfo 密码、query 里的 `?access_token=xxx`。
+   * 这些值在端点**规范化之后就没了**（`normalizeEndpoint` 会剥掉 userinfo 与 query），
+   * 所以必须从**原始串**里取出来登记——否则上游一旦把它们**裸回显**（没有 `token=` 前缀），
+   * 明文就会直接进工具返回值。
+   */
+  rememberSecret(secret: string | undefined): void {
+    if (typeof secret !== 'string') return;
+    const t = secret.trim();
+    // 太短的值挡不住任何东西，却会误伤正常文本（如用户名 `a`、主机名片段）
+    if (t.length < 4) return;
+    this.knownSecrets.add(t);
   }
 
   /**
@@ -225,11 +278,22 @@ export class AppState {
    *
    * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
    * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
+   *
+   * **配置变了就清掉探测结论**：探测结论是**针对某一份配置**得出的
+   * （扫哪些端口、探哪些端点都由 `autoDetect` / `connection` 决定）。
+   * 用户手改了 `config.json`（换了端口/路径/端点）之后，旧结论已经对不上当前配置——
+   * 不清的话，`napcat_status` 会继续拿旧结论说「检测到本机 NapCat」。
    */
   reloadConfig(): void {
     this.rememberToken(this.config.connection?.token);
-    this.config = loadConfigData();
-    this.rememberToken(this.config.connection?.token);
+    const next = loadConfigData();
+    this.rememberToken(next.connection?.token);
+    const fingerprint = configFingerprint(next);
+    if (fingerprint !== this.loadedFingerprint) {
+      this.loadedFingerprint = fingerprint;
+      this.clearDetection();
+    }
+    this.config = next;
   }
 
   /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
@@ -242,6 +306,10 @@ export class AppState {
    *
    * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
    * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
+   *
+   * 两个触发点：
+   * - `setConnection`：配置**落盘**之后（端点合法但连不上时同样要清）；
+   * - `reloadConfig`：外部改了 `config.json`（`autoDetect` / `connection` 变了）。
    */
   clearDetection(): void {
     this.detection = undefined;
@@ -305,6 +373,8 @@ export class AppState {
    *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
    * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
    * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
+   * - **落盘即失效**：配置一旦落盘，本机探测的结论缓存就被清掉（见 `clearDetection`）——
+   *   探测结论是针对某一份配置得出的，配置变了它就对不上了。
    *
    * **token 的解析规则（防误删凭据）**：
    * - 传入非空 token → 用它（换 token）；
@@ -332,6 +402,16 @@ export class AppState {
 
     // ② 校验通过 → patch 式落盘（只写 connection 段）
     this.saveConnection(endpoint, effectiveToken);
+    /**
+     * 配置**一旦落盘**，之前的探测结论就失效了 → 立刻清缓存。
+     *
+     * 清在这里（而不是工具层的成功分支）：端点合法但**连不上**时，
+     * 配置已经写进文件、内存态也换了，此时若不清缓存，面板会继续拿
+     * **针对旧配置**的探测结论说「检测到本机 NapCat」——那个结论根本不是当前配置的结论。
+     *
+     * 落盘失败（上一行抛错）不会走到这里 → 配置没变 → 旧结论仍然有效。
+     */
+    this.clearDetection();
 
     // ③ 换连接：关掉旧连接，用新端点重建
     const old = this.client;
@@ -339,6 +419,8 @@ export class AppState {
     this.clientEndpoint = '';
     await old?.close();
     this.config.connection = { ...this.config.connection, endpoint, token: effectiveToken };
+    // 指纹跟着内存态走（文件已落盘，两边一致）→ 之后的 reloadConfig 不会误判成「外部改了配置」
+    this.loadedFingerprint = configFingerprint(this.config);
     // 注入替身时用它（probed 不会被连接，直接丢弃）；否则用刚校验过的客户端
     this.client = this.clientOverride ? null : probed;
     if (this.client) this.clientEndpoint = endpoint;

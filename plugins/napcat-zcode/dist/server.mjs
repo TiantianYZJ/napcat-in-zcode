@@ -22629,6 +22629,17 @@ function errText2(e) {
 function isPlainObject3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  if (isPlainObject3(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function configFingerprint(cfg) {
+  return stableStringify({ autoDetect: cfg.autoDetect, connection: cfg.connection });
+}
 function hasExplicitEmptyPort(endpoint) {
   const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
   if (!m) return false;
@@ -22697,8 +22708,14 @@ var AppState = class {
    * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
    */
   detection;
-  /** 本进程见过的所有 token（脱敏用，见 `redact`）。 */
-  knownTokens = /* @__PURE__ */ new Set();
+  /** 本进程见过的所有凭据值（token 及其他片段，脱敏用，见 `redact`）。 */
+  knownSecrets = /* @__PURE__ */ new Set();
+  /**
+   * 上次加载到的配置指纹（`autoDetect` + `connection`）。
+   *
+   * 指纹变了 = 探测范围或探测目标变了 → 之前那次探测的结论不再适用 → 必须清缓存。
+   */
+  loadedFingerprint = configFingerprint(this.config);
   constructor() {
     this.rememberToken(this.config.connection?.token);
   }
@@ -22711,34 +22728,62 @@ var AppState = class {
    *
    * token 明文只允许存在于 `config.json`；工具返回值、日志、面板都不许出现。
    *
-   * 脱敏覆盖**本进程见过的所有 token**（`knownTokens`），不只是「当前配置里那个」：
+   * 脱敏覆盖**本进程见过的所有凭据值**（`knownSecrets`：access token 与
+   * 端点里带出来的密码/token 片段），不只是「当前配置里那个」：
    * 配置会在每次 `status()` 时重读（运行期外部改了 config.json 也要看得见），
    * 重读会把内存里的 token 换成文件里的值——只按当前值脱敏就会出现
-   * 「换了配置就漏出旧 token」的窗口。记住见过的每个 token 才能真正堵住。
+   * 「换了配置就漏出旧 token」的窗口。记住见过的每个凭据值才能真正堵住。
    */
   redact(text) {
     let out = text;
-    for (const t of this.knownTokens) {
+    for (const t of this.knownSecrets) {
       if (t) out = out.split(t).join("***");
     }
     const cur = this.config.connection?.token ?? "";
-    if (cur && !this.knownTokens.has(cur)) out = out.split(cur).join("***");
+    if (cur && !this.knownSecrets.has(cur)) out = out.split(cur).join("***");
     return out;
   }
   /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
   rememberToken(token) {
-    if (token) this.knownTokens.add(token);
+    if (token) this.knownSecrets.add(token);
+  }
+  /**
+   * 记住一个见过的**凭据片段**（之后它出现在任何出参里都会被遮蔽）。
+   *
+   * 与 access token 共用同一个脱敏池：`redact` 的语义是「替换**本进程见过**的所有凭据值」。
+   *
+   * 典型来源：用户写在端点里的 userinfo 密码、query 里的 `?access_token=xxx`。
+   * 这些值在端点**规范化之后就没了**（`normalizeEndpoint` 会剥掉 userinfo 与 query），
+   * 所以必须从**原始串**里取出来登记——否则上游一旦把它们**裸回显**（没有 `token=` 前缀），
+   * 明文就会直接进工具返回值。
+   */
+  rememberSecret(secret) {
+    if (typeof secret !== "string") return;
+    const t = secret.trim();
+    if (t.length < 4) return;
+    this.knownSecrets.add(t);
   }
   /**
    * 重读配置文件（运行期外部改了 `config.json` 也要看得见）。
    *
    * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
    * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
+   *
+   * **配置变了就清掉探测结论**：探测结论是**针对某一份配置**得出的
+   * （扫哪些端口、探哪些端点都由 `autoDetect` / `connection` 决定）。
+   * 用户手改了 `config.json`（换了端口/路径/端点）之后，旧结论已经对不上当前配置——
+   * 不清的话，`napcat_status` 会继续拿旧结论说「检测到本机 NapCat」。
    */
   reloadConfig() {
     this.rememberToken(this.config.connection?.token);
-    this.config = loadConfigData();
-    this.rememberToken(this.config.connection?.token);
+    const next = loadConfigData();
+    this.rememberToken(next.connection?.token);
+    const fingerprint = configFingerprint(next);
+    if (fingerprint !== this.loadedFingerprint) {
+      this.loadedFingerprint = fingerprint;
+      this.clearDetection();
+    }
+    this.config = next;
   }
   /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
   setDetection(detection) {
@@ -22749,6 +22794,10 @@ var AppState = class {
    *
    * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
    * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
+   *
+   * 两个触发点：
+   * - `setConnection`：配置**落盘**之后（端点合法但连不上时同样要清）；
+   * - `reloadConfig`：外部改了 `config.json`（`autoDetect` / `connection` 变了）。
    */
   clearDetection() {
     this.detection = void 0;
@@ -22809,6 +22858,8 @@ var AppState = class {
    *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
    * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
    * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
+   * - **落盘即失效**：配置一旦落盘，本机探测的结论缓存就被清掉（见 `clearDetection`）——
+   *   探测结论是针对某一份配置得出的，配置变了它就对不上了。
    *
    * **token 的解析规则（防误删凭据）**：
    * - 传入非空 token → 用它（换 token）；
@@ -22827,11 +22878,13 @@ var AppState = class {
     const probed = createClient({ endpoint, token: effectiveToken || void 0 });
     assertUsableEndpoint(endpoint);
     this.saveConnection(endpoint, effectiveToken);
+    this.clearDetection();
     const old = this.client;
     this.client = null;
     this.clientEndpoint = "";
     await old?.close();
     this.config.connection = { ...this.config.connection, endpoint, token: effectiveToken };
+    this.loadedFingerprint = configFingerprint(this.config);
     this.client = this.clientOverride ? null : probed;
     if (this.client) this.clientEndpoint = endpoint;
     const c = await this.ensureClient();
@@ -23559,6 +23612,8 @@ function defaultNapCatRoots(homeDir, platform, env = process.env) {
 
 // src/server/host/detect-local.ts
 var FAILED_PER_SOURCE_LIMIT = 5;
+var MAX_CANDIDATES = 20;
+var MAX_SCANNED_PORTS = 20;
 var TIMEOUT_TEXT = /(timeout|timed out|超时|ETIMEDOUT|ECONNABORTED|aborted)/i;
 function mergeDetectionRoots(cfg, opts) {
   const notes = [];
@@ -23612,8 +23667,35 @@ function pickWebuiPort(installed) {
   }
   return { port: NAPCAT_WEBUI_PORT, notes };
 }
+function extractEndpointSecrets(raw) {
+  const out = [];
+  if (typeof raw !== "string" || raw.trim() === "") return out;
+  let url;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return out;
+  }
+  if (url.password) out.push(url.password);
+  for (const [key, value] of url.searchParams) {
+    if (value && /token|secret|key|password|passwd|pwd/i.test(key)) out.push(value);
+  }
+  return out;
+}
+var AUTH_LONG_SECRET = /[A-Za-z0-9_\-]{16,}/g;
+function maskAuthFailureSecrets(text) {
+  const sep = text.indexOf("\uFF1A");
+  const head = sep >= 0 ? text.slice(0, sep + 1) : "";
+  const body = sep >= 0 ? text.slice(sep + 1) : text;
+  return head + body.replace(AUTH_LONG_SECRET, "***");
+}
 function redactDetectResult(state, result) {
   const r = (text) => text === void 0 ? void 0 : state.redact(text);
+  const authError = (text, needsToken) => {
+    if (text === void 0) return void 0;
+    const redacted = state.redact(text);
+    return needsToken ? maskAuthFailureSecrets(redacted) : redacted;
+  };
   return {
     ...result,
     candidates: (result.candidates ?? []).map((c) => ({ ...c, detail: r(c.detail) })),
@@ -23623,11 +23705,15 @@ function redactDetectResult(state, result) {
       error: r(c.error),
       login: c.login ? { ...c.login, nickname: r(c.login.nickname) ?? "" } : void 0
     })),
-    failed: (result.failed ?? []).map((c) => ({ ...c, detail: r(c.detail), error: r(c.error) })),
+    failed: (result.failed ?? []).map((c) => ({
+      ...c,
+      detail: r(c.detail),
+      error: authError(c.error, c.needsToken === true)
+    })),
     tokenRequired: (result.tokenRequired ?? []).map((c) => ({
       ...c,
       detail: r(c.detail),
-      error: r(c.error)
+      error: authError(c.error, true)
     }))
   };
 }
@@ -23665,6 +23751,9 @@ async function detectLocalWithInstalls(state, opts = {}) {
   }
   const configured = state.config.connection?.endpoint ?? "";
   if (configured.trim() !== "") extraEndpoints.push(configured.trim());
+  for (const raw of extraEndpoints) {
+    for (const secret of extractEndpointSecrets(raw)) state.rememberSecret(secret);
+  }
   const result = await detectLocal({
     ports: Array.isArray(cfg?.ports) ? cfg.ports : [],
     extraEndpoints,
@@ -23718,9 +23807,25 @@ async function detectLocalWithInstalls(state, opts = {}) {
   if (installed.length === 0) {
     notes.push("\u672A\u5728\u672C\u673A\u5E38\u89C1\u4F4D\u7F6E\u53D1\u73B0 NapCat \u5B89\u88C5\u76EE\u5F55\uFF08\u53EA\u626B\u4E86\u914D\u7F6E\u91CC\u7684\u8DEF\u5F84\u4E0E\u9ED8\u8BA4\u4F4D\u7F6E\uFF09");
   }
+  const candidatesAll = redacted.candidates ?? [];
+  const candidatesKept = candidatesAll.slice(0, MAX_CANDIDATES);
+  const candidatesDropped = candidatesAll.length - candidatesKept.length;
+  if (candidatesDropped > 0) {
+    notes.push(
+      `\u5019\u9009\u7AEF\u70B9\u5171 ${candidatesAll.length} \u6761\uFF0C\u5DF2\u5C55\u793A\u524D ${MAX_CANDIDATES} \u6761\uFF0C\u5176\u4F59 ${candidatesDropped} \u6761\u4EC5\u8BA1\u6570`
+    );
+  }
+  const portsAll = redacted.scanned?.ports ?? [];
+  const portsKept = portsAll.slice(0, MAX_SCANNED_PORTS);
+  const portsDropped = portsAll.length - portsKept.length;
+  if (portsDropped > 0) {
+    notes.push(
+      `\u626B\u63CF\u7AEF\u53E3\u5171 ${portsAll.length} \u4E2A\uFF0C\u5DF2\u5C55\u793A\u524D ${MAX_SCANNED_PORTS} \u4E2A\uFF0C\u5176\u4F59 ${portsDropped} \u4E2A\u4EC5\u8BA1\u6570`
+    );
+  }
   return {
     found: redacted.found,
-    candidates: redacted.candidates,
+    candidates: candidatesKept,
     live: redacted.live,
     failed: failedTrimmed.kept,
     tokenRequired: tokenTrimmed.kept,
@@ -23729,9 +23834,11 @@ async function detectLocalWithInstalls(state, opts = {}) {
     budgetExhausted: redacted.budgetExhausted,
     scanned: {
       ...redacted.scanned,
+      ports: portsKept,
       paths: (redacted.scanned?.paths ?? []).map((p) => state.redact(p))
     },
-    notes,
+    // notes 整体再过一遍 redact：每条单独处理容易漏（未来新增含用户文本的说明就会漏）
+    notes: notes.map((n) => state.redact(n)),
     installs: installed.map((inst) => ({
       configDir: state.redact(inst.configDir ?? ""),
       endpoints: inst.endpoints?.length ?? 0,
@@ -23744,6 +23851,15 @@ async function detectLocalWithInstalls(state, opts = {}) {
     })),
     droppedEndpoints
   };
+}
+var detectionInFlight = null;
+function detectLocalOnce(state, opts = {}) {
+  if (detectionInFlight) return detectionInFlight;
+  const wrapped = detectLocalWithInstalls(state, opts).finally(() => {
+    if (detectionInFlight === wrapped) detectionInFlight = null;
+  });
+  detectionInFlight = wrapped;
+  return wrapped;
 }
 
 // src/server/tools.ts
@@ -23944,7 +24060,6 @@ function registerTools(server2, state) {
     async ({ endpoint, token, clearToken }) => {
       try {
         const login = await state.setConnection(endpoint, token ?? "", { clearToken: clearToken === true });
-        state.clearDetection();
         const warning = endpointSecurityWarning(
           state.config.connection.endpoint,
           state.config.connection.token ?? ""
@@ -23964,7 +24079,7 @@ function registerTools(server2, state) {
     async () => {
       try {
         state.reloadConfig();
-        const payload = await detectLocalWithInstalls(state);
+        const payload = await detectLocalOnce(state);
         state.setDetection({
           found: payload.found,
           napcatRunning: payload.napcatRunning,

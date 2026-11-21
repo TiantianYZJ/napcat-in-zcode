@@ -42,6 +42,18 @@ import type { AppState } from '../state.js';
 export const FAILED_PER_SOURCE_LIMIT = 5;
 
 /**
+ * 候选端点最多展示几条（其余只给计数，见「出参上界」）。
+ *
+ * 候选数 = `2 × autoDetect.ports 的条数 + 显式端点数 + 安装发现数`，
+ * 而 `config.ts` 的 `pickPorts` 只过滤端口值合法性、**不限个数**——
+ * 配置里写多端口时，单次工具调用能产出 MB 级文本，直接撑爆模型上下文。
+ */
+export const MAX_CANDIDATES = 20;
+
+/** 扫描端口最多展示几个（其余只给计数，见「出参上界」）。 */
+export const MAX_SCANNED_PORTS = 20;
+
+/**
  * 「目标无响应」的特征词。
  *
  * 超时（目标在那儿但不答话）与「连不上」（端口上根本没服务）是**两回事**：
@@ -218,6 +230,54 @@ export function pickWebuiPort(installed: InstalledNapCat[]): { port: number; not
 }
 
 /**
+ * 从**原始**端点串里挖出「可能是凭据」的值（userinfo 密码 / query 里的 token 形态值）。
+ *
+ * **必须从原始串取**：`normalizeEndpoint` 会把 userinfo 与 query 全部剥掉
+ * （那里常常就是 access token），等候选建好之后再找就什么都找不到了。
+ *
+ * 抽出来的值交给 `state.rememberSecret()` 登记成脱敏样本：
+ * 上游**裸回显**它自己持有的 token（没有 `token=` / `Bearer` 前缀）时，
+ * `detect.ts` 的三种形态规则挡不住，只有「本进程见过这个值」才能挡住。
+ */
+export function extractEndpointSecrets(raw: string): string[] {
+  const out: string[] = [];
+  if (typeof raw !== 'string' || raw.trim() === '') return out;
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return out; // 不是合法 URL：没有可解析的 userinfo / query
+  }
+  if (url.password) out.push(url.password);
+  for (const [key, value] of url.searchParams) {
+    if (value && /token|secret|key|password|passwd|pwd/i.test(key)) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * 鉴权失败语境下的「长串」形态（裸 token 的典型长相）。
+ *
+ * 只在**已被判定为鉴权失败**的条目上用（误伤面小）：
+ * 上游可能裸回显它自己持有的 token——没有 `token=` / `Bearer` 前缀，
+ * `detect.ts` 的 `SECRET_ASSIGNMENT` / `BEARER` 都挡不住。
+ */
+const AUTH_LONG_SECRET = /[A-Za-z0-9_\-]{16,}/g;
+
+/**
+ * 鉴权失败时的额外遮蔽：把「独立的长串」换成 `***`。
+ *
+ * 只遮**端点标签之后**的部分（错误串的形状是 `标签：细节`）：
+ * 端点标签（主机名/端口）是用户要看的信息，不该被顺手抹掉。
+ */
+function maskAuthFailureSecrets(text: string): string {
+  const sep = text.indexOf('：');
+  const head = sep >= 0 ? text.slice(0, sep + 1) : '';
+  const body = sep >= 0 ? text.slice(sep + 1) : text;
+  return head + body.replace(AUTH_LONG_SECRET, '***');
+}
+
+/**
  * 把 `DetectResult` 里**每一个**用户可控文本过一遍 `state.redact()`。
  *
  * 为什么必须在这里做（`detect.ts` 内部挡不住）：
@@ -229,6 +289,17 @@ export function pickWebuiPort(installed: InstalledNapCat[]): { port: number; not
 export function redactDetectResult(state: AppState, result: DetectResult): DetectResult {
   const r = (text: string | undefined): string | undefined =>
     text === undefined ? undefined : state.redact(text);
+  /**
+   * 鉴权失败条目的错误串：额外做一次「长串遮蔽」。
+   *
+   * 这一步补的是**首次探测**的缺口：用户还没配 token 时，本进程没见过上游持有的那个 token，
+   * `state.redact` 没有可替换的样本 → 裸回显会直接进返回值。
+   */
+  const authError = (text: string | undefined, needsToken: boolean): string | undefined => {
+    if (text === undefined) return undefined;
+    const redacted = state.redact(text);
+    return needsToken ? maskAuthFailureSecrets(redacted) : redacted;
+  };
   return {
     ...result,
     candidates: (result.candidates ?? []).map((c) => ({ ...c, detail: r(c.detail) })),
@@ -238,11 +309,15 @@ export function redactDetectResult(state: AppState, result: DetectResult): Detec
       error: r(c.error),
       login: c.login ? { ...c.login, nickname: r(c.login.nickname) ?? '' } : undefined,
     })),
-    failed: (result.failed ?? []).map((c) => ({ ...c, detail: r(c.detail), error: r(c.error) })),
+    failed: (result.failed ?? []).map((c) => ({
+      ...c,
+      detail: r(c.detail),
+      error: authError(c.error, c.needsToken === true),
+    })),
     tokenRequired: (result.tokenRequired ?? []).map((c) => ({
       ...c,
       detail: r(c.detail),
-      error: r(c.error),
+      error: authError(c.error, true),
     })),
   };
 }
@@ -324,6 +399,17 @@ export async function detectLocalWithInstalls(
   const configured = state.config.connection?.endpoint ?? '';
   if (configured.trim() !== '') extraEndpoints.push(configured.trim());
 
+  /**
+   * 登记原始端点里的凭据（userinfo 密码 / query 里的 token 形态值）。
+   *
+   * 这些值在 `normalizeEndpoint` 之后就没了，但上游可能把它们**裸回显**出来
+   * （没有 `token=` / `Bearer` 前缀 → 探测内核的三种形态规则挡不住）。
+   * 登记成脱敏样本后，`state.redact` 就能把回显里的明文换成 `***`。
+   */
+  for (const raw of extraEndpoints) {
+    for (const secret of extractEndpointSecrets(raw)) state.rememberSecret(secret);
+  }
+
   const result = await detectLocal({
     ports: Array.isArray(cfg?.ports) ? cfg.ports : [],
     extraEndpoints,
@@ -388,9 +474,34 @@ export async function detectLocalWithInstalls(
     notes.push('未在本机常见位置发现 NapCat 安装目录（只扫了配置里的路径与默认位置）');
   }
 
+  /**
+   * 出参上界：候选端点与扫描端口都要截断（其余只给计数，计数写进 notes）。
+   *
+   * 不截断的话，配置里写多端口（`pickPorts` 只过滤合法性、不限个数）时
+   * 单次工具调用能产出 MB 级文本，直接撑爆模型上下文。
+   */
+  const candidatesAll = redacted.candidates ?? [];
+  const candidatesKept = candidatesAll.slice(0, MAX_CANDIDATES);
+  const candidatesDropped = candidatesAll.length - candidatesKept.length;
+  if (candidatesDropped > 0) {
+    notes.push(
+      `候选端点共 ${candidatesAll.length} 条，已展示前 ${MAX_CANDIDATES} 条，` +
+        `其余 ${candidatesDropped} 条仅计数`,
+    );
+  }
+  const portsAll = redacted.scanned?.ports ?? [];
+  const portsKept = portsAll.slice(0, MAX_SCANNED_PORTS);
+  const portsDropped = portsAll.length - portsKept.length;
+  if (portsDropped > 0) {
+    notes.push(
+      `扫描端口共 ${portsAll.length} 个，已展示前 ${MAX_SCANNED_PORTS} 个，` +
+        `其余 ${portsDropped} 个仅计数`,
+    );
+  }
+
   return {
     found: redacted.found,
-    candidates: redacted.candidates,
+    candidates: candidatesKept,
     live: redacted.live,
     failed: failedTrimmed.kept,
     tokenRequired: tokenTrimmed.kept,
@@ -399,9 +510,11 @@ export async function detectLocalWithInstalls(
     budgetExhausted: redacted.budgetExhausted,
     scanned: {
       ...redacted.scanned,
+      ports: portsKept,
       paths: (redacted.scanned?.paths ?? []).map((p) => state.redact(p)),
     },
-    notes,
+    // notes 整体再过一遍 redact：每条单独处理容易漏（未来新增含用户文本的说明就会漏）
+    notes: notes.map((n) => state.redact(n)),
     installs: installed.map((inst) => ({
       configDir: state.redact(inst.configDir ?? ''),
       endpoints: inst.endpoints?.length ?? 0,
@@ -414,4 +527,35 @@ export async function detectLocalWithInstalls(
     })),
     droppedEndpoints,
   };
+}
+
+/**
+ * 正在进行的探测（**模块级**单例）。
+ *
+ * MCP SDK 是**并发**处理请求的：两次并发的 `napcat_detect_local` = 两次完整盘根枚举
+ * + 两次全量扫描（各自一份 5s 预算），缓存还会「后写覆盖先写」。
+ * 这里让并发调用复用同一个探测。
+ */
+let detectionInFlight: Promise<DetectLocalPayload> | null = null;
+
+/**
+ * 跑一次本机探测；**并发调用复用同一个 promise**。
+ *
+ * - 复用：第二个调用直接拿第一个的结果，不重复扫盘（省一次全盘枚举 + 一次扫描预算）。
+ * - 清理：探测结束（成功或失败）后在 `finally` 里清空 in-flight → 下一次调用重新探测。
+ *
+ * 注意：复用期间**后到的调用拿到的是先到那次的结论**（含它当时的配置快照）。
+ * 这是有意的：并发两次探测的结果本来就该是同一份结论。
+ */
+export function detectLocalOnce(
+  state: AppState,
+  opts: DetectLocalRunOptions = {},
+): Promise<DetectLocalPayload> {
+  if (detectionInFlight) return detectionInFlight;
+  const wrapped: Promise<DetectLocalPayload> = detectLocalWithInstalls(state, opts).finally(() => {
+    // 只清自己发起的那次（期间若已有新的探测在跑，别把它清掉）
+    if (detectionInFlight === wrapped) detectionInFlight = null;
+  });
+  detectionInFlight = wrapped;
+  return wrapped;
 }

@@ -15,6 +15,8 @@ import {
   pickWebuiPort,
   redactDetectResult,
   trimFailedBySource,
+  MAX_CANDIDATES,
+  MAX_SCANNED_PORTS,
 } from '../src/server/host/detect-local.js';
 import { defaultConfig } from '../src/server/config.js';
 import type { DetectCandidate, DetectResult } from '../src/server/onebot/detect.js';
@@ -507,5 +509,179 @@ describe('napcat_status 的 detection 集成（C7）', () => {
     expect(s.configured).toBe(false);
     expect(s.connected).toBe(false);
     expect(s.mode).toBe('unconfigured');
+  });
+});
+
+/**
+ * 缓存失效（配置真的变了）+ 并发复用 + 出参上界 + 首次探测的 token 外泄缺口。
+ *
+ * 这几条都落在「探测结论」这条链路上：
+ * - 结论是**针对某一份配置**得出的 → 配置变了就得失效；
+ * - 结论的**产生**不能被并发调用放大成 N 份扫描；
+ * - 结论的**体积**必须有上界；
+ * - 结论里不能带出 token 明文。
+ */
+describe('探测缓存的失效条件（F1）', () => {
+  it('clears the cached detection when configure points at an unreachable endpoint', async () => {
+    // 端点**合法但连不上** → 配置已经落盘、内存态也换了 → 旧结论必须失效，
+    // 否则面板会继续拿「针对旧配置」的结论说「检测到本机 NapCat」。
+    const fake = await startFakeOneBot();
+    const dead = await closedPort();
+    try {
+      autoDetectConfig({ ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      expect(payload(await c.callTool({ name: 'napcat_status', arguments: {} })).detection).toBeDefined();
+
+      const cfg = await c.callTool({ name: 'napcat_configure', arguments: { endpoint: `http://127.0.0.1:${dead}` } });
+      expect(isError(cfg)).toBe(true); // 连不上 → 工具报错
+      // 但配置已落盘 → 旧结论不能继续展示
+      expect(payload(await c.callTool({ name: 'napcat_status', arguments: {} })).detection).toBeUndefined();
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('drops the cached detection when autoDetect changed in config.json externally', async () => {
+    const fake = await startFakeOneBot();
+    try {
+      autoDetectConfig({ ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      expect(payload(await c.callTool({ name: 'napcat_status', arguments: {} })).detection).toBeDefined();
+
+      // 外部改了 config.json（换了扫描端口）→ 旧结论已经对不上当前配置
+      autoDetectConfig({ ports: [fake.port + 1], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      const s = payload(await c.callTool({ name: 'napcat_status', arguments: {} }));
+      expect(s.detection).toBeUndefined();
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('drops the cached detection when the configured endpoint changed in config.json externally', async () => {
+    const fake = await startFakeOneBot();
+    try {
+      autoDetectConfig({ ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      expect(payload(await c.callTool({ name: 'napcat_status', arguments: {} })).detection).toBeDefined();
+
+      // 外部改了 config.json 的 connection（换了端点）→ 旧结论失效
+      writeConfig({
+        connection: { endpoint: `http://127.0.0.1:${fake.port}`, token: '' },
+        autoDetect: { ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 },
+      });
+      const s = payload(await c.callTool({ name: 'napcat_status', arguments: {} }));
+      expect(s.detection).toBeUndefined();
+    } finally {
+      await fake.close();
+    }
+  });
+});
+
+describe('并发探测的复用（F2）', () => {
+  it('probes the server only once when two detect calls overlap', async () => {
+    // MCP SDK 并发处理请求 → 两次并发调用不能变成两次全盘扫描
+    const fake = await startFakeOneBot();
+    try {
+      autoDetectConfig({ ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      // 基线：一次探测会打几个请求（http 探测 + ws 握手探测都算）
+      await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      const baseline = fake.requests;
+      expect(baseline).toBeGreaterThan(0);
+
+      const before = fake.requests;
+      const [r1, r2] = await Promise.all([
+        c.callTool({ name: 'napcat_detect_local', arguments: {} }),
+        c.callTool({ name: 'napcat_detect_local', arguments: {} }),
+      ]);
+      expect(isError(r1)).toBe(false);
+      expect(isError(r2)).toBe(false);
+      expect(payload(r1).found).toBe(true);
+      expect(payload(r2).found).toBe(true);
+      // 两次并发调用复用同一次探测 → 服务端只多挨**一遍**探测（而不是两遍）
+      expect(fake.requests - before).toBe(baseline);
+    } finally {
+      await fake.close();
+    }
+  });
+});
+
+describe('探测出参的上界（F4）', () => {
+  it('caps the candidate list and the scanned ports, and reports the totals in the notes', async () => {
+    const state = new AppState();
+    state.config.autoDetect.ports = Array.from({ length: 30 }, (_, i) => 20000 + i);
+    state.config.autoDetect.endpoints = [];
+    state.config.autoDetect.paths = [];
+    state.config.autoDetect.scanDrives = false;
+    const p = await detectLocalWithInstalls(state, { budgetMs: 60 });
+    // 候选 = 2 × 端口数 + WebUI 端口 → 必须被截断
+    expect(p.candidates.length).toBe(MAX_CANDIDATES);
+    expect(p.scanned.ports.length).toBe(MAX_SCANNED_PORTS);
+    expect(p.notes.join('\n')).toMatch(/候选端点共 \d+ 条/);
+    expect(p.notes.join('\n')).toMatch(/扫描端口共 \d+ 个/);
+  });
+});
+
+describe('首次探测的 token 外泄缺口（F5）', () => {
+  it('never echoes a token that only appeared in the endpoint query', async () => {
+    // 这个 token 本进程**没见过**（用户没配 token），只是写在端点的 query 里：
+    // 规范化端点会剥掉 query，但上游可能把它**裸回显**出来。
+    const secret = 'tk-9f2a7c1d';
+    const fake = await startFakeOneBot(() => ({
+      status: 'failed',
+      retcode: 1404,
+      wording: `invalid credential ${secret}`,
+    }));
+    try {
+      autoDetectConfig({
+        ports: [],
+        endpoints: [`http://127.0.0.1:${fake.port}/?access_token=${secret}`],
+        paths: [],
+        probeTimeoutMs: 1200,
+        scanDrives: false,
+        maxRoots: 0,
+      });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      const r = await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      expect(toolText(r)).not.toContain(secret);
+      expect(toolText(r)).toContain('***');
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('never echoes a bare token the process has never seen when the upstream demands auth', async () => {
+    // 上游**裸回显**它自己持有的 token（没有 token= / Bearer 前缀）：
+    // 探测内核的三种形态规则挡不住，本进程也没见过它 → 只能靠鉴权失败语境下的长串遮蔽。
+    const secret = 'aB3dEf6hJ9kLm2nP5qR8sT1uV';
+    const fake = await startFakeOneBot(() => ({
+      status: 'failed',
+      retcode: 1404,
+      wording: `unauthorized ${secret}`,
+    }));
+    try {
+      autoDetectConfig({
+        ports: [],
+        endpoints: [`http://127.0.0.1:${fake.port}`],
+        paths: [],
+        probeTimeoutMs: 1200,
+        scanDrives: false,
+        maxRoots: 0,
+      });
+      const state = new AppState();
+      const c = await makeToolClient(state);
+      const r = await c.callTool({ name: 'napcat_detect_local', arguments: {} });
+      expect(toolText(r)).not.toContain(secret);
+    } finally {
+      await fake.close();
+    }
   });
 });

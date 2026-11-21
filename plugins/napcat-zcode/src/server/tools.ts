@@ -10,7 +10,7 @@ import { safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import type { OB11Message } from './onebot/types.js';
 import type { AppState } from './state.js';
 import { endpointSecurityWarning } from './state.js';
-import { detectLocalWithInstalls } from './host/detect-local.js';
+import { detectLocalOnce } from './host/detect-local.js';
 
 /** 单次 `napcat_get_history` 最多翻多少页（防死循环）。 */
 const MAX_PAGES = 40;
@@ -407,9 +407,13 @@ export function registerTools(server: McpServer, state: AppState): void {
     },
     async ({ endpoint, token, clearToken }) => {
       try {
+        /**
+         * `setConnection` 内部在**落盘之后**就清掉了探测结论缓存：
+         * 配置一旦落盘，之前那次探测的结论就对不上了——**哪怕这次连不上**
+         * （端点合法但连不上时配置也已经写进文件并换了内存态，
+         * 此时若不清缓存，面板会继续拿针对旧配置的结论说「检测到本机 NapCat」）。
+         */
         const login = await state.setConnection(endpoint, token ?? '', { clearToken: clearToken === true });
-        // 配置变了（端点/端口/路径都可能变了）→ 之前那次探测的结论已经对不上 → 清掉缓存
-        state.clearDetection();
         // 安全警告：非回环端点 + 没有 token → 同网段的人可能读到聊天记录（spec §5.2 / §9）
         const warning = endpointSecurityWarning(
           state.config.connection.endpoint,
@@ -439,7 +443,8 @@ export function registerTools(server: McpServer, state: AppState): void {
       try {
         // 配置可能已被外部改过（面板设置页 / 用户手改文件）→ 刷新后再探
         state.reloadConfig();
-        const payload = await detectLocalWithInstalls(state);
+        // 并发调用复用同一个探测（不重复扫盘）：MCP SDK 会并发处理请求
+        const payload = await detectLocalOnce(state);
         // 结论缓存给 napcat_status 读（status 自己不会触发扫描）
         state.setDetection({
           found: payload.found,
