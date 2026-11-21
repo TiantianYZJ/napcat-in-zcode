@@ -178,8 +178,33 @@ describe('napcat_detect_local 工具契约', () => {
 
   it('finds a running OneBot on a configured port', async () => {
     const fake = await startFakeOneBot();
+    // WebUI 探测端口既不能硬编 6099（NapCat 可改），也不能依赖「本机恰好没有 NapCat 在跑」
+    // ——用一份「已被发现、但端口没在监听」的安装配置把探测端口钉死，结果与本机环境无关。
+    const webuiPort = await closedPort();
+    const installDir = join(tmp, 'NapCatInstall');
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(
+      join(installDir, 'onebot11_12345.json'),
+      JSON.stringify({
+        network: {
+          httpServers: [{ enable: true, host: '127.0.0.1', port: fake.port, name: 'http' }],
+          websocketServers: [],
+        },
+      }),
+    );
+    writeFileSync(
+      join(installDir, 'webui.json'),
+      JSON.stringify({ host: '127.0.0.1', port: webuiPort, token: 't', disableWebUI: false }),
+    );
     try {
-      autoDetectConfig({ ports: [fake.port], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 });
+      autoDetectConfig({
+        ports: [fake.port],
+        endpoints: [],
+        paths: [installDir],
+        probeTimeoutMs: 1200,
+        scanDrives: false,
+        maxRoots: 0,
+      });
       const state = new AppState();
       const c = await makeToolClient(state);
       const r = await c.callTool({ name: 'napcat_detect_local', arguments: {} });
@@ -188,7 +213,10 @@ describe('napcat_detect_local 工具契约', () => {
       expect(p.found).toBe(true);
       expect(p.live[0].endpoint).toBe(`http://127.0.0.1:${fake.port}`);
       expect(p.live[0].login.nickname).toBe('探测测试号');
-      expect(p.napcatRunning).toBe(false); // 6099 上没有 WebUI
+      expect(p.napcatRunning).toBe(false); // 探测的是上面那个没人监听的端口
+      // WebUI 端口来自安装配置，不是硬编 6099
+      // （顶层 webuiPort 只在「NapCat 在跑」时才有值，这里看的是安装项上报的端口）
+      expect(p.installs[0].webuiPort).toBe(webuiPort);
     } finally {
       await fake.close();
     }
