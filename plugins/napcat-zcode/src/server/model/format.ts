@@ -91,11 +91,16 @@ function entryText(m: Message, t: TimeParts): string {
  * - `text`：可直接注入的文本。首行恒为不可信内容声明，任何情况下都不截断、不改写。
  * - `count`：**实际渲染进正文的消息条数**（发生截断或跳过无有效时间的消息时小于入参条数）；
  *   标题里的「（N 条）」用的是它，截断尾注里的「共 N 条」才是选区总条数。
- * - 没有有效时间（`time` 缺失/非有限）的消息**跳过**并在正文末尾报出「跳过 N 条」——
- *   绝不允许渲染出 `NaN-NaN-NaN` 这种假时间戳。
- * - `truncated`：**选区里是否有消息没被纳入**。`truncated === false` ⇒ 选区消息全部纳入。
+ * - `truncated`：**选区里是否有消息因超长没被纳入**。`truncated === false` ⇒ 没有消息被截断掉。
  *   但 `text.length` 仍可能超过 `maxChars`——单条消息本身就超限时，
  *   为保证「首条不被切掉」，该条整条保留（spec 把注入体上限称作软上限）。
+ *
+ * **「跳过」是独立于 `truncated` 的第三个维度**（判读时别把两者混为一谈）：
+ * - 没有有效时间（`time` 缺失/非有限）的消息**根本不会被渲染**，
+ *   绝不允许渲染出 `NaN-NaN-NaN` 这种假时间戳；
+ * - 跳过**不影响** `truncated`：被跳过的消息不参与长度计算，`truncated` 仍可能是 false；
+ * - 因此 `truncated === false` **不等于**「选区消息全部进了正文」——
+ *   只有 `count`（= 实际渲染条数）加上正文末尾的「（跳过 N 条：消息缺少有效时间）」能说清全貌。
  */
 export function formatSelection(
   messages: Message[],

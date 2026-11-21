@@ -1,9 +1,14 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { msgKey, type Msg } from '../api.js';
 
-/** `HH:mm`（消息时间是 epoch 秒）。 */
-export function hm(t: number): string {
-  const d = new Date(t * 1000);
+/**
+ * `HH:mm`（消息时间是 epoch 秒）。
+ *
+ * 时间缺失（`undefined`）时按 NaN 处理 → 渲染成 `NaN:NaN`（与之前逐字相同：
+ * 消息列表渲染前已过滤掉没有有效时间的消息，这里只是类型上不撒谎）。
+ */
+export function hm(t: number | undefined): string {
+  const d = new Date((t ?? Number.NaN) * 1000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 

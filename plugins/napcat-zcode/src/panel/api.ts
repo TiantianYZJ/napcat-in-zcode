@@ -34,11 +34,18 @@ export interface Seg {
   messageId?: string;
 }
 
-/** 规范化消息（与服务端 `Message` 同构）。 */
+/**
+ * 规范化消息（与服务端 `Message` 同构，但 `time` 可能**缺失**）。
+ *
+ * `time` 可选的原因：服务端在消息**没有有效时间**时会把 `time` 置为 `undefined`，
+ * 而 `JSON.stringify` 会**丢弃**值为 undefined 的字段 → 线上收到的消息可能压根没有 `time`。
+ * （面板在把消息交给渲染层之前会过滤掉没有有效时间的消息，见 `App.tsx` 的 `renderable`。）
+ */
 export interface Msg {
   id: string;
   seq: number;
-  time: number;
+  /** 消息时间（epoch 秒）；**可能缺失** = 上游没给出可信的时间。 */
+  time?: number;
   senderId: string;
   senderName: string;
   segments: Seg[];
@@ -49,13 +56,15 @@ export interface Msg {
 /**
  * 消息的**选择标识**（面板用来标选中态 / React key / testid）。
  *
- * 优先级：
- * 1. `m.id`（服务端给的 message_id / real_id）—— 最稳，直接用；
- * 2. 没有 id 时退回 `s{seq}`（**有** message_seq 的形态）：`s` 前缀与
- *    面板的跨调用去重键（`s` / `i` 双命名空间，见 `App.tsx` 的 `dedupeKey`）同构；
- * 3. 连 message_seq 都没有（服务端 `seq` 为 0）时，时间是唯一还能区分的线索 →
- *    `s{seq}@{time}` / `t{time}`（**同时**带上 seq 与 time，避免同一条消息在不同字段上撞车）；
- * 4. 连时间都不可信 → 返回 **null**：调用方必须**跳过**这一条。
+ * 按**代码的实际顺序**：
+ * 1. 有 `m.id`（服务端给的 message_id / real_id）→ 直接用 id（最稳）；
+ * 2. 没有 id、但有有效 `seq` **和**有效 `time` → `s{seq}@{time}`
+ *    （**同时**带上 seq 与 time：只有 seq 时，多条消息可能撞同一个 seq）；
+ * 3. 没有 id、只有有效 `seq`（时间不可信）→ `s{seq}`；
+ * 4. 没有 id、没有有效 `seq`、只有有效 `time` → `t{time}`；
+ * 5. 三者都没有 → 返回 **null**：调用方必须**跳过**这一条。
+ *
+ * `s` 前缀与面板的跨调用去重键（`s` / `i` 双命名空间，见 `App.tsx` 的 `dedupeKey`）同构。
  *
  * 为什么不能退化成 `seq:0`：服务端的 `seq` 只承载 `message_seq`（没有就是 0），
  * 多条「既无 message_id 又无 message_seq」的消息会共用同一个 key →

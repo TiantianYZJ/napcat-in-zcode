@@ -208,6 +208,35 @@ describe('renderMarkdown', () => {
     expect(md).not.toContain('已截断');
     expect(md).toContain('共 500 条');
   });
+
+  // M1.1 S1：没有有效时间（缺失 / 非有限）的消息**跳过**，并如实报出跳过了几条。
+  // 以前直接拿 m.time 渲染 → `## NaN-NaN-NaN` 与 `[NaN:NaN]`（假时间戳）。
+  it('skips messages without a valid time and reports how many were skipped', () => {
+    const msgs: Message[] = [
+      MSGS[0],
+      { ...MSGS[1], time: undefined },        // time 缺失
+      { ...MSGS[1], id: '3', time: Number.NaN }, // time 非有限
+    ];
+    const md = renderMarkdown(msgs, CHAT);
+    // 被跳过的两条不渲染（内容、发言人都不会出现）
+    expect(md).not.toContain('Bob');
+    expect(md).not.toContain('[图片]');
+    // 渲染出来的那一条完整保留
+    expect(md).toContain('[12:00] Alice：场地定了吗？');
+    // 绝不产出 NaN 字样
+    expect(md).not.toContain('NaN');
+    // 「共 N 条」= **渲染数**，并说明另外几条为什么没渲染
+    expect(md).toContain('共 1 条');
+    expect(md).toContain('（另有 2 条缺少有效时间，未渲染）');
+  });
+
+  it('skips every message when none of them has a valid time', () => {
+    const md = renderMarkdown([{ ...MSGS[0], time: Number.NaN }], CHAT);
+    expect(md).not.toContain('NaN');
+    expect(md).not.toContain('Alice');
+    expect(md).toContain('共 0 条');
+    expect(md).toContain('（另有 1 条缺少有效时间，未渲染）');
+  });
 });
 
 describe('renderJson', () => {

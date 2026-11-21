@@ -71,8 +71,11 @@ function span(selected: Msg[]): string {
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
   for (const m of selected) {
-    if (m.time < min) min = m.time;
-    if (m.time > max) max = m.time;
+    // 时间缺失的消息不参与跨度计算（`undefined < x` / `undefined > x` 本来都是 false，语义不变）
+    const t = m.time;
+    if (t === undefined) continue;
+    if (t < min) min = t;
+    if (t > max) max = t;
   }
   return `${hm(min)}–${hm(max)}`;
 }

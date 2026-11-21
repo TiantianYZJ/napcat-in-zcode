@@ -315,7 +315,8 @@ export function App() {
     return messages.filter((m) => {
       if (kw && !m.text.toLowerCase().includes(kw)) return false;
       if (sender && m.senderId !== sender) return false;
-      if (cutoff !== undefined && m.time < cutoff) return false;
+      // 时间缺失的消息不参与时间范围过滤（`undefined < x` 本来就是 false，语义不变）
+      if (cutoff !== undefined && typeof m.time === 'number' && m.time < cutoff) return false;
       return true;
     });
   }, [messages, query, sender, range]);

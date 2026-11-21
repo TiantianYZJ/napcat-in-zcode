@@ -9,6 +9,7 @@
  * - 面板绝不能因为错误载荷不是 JSON 就自己崩掉。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Msg } from '../src/panel/api.js';
 
 const CAPS = { message: false, updateModelContext: false, downloadFile: false, serverTools: true };
 
@@ -168,6 +169,15 @@ describe('api 工具封装', () => {
     ).rejects.toThrow(/time/);
     expect(host.callTool).not.toHaveBeenCalled();
   });
+
+  // 服务端在消息没有有效时间时会**省略** time 字段（JSON.stringify 丢弃 undefined），
+  // 面板自己也要挡住这种消息（类型上 `time` 是可选的）。
+  it('消息压根没有 time 字段 → 面板自己先挡住', async () => {
+    await expect(
+      mod.api.formatSelection([{ id: '1', seq: 1, senderId: '2', senderName: 'A', segments: [], text: 'x' }], '群'),
+    ).rejects.toThrow(/time/);
+    expect(host.callTool).not.toHaveBeenCalled();
+  });
 });
 
 // M1.1-8：msgKey 退化时必须**带上可区分信息**，实在区分不了就返回 null（调用方跳过该条）。
@@ -190,6 +200,11 @@ describe('msgKey 的退化形态', () => {
 
   it('什么都区分不了时返回 null（调用方跳过该条，而不是共用一个 key）', () => {
     expect(mod.msgKey({ ...base, id: '', seq: 0, time: Number.NaN })).toBeNull();
+  });
+
+  it('消息压根没有 time 字段时同样返回 null（服务端会省略这个字段）', () => {
+    const noTime: Msg = { id: '', seq: 0, senderId: '1', senderName: 'A', segments: [], text: '' };
+    expect(mod.msgKey(noTime)).toBeNull();
   });
 
   it('多条既无 id 又无 seq 的消息不会共用同一个 key', () => {

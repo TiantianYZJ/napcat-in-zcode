@@ -78,7 +78,9 @@ describe('config', () => {
     applyEnvOverrides(cfg, { NAPCAT_EXPORT_DIR: 'workspace', NAPCAT_INCLUDE_IMAGES: 'true' });
     expect(cfg.export.dir).toBe('workspace');
     expect(cfg.export.includeImages).toBe(true);
-    applyEnvOverrides(cfg, { NAPCAT_EXPORT_DIR: 'bogus', NAPCAT_INCLUDE_IMAGES: 'yes' });
+    // M1.1：'yes' 现在是**合法值**了（大小写不敏感的 true/false/1/0/yes/no/on/off），
+    // 拿它当「非法值」示例会让断言恒真 → 换成真正非法的 'garbage'。
+    applyEnvOverrides(cfg, { NAPCAT_EXPORT_DIR: 'bogus', NAPCAT_INCLUDE_IMAGES: 'garbage' });
     expect(cfg.export.dir).toBe('workspace'); // 非法值不覆盖
     expect(cfg.export.includeImages).toBe(true);
   });
@@ -268,8 +270,9 @@ describe('config hardening', () => {
     cfg.export = { dir: 'workspace', includeImages: true };
     saveConfig(tmp, cfg);
 
+    // M1.1：'yes' 现在是合法值（不能拿它当「非法值」示例，断言会恒真）→ 用真正非法的 'garbage'
     process.env.NAPCAT_EXPORT_DIR = 'bogus';
-    process.env.NAPCAT_INCLUDE_IMAGES = 'yes';
+    process.env.NAPCAT_INCLUDE_IMAGES = 'garbage';
     const c = loadConfigData();
     expect(c.export.dir).toBe('workspace');
     expect(c.export.includeImages).toBe(true);
@@ -354,7 +357,8 @@ describe('config priority (legal env value wins, otherwise the file)', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ export: { dir: 'workspace', includeImages: true } }));
     process.env.ZCODE_PLUGIN_DATA = tmp;
     process.env.NAPCAT_EXPORT_DIR = 'bogus';
-    process.env.NAPCAT_INCLUDE_IMAGES = 'yes';
+    // M1.1：'yes' 现在是合法值（不能拿它当「非法值」示例，断言会恒真）→ 用真正非法的 'garbage'
+    process.env.NAPCAT_INCLUDE_IMAGES = 'garbage';
     const c = loadConfigData();
     expect(c.export.dir).toBe('workspace');
     expect(c.export.includeImages).toBe(true);
