@@ -9,6 +9,8 @@
       "env": {
         "NAPCAT_EXPORT_DIR": "${user_config.exportDir}",
         "NAPCAT_INCLUDE_IMAGES": "${user_config.includeImages}",
+        "NAPCAT_DOWNLOAD_PROXY": "${user_config.downloadProxy}",
+        "NAPCAT_DESKTOP_QQ_PATH": "${user_config.desktopQqPath}",
         "ZCODE_PROJECT_DIR": "${ZCODE_PROJECT_DIR}",
         "ZCODE_PLUGIN_DATA": "${ZCODE_PLUGIN_DATA}"
       }

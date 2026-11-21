@@ -13,10 +13,7 @@
 NapCat 与 QQ 始终是插件之外的独立进程。
 （NapCat 官方仓库已归档，可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release —— 见[已知限制](#已知限制与路线图)第 7 条。）
 
-> **当前状态（M2 已落地）**：外部 OneBot 端点（HTTP / WebSocket）路径与**本机 NapCat 自动探测**
-> （面板里的「检测本机 NapCat」）均已实现，有 666 条自动化测试覆盖。
-> 插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）**尚未实现**，
-> 详见[已知限制与路线图](#已知限制与路线图)。
+> **当前状态（M3 受管宿主已部分交付）**：外部 OneBot 端点与本机 NapCat 探测均已实现；受管宿主支持选择版本/目录/模式、校验后下载安装、查看进度并手动启动/停止。默认独立模式，不注入桌面 QQ。删除式卸载工具、扫码引导和媒体下载仍未交付；详见[已知限制与路线图](#已知限制与路线图)。
 
 ---
 
@@ -75,10 +72,13 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 | 条件 | 说明 |
 |------|------|
 | ZCode 桌面版 | 本插件的 UI 是**侧栏面板**（清单里的 `ui.surfaces`），需要 ZCode 桌面端承载 |
-| Node.js ≥ 20 | 插件的 MCP server 以 `node` 启动（见 `.mcp.json` 的 `command: "node"`） |
-| 一个已登录的 NapCat | 需要一个正在跑、且 QQ 已登录的 NapCat。**M2 起**，插件可以帮你「检测本机 NapCat」并把端点填好，但 NapCat 本体仍然要你自己准备 |
+| Node.js ≥ 20 | 插件 MCP server 以 `node` 启动；ZCode 可回退到内置运行时 |
+| NapCat（可选） | 可连接已运行的 NapCat；也可在「宿主」页由插件下载安装后手动启动 |
 
-**插件不提供 NapCat 本体。** 它不会下载、安装或拉起 NapCat —— 那是 M3「自带宿主」才做的事。
+**受管安装**：面板「宿主」页可由插件下载安装 NapCat，安装目录只允许新目录/空目录或台账中已登记的受管目录。安装完成后由用户手动启动，插件不会自动启动或登录 QQ。默认安装为独立模式；注入模式会影响桌面 QQ，QQ 9.9.36+ 可能因完整性检查报「文件已损坏」，不推荐使用。
+
+**目前没有删除式卸载工具**。如需卸载，请先在面板停止插件启动的实例，再由用户自行删除对应受管安装目录；不要通过 agent 工具直接删除目录。
+
 
 ### 方式一：GitHub 市场（跨设备推荐）
 
@@ -190,7 +190,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 
 > ⚠️ **插件不会替你开启 NapCat 的 OneBot Server。**
 > 需要你自己进 **NapCat WebUI → 网络配置 → 开启 HTTP Server**，然后再点一次「检测本机 NapCat」。
-> 插件只负责**发现**与**连接**，不改你的 NapCat 配置、不启停进程（M3 的「自带宿主」才是另一回事）。
+> 插件会检测已运行的 NapCat，也可在「宿主」页管理**由插件安装**的实例；不会改动或启停未受管的外部 NapCat。
 
 #### 结论是缓存，配置一变就过期
 
@@ -440,22 +440,26 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 | `autoDetect.probeTimeoutMs` | `1200` | 单个候选端点的探测超时（100–10000） |
 | `autoDetect.scanDrives` | `true` | 是否自动做盘根枚举（关掉后只扫你指定的路径与默认位置） |
 | `autoDetect.maxRoots` | `32` | 盘根发现的候选根**总量**上限（生效值 = min(maxRoots, 64)，默认即 32 个候选根；按盘轮转填充；0 = 禁用盘根发现） |
-| `managed.napcatVersion` | `"4.18.42"` | **M1 不生效**（自带宿主是 M3） |
-| `managed.downloadMirror` | `"auto"` | **M1 不生效** |
+| `managed.napcatVersion` | `"4.18.42"` | 受管安装默认版本 |
+| `managed.downloadMirror` | `"auto"` | 归档制品镜像选择 |
+| `managed.downloadProxy` | `""` | 下载代理；只接受本机回环代理，不在配置工具结果中回显 |
+| `managed.desktopQqPath` | `""` | 注入模式使用的 `QQ.exe` 绝对路径；只返回是否配置，不回显路径 |
 | `export.dir` | `"user"` | 决定「保存为附件…」与「导出」的默认目的地（`user` / `workspace`）；面板「导出▾」里显式选的目标优先 |
 | `export.includeImages` | `false` | **M1 不改变产物**（媒体下载是 M1.1） |
 | `inject.maxInjectChars` | `40000` | 注入文本的字符软上限（`napcat_format_selection` 缺省时取它） |
 
-### ZCode 设置界面里的两项
+### ZCode 设置界面里的四项
 
-清单把两个常用项暴露成 `userConfig`：
+清单把四项常用设置暴露成 `userConfig`：
 
 | 设置项 | 清单键 | 合法值 | 注入的环境变量 |
 |--------|--------|--------|----------------|
 | 导出目录 | `exportDir` | `user` / `workspace` | `NAPCAT_EXPORT_DIR` |
 | 包含图片 | `includeImages` | `true` / `false` / `1` / `0` / `yes` / `no` / `on` / `off`（**大小写不敏感**） | `NAPCAT_INCLUDE_IMAGES` |
+| NapCat 下载代理 | `downloadProxy` | 本机 HTTP(S) 回环代理；留空表示不覆盖文件配置 | `NAPCAT_DOWNLOAD_PROXY` |
+| 桌面 QQ 路径 | `desktopQqPath` | `QQ.exe` 绝对路径；仅安装注入模式时使用 | `NAPCAT_DESKTOP_QQ_PATH` |
 
-两项在清单里的 `default` 都是**空串**。
+四项在清单里的 `default` 都是**空串**。
 
 **优先级：env 合法值优先（env 覆盖 `config.json`）。**
 
@@ -467,7 +471,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 
 ## MCP 工具参考
 
-agent 可以直接调用这 9 个工具（面板走的是同一组工具、同一个 server 进程）。
+agent 可以直接调用以下 15 个工具（面板走的是同一组工具、同一个 server 进程）。
 返回值一律是**一段 JSON 文本**；出错时 `isError: true` + `{"error": "..."}`。
 
 | 工具 | 入参 | 返回 |
@@ -480,7 +484,13 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 | `napcat_search_messages` | `{chatKind, chatId, query, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
 | `napcat_format_selection` | `{messages, chatName, maxChars?}` | `{text, count, truncated}`。`text` 首行恒为不可信声明；`count` 是**实际渲染进正文的条数**；`maxChars` 缺省取配置 |
 | `napcat_export` | `{chat, messages?, chatKind?, chatId?, fromTime?, toTime?, dir?, includeImages?, workspaceDir?}` | `{mdPath, jsonPath, gitignoreUpdated}` |
-| `napcat_get_config` | 无 | 当前配置；**token 设了时显示为 `***`、未设置时是空串**，端点按脱敏形态返回（去掉 query 与 userinfo）；**扫描路径只给条数**（`autoDetect.pathsCount`，不返回路径内容） |
+| `napcat_get_config` | 无 | 当前配置；token 与端点脱敏，扫描路径只返回条数；下载代理和桌面 QQ 路径只返回已配置布尔值 |
+| `napcat_install` | `{dir?, version?, mode?, proxy?}` | 后台安装作业 `jobId`；默认模式为 standalone，目标目录必须为空或已受管，制品 SHA-256 固定 |
+| `napcat_install_status` | `{jobId?}` | 安装阶段、字节进度、结果或可读错误 |
+| `napcat_start` | `{id?}` | 启动受管实例；沿用安装时登记的模式 |
+| `napcat_stop` | `{id?}` | 仅停止本插件自己启动的受管进程 |
+| `napcat_host_status` | 无 | 受管安装、运行状态、后台作业与可用版本 |
+| `napcat_open_panel` | 无 | 打开对话内嵌面板 |
 
 `napcat_export` 的细则：
 
@@ -596,7 +606,7 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 
 | 不支持的事 | 说明 | 归属 |
 |------------|------|------|
-| 插件自带宿主 | 不会下载 / 安装 / 拉起 NapCat，不会引导扫码 | **M3** |
+| 插件自带宿主 | 已提供受管下载、安装、手动启动/停止；**不提供删除式卸载工具**，也不自动启动或扫码登录 | **M3 部分交付** |
 | 媒体下载 | 「包含图片」在 M1 不下载任何媒体文件，只在导出里记 URL（Markdown 是占位符或链接，JSON 里是完整 URL） | **M1.1** |
 | 合并转发展开 | 合并转发消息只渲染成 `[合并转发]` 占位符，不懒加载子消息 | **M1.1** |
 | 后台常驻监听 / 主动推送 | 面板只在打开时拉取；不驻留、不推送新消息 | **M4** |
@@ -608,11 +618,9 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 1. **宿主不回传另存路径。** `ui/download-file` 在协议层丢弃保存路径：成功返回 `{}`，
    失败与用户取消都返回 `{isError:true}`。所以「另存一份…」拿不到文件存到哪，
    也**分不清用户是取消还是失败**。要真实路径请用「保存为附件…」或「导出▾」。
-2. **「添加到输入框附件区」靠粘贴。** 平台**没有** composer 附件 API —— ZCode 的 MCP-UI 宿主能力位里
-   **本插件依赖的**只有 `message` / `updateModelContext` / `downloadFile` / `serverTools` 四个
-   （宿主实测**实际返回**的还有 `openLinks` / `logging` / `serverResources` / `experimental` 等，本插件都不用；
-   `sandbox` 只出现在协议**声明的 schema** 里、宿主实测不返回它；本插件也没有 `sampling` 相关的用法）。
-   实际路径是「保存为附件… → 导出并复制 `@路径` → 你粘贴到输入框」。
+2. **「添加到输入框附件区」靠粘贴。** 平台**没有** composer 附件 API —— 插件使用宿主提供的
+   `message` / `updateModelContext` / `downloadFile` / `serverTools` 能力；`openLinks` 是可选能力，
+   只影响打开本机 WebUI 的按钮。实际附件路径是「保存为附件… → 导出并复制 `@路径` → 你粘贴到输入框」。
 3. **注入文本首行是不可信第三方内容声明。** 注入体放在模型上下文里，模型会把聊天内容当作
    第三方内容而不是指令 —— 这是设计意图，不要因为「模型没听我的」就去删这一行。
 4. **搜索是有限扫描。** OneBot 11 没有服务端搜索动作，只能从最新往**更早**的方向翻页后在本地过滤。
@@ -626,9 +634,9 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 6. **「包含图片」在 M1 不下载媒体**（只记 URL），面板上的开关是禁用状态。标为 M1.1。
 7. **NapCat 上游已归档。** 官方仓库 `NapNeko/NapCatQQ` 主分支只剩一个 README，
    npm 上的 `napcat` 包也已注销；可用的发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release
-   （v4.18.42）。**本插件本身不下载 NapCat** —— 那是 M3 的事。
+   （v4.18.42）。受管宿主页通过 pinned SHA-256 下载与安装制品。
 8. **配置优先级**：`config.json` 与清单 `userConfig`（经 env 注入）之间 **env 合法值优先**；
-   清单两项 `userConfig` 的 default 是**空串**，所以用户没动过设置时文件保持权威。
+   清单四项 `userConfig` 的 default 是**空串**，所以用户没动过设置时文件保持权威。
 9. **渲染上限 2000 条**：超出后只渲染最近 2000 条（导出与搜索不受影响）。
 10. **Shift 连选是并集语义**：叠加到已有选区，不是替换区间（桌面软件常见的是替换区间）。
 11. **「需扫码登录」没有专门状态。** M1 只区分「未配置 / 连接失败 / 已连接」三态。
@@ -663,7 +671,7 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 | **M1** | 外部 OneBot 端点（HTTP / WS）+ 侧栏面板 + 注入 + 导出 | ✅ 已实现 |
 | **M1.1** | 媒体下载（`includeImages` 真正生效、`media/` 子目录）、合并转发展开 | ⬜ 未开始 |
 | **M2** | 本机已运行 NapCat 的自动探测与接入（面板「检测本机 NapCat」+ `napcat_detect_local`） | ✅ 已实现 |
-| **M3** | 自带宿主：下载 / 安装 / 拉起 NapCat，扫码引导（Windows 优先） | ⬜ 未开始 |
+| **M3** | 受管下载安装与手动启停（默认独立模式） | 🟨 部分交付；删除式卸载与扫码引导未交付 |
 | **M4** | 常驻守护、后台监听、主动推送 | ⬜ 预留 |
 
 ---
@@ -783,19 +791,19 @@ D:/Develop/Napcat in ZCode/
 │     ├─ src/
 │     │  ├─ server/                 # MCP server（stdio）
 │     │  │  ├─ index.ts             # 入口
-│     │  │  ├─ tools.ts             # 9 个工具的注册与实现
+│     │  │  ├─ tools.ts             # 15 个工具的注册与实现
 │     │  │  ├─ state.ts             # 运行期状态 / 端点校验 / 落盘
 │     │  │  ├─ config.ts            # 配置读写（config.json，0600，原子写）
 │     │  │  ├─ uiresource.ts        # ui://napcat-zcode/panel.html 资源
 │     │  │  ├─ onebot/              # OneBot 客户端（HTTP | WS）+ 动作封装 + 探测内核
-│     │  │  ├─ host/                # 本机 NapCat 安装发现 + 探测编排（M2）
+│     │  │  ├─ host/                # 本机 NapCat 探测 + 受管安装、进程监管与状态（M2/M3）
 │     │  │  ├─ model/               # 消息规范化 + 注入体格式化
 │     │  │  └─ export/              # Markdown / JSON 导出器 + .gitignore 防护
 │     │  └─ panel/                  # React 面板源码（含 protocol-notes.md）
 │     ├─ dist/                      # 构建产物（随插件分发）
 │     │  ├─ server.mjs
 │     │  └─ ui/panel.html
-│     └─ tests/                     # vitest（666 条 + 4 条平台相关跳过）
+│     └─ tests/                     # vitest（自动化测试）
 ├─ docs/
 │  ├─ acceptance-m1.md              # M1 实机验收清单（+ M2 验收项）
 │  └─ superpowers/{plans,specs}/    # 计划与设计文档
@@ -809,7 +817,7 @@ D:/Develop/Napcat in ZCode/
 cd plugins/napcat-zcode
 npm install          # 首次
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run（666 条 + 4 条平台相关跳过）
+npm test             # vitest run
 npm run build        # = build:server + build:panel
 npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
 npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只能推断的 NapCat 语义
@@ -819,7 +827,7 @@ npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只�
 
 | 脚本 | 检查什么 |
 |------|----------|
-| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：9 个工具的出入参契约、本机探测与结论缓存、时间游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
+| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：15 个工具的出入参契约、本机探测与结论缓存、时间游标翻页、受管宿主工具清单、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
 | `scripts/smoke-panel.mjs` | 把构建出的 `dist/ui/panel.html` 装进 DOM，由一个说 MCP-UI 协议的模拟宿主驱动：握手、会话列表、消息流、选择状态机（未打开会话 → 未选择消息 → 可点） |
 
 两个脚本都不连真实 QQ，跑完即退出（退出码 0 = 全通过）。

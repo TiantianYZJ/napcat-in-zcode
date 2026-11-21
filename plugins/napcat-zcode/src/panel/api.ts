@@ -169,8 +169,16 @@ export interface ExportResult {
  * token 已经是 `'***'`、endpoint 是脱敏形态 → 面板只展示，**不要回写**。
  */
 export interface ConfigInfo {
-  connection?: { endpoint?: string; token?: string };
+  connection?: { mode?: string; endpoint?: string; token?: string };
+  autoDetect?: { pathsCount?: number };
+  managed?: {
+    napcatVersion?: string;
+    downloadMirror?: string;
+    downloadProxyConfigured?: boolean;
+    desktopQqPathConfigured?: boolean;
+  };
   export?: { dir?: string; includeImages?: boolean };
+  inject?: { maxInjectChars?: number };
   [key: string]: unknown;
 }
 
@@ -251,6 +259,67 @@ export interface DetectResult {
   }[];
   /** 被回环闸门丢弃的端点。 */
   droppedEndpoints: { endpoint: string; reason: string; detail?: string }[];
+}
+
+// ── 受管宿主（M3）────────────────────────────────────────────────────
+
+/** 受管安装（视图形态：WebUI token 只以掩码出现）。 */
+export interface ManagedInstallView {
+  id: string;
+  version: string;
+  /** `standalone`（独立，不影响桌面 QQ）/ `inject`（注入桌面 QQ）。 */
+  mode: string;
+  installedAt: string;
+  artifactSha256: string;
+  /** 安装目录（绝对路径）——只给用户看。 */
+  dir: string;
+  /** 插件自己拉起的进程 pid。 */
+  pid?: number;
+  /** WebUI token 的掩码（永远不是明文）。 */
+  webuiTokenMasked?: string;
+}
+
+/** 受管实例的运行状态。 */
+export interface HostStatus {
+  state: 'not-installed' | 'stopped' | 'starting' | 'running' | 'degraded' | 'unknown';
+  install?: ManagedInstallView;
+  pid?: number;
+  webuiPort?: number;
+  webuiReachable?: boolean;
+  onebotPort?: number;
+  onebotPortReachable?: boolean;
+  login?: { user_id: string; nickname: string };
+  /** 面向用户的中文说明。 */
+  message?: string;
+}
+
+/** 一次安装作业（进度与结果）。 */
+export interface InstallJobView {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  state: 'running' | 'succeeded' | 'failed';
+  /** `connecting` / `downloading` / `verifying` / `extracting` / `done` / `failed`。 */
+  phase: string;
+  bytesReceived: number;
+  /** 服务器声明的总大小（未知时没有这个字段 → 百分比也给不出）。 */
+  totalBytes?: number;
+  percent?: number;
+  error?: string;
+  notes?: string[];
+  install?: ManagedInstallView;
+}
+
+/** `napcat_host_status` 的返回。 */
+export interface HostStatusResult {
+  /** 插件自己装过的 NapCat。 */
+  installs: ManagedInstallView[];
+  /** 每个受管安装的运行状态。 */
+  status: HostStatus[];
+  /** 最近的安装作业（新的在后）。 */
+  jobs: InstallJobView[];
+  /** 当前平台可用的 NapCat 版本。 */
+  versions: string[];
 }
 
 /**
@@ -486,4 +555,37 @@ export const api = {
 
   /** 读配置（token 已是 `'***'`、endpoint 已脱敏 → 只展示，不回写）。 */
   getConfig: () => callToolJson<ConfigInfo>('napcat_get_config', {}),
+
+  // ── 受管宿主（M3）：装 / 启 / 停 ───────────────────────────────────
+
+  /** 受管宿主状态（装过的 NapCat、每个的运行状态、最近的安装作业）。 */
+  hostStatus: () => callToolJson<HostStatusResult>('napcat_host_status', {}),
+
+  /** 启动一次安装作业（**立即返回** jobId；进度用 `installStatus` 轮询）。 */
+  installNapcat: (opts: { dir?: string; version?: string; mode?: 'standalone' | 'inject'; proxy?: string } = {}) =>
+    callToolJson<{ jobId: string; version: string; dir: string; mode: string }>(
+      'napcat_install',
+      Object.keys(opts).length ? { ...opts } : {},
+    ),
+
+  /** 安装作业进度（不传 jobId = 最近一次）。 */
+  installStatus: (jobId?: string) =>
+    callToolJson<InstallJobView>(
+      'napcat_install_status',
+      jobId === undefined ? {} : { jobId },
+    ),
+
+  /** 启动一个受管的 NapCat，沿用安装台账中记录的模式。 */
+  startHost: (id?: string) =>
+    callToolJson<{ started: boolean; pid: number; mode: string; message: string; warning?: string }>(
+      'napcat_start',
+      id === undefined ? {} : { id },
+    ),
+
+  /** 停止一个受管的 NapCat（只停本插件自己启动的进程）。 */
+  stopHost: (id?: string) =>
+    callToolJson<{ stopped: boolean; message: string }>(
+      'napcat_stop',
+      id === undefined ? {} : { id },
+    ),
 };

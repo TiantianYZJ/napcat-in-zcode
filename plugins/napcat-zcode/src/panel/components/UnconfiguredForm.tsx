@@ -12,6 +12,9 @@ import { LocalDetect } from './LocalDetect.js';
  *   以前留空等于「清空」，用户只是改了端点就把凭据擦掉了。
  * - 想清除已保存的 token → 勾上「清除已保存的 token」。
  * - 填了新 token → 以新 token 为准（此时「清除」勾选会被忽略）。
+ *
+ * 排布：先说「要连哪台」（探测 + 端点），再说「凭据」（token），最后才是动作。
+ * 失败与警告分开摆：错误是「做错了」，警告是「你应该知道的一件事」。
  */
 export function UnconfiguredForm({
   onDone,
@@ -64,6 +67,7 @@ export function UnconfiguredForm({
 
   return (
     <div className="setup" data-testid="setup-form">
+      <h2>连接 NapCat</h2>
       <LocalDetect onPick={(ep, suspect) => void pickCandidate(ep, suspect)} onDetected={onDetected} />
       <label>
         OneBot 端点
@@ -100,6 +104,7 @@ export function UnconfiguredForm({
         清除已保存的 token
       </label>
       <button
+        className="btn primary"
         disabled={busy || !endpoint}
         data-testid="connect-btn"
         onClick={async () => {

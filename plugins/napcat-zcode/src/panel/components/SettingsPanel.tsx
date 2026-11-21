@@ -3,7 +3,7 @@ import { api, type ConfigInfo } from '../api.js';
 import { modeLabel } from './Statusbar.js';
 
 /**
- * 设置面板。
+ * 设置面板（浮层）。
  *
  * 绝大部分是**只读展示**：
  * 读 `napcat_get_config`：端点已脱敏、token 已被服务端换成 `'***'`。
@@ -73,6 +73,7 @@ export function SettingsPanel({
   const conn = cfg?.connection as { mode?: string; endpoint?: string; token?: string } | undefined;
   const exp = cfg?.export as { dir?: string; includeImages?: boolean } | undefined;
   const inj = cfg?.inject as { maxInjectChars?: number } | undefined;
+  const man = cfg?.managed;
   /** 已配置的扫描路径**条数**（路径本身服务端不返回，见文件头注释）。 */
   const auto = cfg?.autoDetect as { pathsCount?: number } | undefined;
   const pathsCount = typeof auto?.pathsCount === 'number' ? auto.pathsCount : undefined;
@@ -114,8 +115,8 @@ export function SettingsPanel({
   return (
     <div className="settings-panel" data-testid="settings-panel">
       <div className="settings-head">
-        <strong>插件配置</strong>
-        <button data-testid="settings-close" onClick={onClose}>
+        <span className="settings-title">插件配置</span>
+        <button className="btn ghost" data-testid="settings-close" onClick={onClose}>
           关闭
         </button>
       </div>
@@ -141,6 +142,12 @@ export function SettingsPanel({
           <dd>
             {typeof inj?.maxInjectChars === 'number' ? String(inj.maxInjectChars) : '（默认 40000）'}
           </dd>
+          <dt>NapCat 版本</dt>
+          <dd>{man?.napcatVersion ?? '（默认 4.18.42）'}</dd>
+          <dt>下载代理</dt>
+          <dd>{man?.downloadProxyConfigured ? '已配置（本机代理）' : '未配置'}</dd>
+          <dt>桌面 QQ 路径</dt>
+          <dd>{man?.desktopQqPathConfigured ? '已配置（仅用于注入模式）' : '未配置'}</dd>
         </dl>
       ) : (
         !err && <div className="empty">读取配置中…</div>
@@ -165,6 +172,7 @@ export function SettingsPanel({
           面板自己也不知道已配置了几条）→ 早点一下就会把 autoDetect.paths 清空。
         */}
         <button
+          className="btn"
           data-testid="paths-save"
           disabled={pathsSaving || cfg === null}
           onClick={() => void savePaths()}

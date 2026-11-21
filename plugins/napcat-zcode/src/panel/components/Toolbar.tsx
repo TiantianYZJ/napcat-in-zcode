@@ -13,6 +13,8 @@ export function Toolbar({
   onRange,
   includeImages,
   onIncludeImages,
+  onToggleChats,
+  chatName,
 }: {
   query: string;
   onQuery: (s: string) => void;
@@ -25,11 +27,22 @@ export function Toolbar({
   onRange: (s: string) => void;
   includeImages: boolean;
   onIncludeImages: (v: boolean) => void;
+  /** 展开 / 收起会话抽屉。 */
+  onToggleChats?: () => void;
+  /** 当前会话名（抽屉按钮上显示，让用户知道自己正在看谁）。 */
+  chatName?: string;
 }) {
   return (
     <div className="toolbar">
+      {onToggleChats && (
+        <button className="btn" data-testid="toggle-chats" onClick={onToggleChats} title="切换会话列表">
+          会话{chatName ? ` · ${chatName}` : ''}
+        </button>
+      )}
       <input
-        placeholder="关键词过滤…"
+        type="search"
+        className="grow"
+        placeholder="在已载入的记录里找…"
         value={query}
         onChange={(e) => onQuery(e.target.value)}
         data-testid="filter-query"
@@ -59,7 +72,7 @@ export function Toolbar({
           data-testid="filter-images"
           disabled
         />
-        含图（M1 暂不下载）
+        含图（暂不下载）
       </label>
     </div>
   );

@@ -1,12 +1,12 @@
 # M1 实机验收清单
 
 **范围**：M1（外部 OneBot 端点路径）的全链路手工验收；
-**§13 追加 M2（本机 NapCat 自动探测）的验收项**。
+**§13 追加 M2（本机 NapCat 自动探测）的验收项；§15 追加 M3（受管宿主）的验收项。**
 **环境**：ZCode 桌面版 + 一个**正在运行且 QQ 已登录**的 NapCat。
 **用法**：从上往下逐条勾选。任何一条不通过，先按 [§12 已知会失败的场景](#12-已知会失败的场景与期望的降级表现)
 定位是环境问题还是插件缺陷。
 
-- 被测插件：`napcat-zcode` v0.3.0
+- 被测插件：`napcat-zcode` v0.5.0
 - 被测协议：OneBot 11（HTTP 或 WebSocket）
 - 配套文档：[仓库根 README](../README.md)、[设计文档](superpowers/specs/2026-11-20-napcat-zcode-design.md)
 
@@ -422,12 +422,9 @@
 | 12.10 | Shift 连选 | **并集语义**（叠加），不是替换区间 |
 | 12.11 | 工作区导出但工作区目录不可用 | 「保存为附件…」如实报错 + 给「改用用户目录」退路；**不静默改写目的地**。<br>「导出▾ → 导出到当前工作区」只有报错、没有退路（那里目的地是用户显式选的） |
 | 12.12 | `.gitignore` 已有覆盖规则 / 取反规则 | 不改文件；`gitignoreUpdated: false`（**两种含义**，插件不替用户断言是哪一种） |
-| 12.13 | 配置里 `export.dir` 与设置界面冲突 | **env 合法值优先**（env 覆盖 `config.json`）；清单两项 `userConfig` 默认是空串，
-      用户没显式选过时文件保持权威 |
+| 12.13 | 配置里 `export.dir` 与设置界面冲突 | **env 合法值优先**（env 覆盖 `config.json`）；清单四项 `userConfig` 默认是空串，用户没显式选过时文件保持权威 |
 | 12.14 | 本机没有可自动探测的 NapCat | M2 会做自动探测，但范围只有**回环 + 你显式配置的端点**（**不扫局域网**）；扫不到时手填端点即可（见 §13） |
-| 12.15 | NapCat 上游已归档 | 官方 `NapNeko/NapCatQQ` 主分支只剩 README、npm `napcat` 包已注销；
-      可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release（v4.18.42）。
-      **本插件不下载 NapCat**（M3 才做） |
+| 12.15 | NapCat 上游已归档 | 官方 `NapNeko/NapCatQQ` 主分支只剩 README、npm `napcat` 包已注销；可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release（v4.18.42）。受管宿主只下载 pinned SHA-256 制品，不修改上游源码 |
 | 12.16 | NapCat 挂掉 / 网络中断 | **M1 没有自动重连**（无指数退避循环、无进度提示）：状态条停在 `✕ ...`，
       恢复靠手动点「重试」或重新打开面板 |
 | 12.17 | 工作区导出失败后改了选区再点「改用用户目录」 | 导出的是**失败那一刻**的旧选区（退路按钮捕获了当时的选区快照）；
@@ -572,3 +569,59 @@
 | # | 现象 | 归属 |
 |---|------|------|
 | | | |
+
+---
+
+## 15. M3 验收项：受管 NapCat 宿主
+
+**范围**：插件下载安装并管理插件自己登记的 NapCat 实例。默认选择独立模式；注入模式只在用户明确选择安装时生效。删除式卸载工具与扫码引导不属于本次交付。
+
+### 15.1 清单与配置
+
+- [x] **15.1.1** `plugin.json`、`.mcp.json`、`package.json`、`marketplace.json` 版本均为 `0.5.0`
+- [x] **15.1.2** 两份 MCP 清单的 env 键集一致，含 `NAPCAT_DOWNLOAD_PROXY` 与 `NAPCAT_DESKTOP_QQ_PATH`
+- [x] **15.1.3** 四项 `userConfig` 默认均为空串；空串不会覆盖 `config.json`
+- [x] **15.1.4** `napcat_get_config` 不返回代理 URL 或桌面 QQ 绝对路径，只返回 `downloadProxyConfigured` 与 `desktopQqPathConfigured`
+
+### 15.2 安装目录与下载
+
+- [x] **15.2.1** `napcat_install` 不传目录时使用插件数据目录下的 `napcat-<version>`；显式目录必须是绝对路径
+- [x] **15.2.2** 不存在的目标目录和现存空普通目录允许安装
+- [x] **15.2.3** 非受管非空目录、已存在文件和符号链接被拒绝，且原有文件不被改动
+- [x] **15.2.4** 已在台账中的目录允许升级；下载、SHA-256 校验、解压或配置失败时不留下半成品
+- [x] **15.2.5** 下载代理只接受本机回环 HTTP(S) 代理；制品来源 host 与 SHA-256 均固定校验
+- [x] **15.2.6** `napcat_install` 立即返回 `jobId`；`napcat_install_status` 能报告 connecting / downloading / verifying / extracting / done / failed
+- [x] **15.2.7** 面板重新挂载后能恢复最近安装作业的状态与进度
+
+### 15.3 模式与启停
+
+- [x] **15.3.1** 安装表单默认选择「独立模式」，并显示“不影响桌面 QQ”的说明
+- [x] **15.3.2** 选择注入模式时显示 QQ 完整性检查风险；模式只写入安装请求和台账
+- [x] **15.3.3** `napcat_start` 只接受可选 `id`，不接受运行时 `mode` 覆盖；启动沿用台账登记模式
+- [x] **15.3.4** 只有台账中插件自己记录的 pid 才能被 `napcat_stop` 停止
+- [x] **15.3.5** 端口被外部实例占用时返回 `unknown`，面板禁用启动，不触碰外部进程
+- [x] **15.3.6** 面板停止按钮先显示二次确认，取消不会调用停止工具
+- [x] **15.3.7** 宿主支持 `openLinks` 时可打开 `http://127.0.0.1:<webuiPort>`；不支持时按钮置灰
+
+### 15.4 文案与隐私红线
+
+- [x] **15.4.1** 面板不显示 WebUI token、下载代理凭据或桌面 QQ 本机路径的工具回显
+- [x] **15.4.2** 安装失败、外部占用、未登记实例等错误说明可读且不泄露敏感路径或 token
+- [x] **15.4.3** 文档明确：当前没有 `napcat_uninstall`；用户须先停止，再自行删除受管目录
+- [x] **15.4.4** 未完成扫码引导不作为 M3 已交付能力宣称
+
+### 15.5 自动化验收记录
+
+- [x] `npm run typecheck` — 通过（2026-11-21）
+- [x] `npm test` — 31 个文件 / 696 通过 / 4 跳过，进程干净退出（先前一次并发 worker 报 `ERR_IPC_CHANNEL_CLOSED`，单 worker 复跑无此问题，定性为 tinypool 基础设施抖动而非测试泄漏；复跑两次均干净）
+- [x] `npm run build` — `dist/server.mjs` + `dist/ui/panel.html`（单文件 212 kB）
+- [x] `npm run smoke` — smoke-stdio 18/18；smoke-panel 14/14（两处断言随 ZCode 风格改版更新：`chat-drawer` 结构容器不计入会话项；发言人名改查 `.msggroup` 组头）
+- [x] 宽侧栏、480px、320px 视口检查浅色/深色面板，确认消息流、安装进度与停止确认无重叠
+
+  方法：Playwright 未安装（design skill 的 audit.mjs 不可用），改用本机 Edge（Chromium 141）headless 截图：把构建产物 `dist/ui/panel.html` 的宿主出口替换为内置假宿主（fixture 与 smoke-panel 同源），按 `?scene=chat|install|stop` 驱动到目标状态，嵌入 320/480/800px 的 iframe 网格中截图（iframe 视口不受 headless 窗口最小宽度钳制影响；浅色变体通过移除 dark 变量块获得，因为 headless 跟随系统深色主题）。
+
+  发现并修复的问题：
+  - 切换页签不收起会话抽屉，宿主页签被默认打开的抽屉盖住 → 切 tab 时收起抽屉（`App.tsx`）；
+  - 320px 下过滤工具栏、底部动作条、「加载更早」行横向溢出 → 三处加 `flex-wrap`（`styles.css`），消息气泡不再被撑宽截断。
+
+  修复后复验：3 个场景 × 2 主题 × 3 视口均无溢出、无重叠；面板相关 110 项测试与全量 696 项测试通过。

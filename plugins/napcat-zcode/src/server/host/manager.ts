@@ -29,6 +29,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -628,6 +629,27 @@ class DirectorySwap {
   }
 }
 
+export function assertInstallTargetSafe(dir: string, managed: boolean): void {
+  let stat;
+  try {
+    stat = lstatSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+
+  if (stat.isSymbolicLink()) {
+    throw new Error('安装目标不能是符号链接：请选择普通目录。');
+  }
+  if (managed) return;
+  if (!stat.isDirectory()) {
+    throw new Error('目标路径已存在且不是目录：为避免覆盖用户文件，请选择一个空目录。');
+  }
+  if (readdirSync(dir).length !== 0) {
+    throw new Error('目标目录已存在且不属于插件受管安装：为避免覆盖用户文件，请选择一个空目录。');
+  }
+}
+
 // ── 受管宿主 ────────────────────────────────────────────────────────
 
 /**
@@ -964,6 +986,7 @@ export class ManagedHost {
     if (req.mode !== 'standalone' && req.mode !== 'inject') {
       throw new Error('安装请求无效：模式只能是「独立」或「注入」。');
     }
+    assertInstallTargetSafe(req.dir, Boolean(this.findByDir(req.dir)));
   }
 
   /** 校验并收敛一条安装条目。 */
@@ -1141,7 +1164,8 @@ export class ManagedHost {
       // ③ 写配置
       this.writeInstallConfig(payloadDir, job, req);
 
-      // ④ 换位
+      // 下载期间目标目录可能被外部进程改动；替换前重新确认未受管目录仍为空。
+      assertInstallTargetSafe(req.dir, Boolean(this.findByDir(req.dir)));
       swap = this.swapIntoPlace(payloadDir, req.dir, job.id);
 
       // ⑤ 登记台账

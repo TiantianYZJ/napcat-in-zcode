@@ -18,7 +18,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,7 @@ import {
   deriveInstallId,
   findDesktopQqPackage,
   ManagedHost,
+  assertInstallTargetSafe,
   maskSecret,
   newJobId,
   scrubLocalPaths,
@@ -249,6 +250,42 @@ describe('M3 Task 2：受管安装台账 + 安装作业', () => {
       download: downloadVerifiedForTest,
       ...opts,
     });
+
+  describe('安装目标保护', () => {
+    it('allows a missing target and an existing empty directory', () => {
+      const missing = join(workDir, 'missing');
+      const empty = join(workDir, 'empty');
+      mkdirSync(empty);
+      expect(() => assertInstallTargetSafe(missing, false)).not.toThrow();
+      expect(() => assertInstallTargetSafe(empty, false)).not.toThrow();
+    });
+
+    it('rejects files, symbolic links, and non-empty unmanaged directories', () => {
+      const file = join(workDir, 'user-file');
+      const link = join(workDir, 'link');
+      const populated = join(workDir, 'populated');
+      writeFileSync(file, 'keep');
+      mkdirSync(populated);
+      writeFileSync(join(populated, 'keep.txt'), 'keep');
+      try {
+        symlinkSync(file, link);
+        expect(() => assertInstallTargetSafe(link, false)).toThrow(/符号链接/);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EPERM') throw err;
+      }
+      expect(() => assertInstallTargetSafe(file, false)).toThrow(/不是目录/);
+      expect(() => assertInstallTargetSafe(populated, false)).toThrow(/空目录/);
+      expect(readFileSync(file, 'utf8')).toBe('keep');
+      expect(readFileSync(join(populated, 'keep.txt'), 'utf8')).toBe('keep');
+    });
+
+    it('allows a non-empty managed directory to be upgraded', () => {
+      const managed = join(workDir, 'managed');
+      mkdirSync(managed);
+      writeFileSync(join(managed, 'old.txt'), 'managed');
+      expect(() => assertInstallTargetSafe(managed, true)).not.toThrow();
+    });
+  });
 
   // ── ① 台账 ──────────────────────────────────────────────────────
 

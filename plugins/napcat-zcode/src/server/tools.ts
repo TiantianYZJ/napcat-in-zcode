@@ -766,20 +766,28 @@ export function registerTools(server: McpServer, state: AppState): void {
          * **诊断类返回值里的绝对路径是溯源信息，只用于解释来源**。
          * 这里属于配置类 → 只给**条数**——面板要显示「已配置 N 条」够用了。
          */
-        const { paths: _localPaths, ...autoDetectRest } = cfg.autoDetect ?? {};
         const masked = {
-          ...cfg,
           connection: {
-            ...cfg.connection,
+            mode: cfg.connection.mode,
             endpoint: maskEndpoint(endpoint),
             token: token ? '***' : '',
           },
           autoDetect: {
-            ...autoDetectRest,
-            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint),
-            /** 本机扫描路径的**条数**（路径本身不外泄）。 */
-            pathsCount: (cfg.autoDetect?.paths ?? []).length,
+            ports: [...cfg.autoDetect.ports],
+            endpoints: cfg.autoDetect.endpoints.map(maskEndpoint),
+            pathsCount: cfg.autoDetect.paths.length,
+            probeTimeoutMs: cfg.autoDetect.probeTimeoutMs,
+            scanDrives: cfg.autoDetect.scanDrives,
+            maxRoots: cfg.autoDetect.maxRoots,
           },
+          managed: {
+            napcatVersion: cfg.managed.napcatVersion,
+            downloadMirror: cfg.managed.downloadMirror,
+            downloadProxyConfigured: cfg.managed.downloadProxy !== '',
+            desktopQqPathConfigured: cfg.managed.desktopQqPath !== '',
+          },
+          export: { ...cfg.export },
+          inject: { ...cfg.inject },
         };
         return ok(masked);
       } catch (e) {

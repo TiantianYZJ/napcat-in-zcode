@@ -2980,7 +2980,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve2.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3007,7 +3007,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve2(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3367,8 +3367,8 @@ var require_utils = __commonJS({
     var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
     var HOST_DELIM_RE = /[@/?#:]/g;
     var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
-    function reescapeHostDelimiters(host, isIP) {
-      const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
+    function reescapeHostDelimiters(host, isIP2) {
+      const re = isIP2 ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
       re.lastIndex = 0;
       return host.replace(re, (ch) => HOST_DELIMS[ch]);
     }
@@ -3871,7 +3871,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve2(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4065,12 +4065,12 @@ var require_fast_uri = __commonJS({
       const host = matches[4];
       return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
     }
-    function canonicalizeHost(parsed, options, schemeHandler, isIP) {
-      if (hasForbiddenDomainHost(parsed, options, schemeHandler, isIP)) {
+    function canonicalizeHost(parsed, options, schemeHandler, isIP2) {
+      if (hasForbiddenDomainHost(parsed, options, schemeHandler, isIP2)) {
         parsed.error = parsed.error || MALFORMED_HOST_ERROR;
         return true;
       }
-      if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
+      if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP2 === false && nonSimpleDomain(parsed.host)) {
         let url;
         try {
           url = new URL("http://" + parsed.host);
@@ -4086,9 +4086,9 @@ var require_fast_uri = __commonJS({
       }
       return false;
     }
-    function hasForbiddenDomainHost(parsed, options, schemeHandler, isIP) {
+    function hasForbiddenDomainHost(parsed, options, schemeHandler, isIP2) {
       return Boolean(
-        parsed.host && isIP === false && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && FORBIDDEN_DOMAIN_HOST_CHARACTER.test(parsed.host)
+        parsed.host && isIP2 === false && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && FORBIDDEN_DOMAIN_HOST_CHARACTER.test(parsed.host)
       );
     }
     function isHostOnlyURL(url) {
@@ -4111,7 +4111,7 @@ var require_fast_uri = __commonJS({
       let malformedHost = false;
       let malformedIPLiteral = false;
       let malformedScheme = false;
-      let isIP = false;
+      let isIP2 = false;
       if (options.reference === "suffix") {
         if (options.scheme) {
           uri = options.scheme + ":" + uri;
@@ -4173,15 +4173,15 @@ var require_fast_uri = __commonJS({
             const bracketedIPLiteral = isIPLiteral(parsed.host);
             const hasIPLiteralBracket = parsed.host.indexOf("[") !== -1 || parsed.host.indexOf("]") !== -1;
             const ipv6result = normalizeIPv6(parsed.host);
-            isIP = ipv6result.isIPV6 || ipv6result.isIPVFuture === true;
+            isIP2 = ipv6result.isIPV6 || ipv6result.isIPVFuture === true;
             malformedIPLiteral = hasIPLiteralBracket && (!bracketedIPLiteral || ipv6result.error === true);
-            parsed.host = isIP ? ipv6result.host : ipv6result.host.toLowerCase();
+            parsed.host = isIP2 ? ipv6result.host : ipv6result.host.toLowerCase();
             if (malformedIPLiteral) {
               parsed.error = parsed.error || MALFORMED_HOST_ERROR;
               malformedAuthorityOrPort = true;
             }
           } else {
-            isIP = true;
+            isIP2 = true;
           }
         }
         if (parsed.scheme === void 0 && parsed.userinfo === void 0 && parsed.host === void 0 && parsed.port === void 0 && parsed.query === void 0 && !parsed.path) {
@@ -4198,14 +4198,14 @@ var require_fast_uri = __commonJS({
         }
         const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme);
         if (!malformedIPLiteral) {
-          malformedHost = canonicalizeHost(parsed, options, schemeHandler, isIP);
+          malformedHost = canonicalizeHost(parsed, options, schemeHandler, isIP2);
         }
         if (uri.indexOf("%") !== -1 && parsed.host !== void 0 && !malformedIPLiteral) {
-          let host = isIP ? parsed.host : normalizePercentEncoding(parsed.host, true);
-          if (!isIP) {
+          let host = isIP2 ? parsed.host : normalizePercentEncoding(parsed.host, true);
+          if (!isIP2) {
             host = normalizePercentEncoding(host.toLowerCase());
           }
-          parsed.host = isIP || options.scheme !== "null" ? reescapeHostDelimiters(host, isIP) : host;
+          parsed.host = isIP2 || options.scheme !== "null" ? reescapeHostDelimiters(host, isIP2) : host;
         }
         if (!schemeHandler || schemeHandler && !schemeHandler.skipNormalize) {
           if (parsed.path) {
@@ -4262,7 +4262,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve2,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -19383,7 +19383,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -19400,7 +19400,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve4, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -19478,7 +19478,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve2(parseResult.data);
+            resolve4(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -19740,12 +19740,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve4, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve2, interval);
+      const timeoutId = setTimeout(resolve4, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -20885,7 +20885,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -21549,23 +21549,23 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve4) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve2();
+        resolve4();
       } else {
-        this._stdout.once("drain", resolve2);
+        this._stdout.once("drain", resolve4);
       }
     });
   }
 };
 
 // src/server/index.ts
-import { dirname, join as join4 } from "node:path";
+import { dirname as dirname5, join as join7 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/tools.ts
-import { isAbsolute as isAbsolute3 } from "node:path";
+import { isAbsolute as isAbsolute5 } from "node:path";
 
 // src/server/onebot/errors.ts
 var OneBotError = class extends Error {
@@ -22392,7 +22392,7 @@ function defaultConfig() {
       scanDrives: true,
       maxRoots: 32
     },
-    managed: { napcatVersion: "4.18.42", downloadMirror: "auto" },
+    managed: { napcatVersion: "4.18.42", downloadMirror: "auto", downloadProxy: "", desktopQqPath: "" },
     export: { dir: "user", includeImages: false },
     inject: { maxInjectChars: 4e4 }
   };
@@ -22472,7 +22472,9 @@ function sanitize(m) {
     },
     managed: {
       napcatVersion: typeof man.napcatVersion === "string" && man.napcatVersion.trim() !== "" ? man.napcatVersion : d.managed.napcatVersion,
-      downloadMirror: typeof man.downloadMirror === "string" && man.downloadMirror.trim() !== "" ? man.downloadMirror : d.managed.downloadMirror
+      downloadMirror: typeof man.downloadMirror === "string" && man.downloadMirror.trim() !== "" ? man.downloadMirror : d.managed.downloadMirror,
+      downloadProxy: typeof man.downloadProxy === "string" ? man.downloadProxy.trim() : d.managed.downloadProxy,
+      desktopQqPath: typeof man.desktopQqPath === "string" ? man.desktopQqPath.trim() : d.managed.desktopQqPath
     },
     export: {
       dir: exp.dir === "workspace" ? "workspace" : "user",
@@ -22513,6 +22515,10 @@ function applyEnvOverrides(cfg, env = process.env) {
   if (dir === "user" || dir === "workspace") cfg.export.dir = dir;
   const imgs = parseBoolEnv(env.NAPCAT_INCLUDE_IMAGES);
   if (imgs !== void 0) cfg.export.includeImages = imgs;
+  const proxy = env.NAPCAT_DOWNLOAD_PROXY;
+  if (typeof proxy === "string" && proxy.trim() !== "") cfg.managed.downloadProxy = proxy.trim();
+  const qqPath = env.NAPCAT_DESKTOP_QQ_PATH;
+  if (typeof qqPath === "string" && qqPath.trim() !== "") cfg.managed.desktopQqPath = qqPath.trim();
   return cfg;
 }
 function loadConfigData() {
@@ -22573,7 +22579,7 @@ var WsTransport = class {
     if (this.closed) return Promise.reject(new OneBotError(-2, "websocket client closed"));
     if (this.connecting) return this.connecting;
     let rejectConnect = () => void 0;
-    const promise = new Promise((resolve2, reject) => {
+    const promise = new Promise((resolve4, reject) => {
       rejectConnect = reject;
       const url = new URL(this.cfg.endpoint);
       if (this.cfg.token) url.searchParams.set("access_token", this.cfg.token);
@@ -22604,7 +22610,7 @@ var WsTransport = class {
           return;
         }
         this.socket = ws;
-        resolve2();
+        resolve4();
       };
       ws.onerror = () => {
         settleHandshake();
@@ -22658,12 +22664,12 @@ var WsTransport = class {
     const socket = this.socket;
     if (!socket) throw new OneBotError(-2, "websocket not connected");
     const echo = `e${++this.seq}`;
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve4, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);
         reject(new OneBotError(-3, `action ${action} timeout`));
       }, this.timeoutMs);
-      this.pending.set(echo, { resolve: resolve2, reject, timer, socket });
+      this.pending.set(echo, { resolve: resolve4, reject, timer, socket });
       try {
         socket.send(JSON.stringify({ action, params: params ?? {}, echo }));
       } catch (err) {
@@ -22694,9 +22700,9 @@ var WsTransport = class {
   }
   /** 关闭单条连接并等待其 close 事件；对端不配合时有兜底超时，不会挂住 close() */
   closeSocket(ws) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve4) => {
       if (ws.readyState === WebSocket.CLOSED) {
-        resolve2();
+        resolve4();
         return;
       }
       let settled = false;
@@ -22705,7 +22711,7 @@ var WsTransport = class {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
-        resolve2();
+        resolve4();
       };
       timer = setTimeout(finish, CLOSE_FALLBACK_MS);
       timer.unref?.();
@@ -22845,7 +22851,7 @@ function extractSecrets(endpoint) {
 }
 function redactSecrets(text, secrets = []) {
   let out = text.replace(BEARER, "$1 ***");
-  out = out.replace(SECRET_ASSIGNMENT, (_m, key, sep) => `${key}${sep}***`);
+  out = out.replace(SECRET_ASSIGNMENT, (_m, key, sep2) => `${key}${sep2}***`);
   for (const secret of secrets) {
     if (secret.length >= 4) out = out.split(secret).join("***");
   }
@@ -22882,14 +22888,14 @@ function isPortListening(endpoint, timeoutMs) {
     return Promise.resolve(false);
   }
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
-  return new Promise((resolve2) => {
+  return new Promise((resolve4) => {
     const socket = connect({ host, port });
     let settled = false;
     const done = (listening) => {
       if (settled) return;
       settled = true;
       socket.destroy();
-      resolve2(listening);
+      resolve4(listening);
     };
     socket.setTimeout(timeoutMs);
     socket.once("connect", () => done(true));
@@ -23034,10 +23040,10 @@ async function detectLocal(opts) {
     napcatRunning = alive;
   });
   let timer;
-  const budget = new Promise((resolve2) => {
+  const budget = new Promise((resolve4) => {
     timer = setTimeout(() => {
       budgetFired = true;
-      resolve2();
+      resolve4();
     }, budgetMs);
   });
   try {
@@ -23951,9 +23957,9 @@ function extractEndpointSecrets(raw) {
 }
 var AUTH_LONG_SECRET = /[A-Za-z0-9_\-]{16,}/g;
 function maskAuthFailureSecrets(text) {
-  const sep = text.indexOf("\uFF1A");
-  const head = sep >= 0 ? text.slice(0, sep + 1) : "";
-  const body = sep >= 0 ? text.slice(sep + 1) : text;
+  const sep2 = text.indexOf("\uFF1A");
+  const head = sep2 >= 0 ? text.slice(0, sep2 + 1) : "";
+  const body = sep2 >= 0 ? text.slice(sep2 + 1) : text;
   return head + body.replace(AUTH_LONG_SECRET, "***");
 }
 function redactDetectResult(state, result) {
@@ -24174,14 +24180,11 @@ function detectLocalOnce(state, opts = {}) {
   return wrapped;
 }
 
-// src/server/tools.ts
-var MAX_PAGES2 = 40;
-var MAX_COUNT = 200;
-var DEFAULT_COUNT = 50;
-var SEARCH_PAGE_SIZE = 100;
-var SEARCH_DEFAULT_MAX_PAGES = 20;
-var SEARCH_MAX_PAGES = 100;
-var SEARCH_MAX_HITS = 20;
+// src/server/host/host-tools.ts
+import { readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute4, join as join6 } from "node:path";
+
+// src/server/tool-results.ts
 function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
@@ -24192,6 +24195,2463 @@ function fail(state, e) {
     isError: true
   };
 }
+
+// src/server/host/artifacts.ts
+var NAPCAT_ARTIFACTS = {
+  "4.18.42": {
+    version: "4.18.42",
+    url: "https://github.com/XingYunStar/NapCatQQ/releases/download/v4.18.42/NapCat.Shell.Windows.Node.zip",
+    sha256: "77397ac38d66f46383e48f08f35d5f9d37ec575c22069f62d6c600e73b4521ed",
+    size: 124162399,
+    allowedHosts: ["github.com", "objects.githubusercontent.com", "api.github.com", "raw.githubusercontent.com"],
+    platforms: ["win32"]
+  }
+};
+function resolveArtifact(version2, platform = process.platform) {
+  const found = NAPCAT_ARTIFACTS[version2];
+  if (!found) return void 0;
+  if (!found.platforms.includes(platform)) return void 0;
+  return found;
+}
+function availableVersions(platform = process.platform) {
+  return Object.keys(NAPCAT_ARTIFACTS).filter((v) => NAPCAT_ARTIFACTS[v].platforms.includes(platform));
+}
+
+// src/server/host/manager.ts
+import { createHash as createHash2, randomBytes } from "node:crypto";
+import {
+  chmodSync as chmodSync3,
+  existsSync as existsSync2,
+  lstatSync as lstatSync2,
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync4,
+  readdirSync as readdirSync2,
+  renameSync as renameSync3,
+  rmSync as rmSync2,
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync4
+} from "node:fs";
+import { basename, dirname as dirname3, isAbsolute as isAbsolute3, join as join4, resolve as resolve3 } from "node:path";
+
+// src/server/host/download.ts
+import { createHash } from "node:crypto";
+import { createWriteStream, mkdirSync as mkdirSync3, renameSync as renameSync2, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { connect as tcpConnect, isIP } from "node:net";
+import { dirname } from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { connect as tlsConnect } from "node:tls";
+var DEFAULT_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1e3;
+var MAX_REDIRECTS = 5;
+var PROGRESS_INTERVAL_MS = 50;
+var USER_AGENT = "NapCat-ZCode";
+var DownloadError = class extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "DownloadError";
+  }
+};
+var NETWORK_ERROR_TEXT = {
+  ECONNRESET: "\u8FDE\u63A5\u5728\u4F20\u8F93\u8FC7\u7A0B\u4E2D\u88AB\u65AD\u5F00\uFF08\u8FDE\u63A5\u88AB\u91CD\u7F6E\uFF09",
+  ECONNABORTED: "\u8FDE\u63A5\u5728\u4F20\u8F93\u8FC7\u7A0B\u4E2D\u88AB\u65AD\u5F00",
+  EPIPE: "\u8FDE\u63A5\u5728\u4F20\u8F93\u8FC7\u7A0B\u4E2D\u88AB\u65AD\u5F00\uFF08\u7BA1\u9053\u88AB\u5173\u95ED\uFF09",
+  ERR_STREAM_PREMATURE_CLOSE: "\u8FDE\u63A5\u5728\u4F20\u8F93\u8FC7\u7A0B\u4E2D\u88AB\u65AD\u5F00\uFF08\u6570\u636E\u6CA1\u4F20\u5B8C\u5C31\u65AD\u4E86\uFF09",
+  ECONNREFUSED: "\u8FDE\u63A5\u88AB\u62D2\u7EDD\uFF08\u5BF9\u65B9\u6CA1\u6709\u76D1\u542C\u8FD9\u4E2A\u7AEF\u53E3\uFF09",
+  ETIMEDOUT: "\u8FDE\u63A5\u8D85\u65F6\uFF08\u5BF9\u65B9\u957F\u65F6\u95F4\u6CA1\u6709\u56DE\u5E94\uFF09",
+  EHOSTUNREACH: "\u4E3B\u673A\u4E0D\u53EF\u8FBE",
+  ENETUNREACH: "\u7F51\u7EDC\u4E0D\u53EF\u8FBE",
+  ENOTFOUND: "\u57DF\u540D\u89E3\u6790\u5931\u8D25\uFF08\u89E3\u6790\u4E0D\u5230\u8BE5\u5730\u5740\uFF09",
+  EAI_AGAIN: "\u57DF\u540D\u89E3\u6790\u5931\u8D25\uFF08DNS \u6682\u65F6\u4E0D\u53EF\u7528\uFF09",
+  ABORT_ERR: "\u64CD\u4F5C\u88AB\u4E2D\u6B62",
+  ERR_TLS_CERT_ALTNAME_INVALID: "\u5BF9\u65B9\u8BC1\u4E66\u4E0E\u57DF\u540D\u4E0D\u5339\u914D",
+  DEPTH_ZERO_SELF_SIGNED_CERT: "\u5BF9\u65B9\u7528\u7684\u662F\u81EA\u7B7E\u8BC1\u4E66\uFF08\u672C\u673A\u4E0D\u4FE1\u4EFB\uFF09",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: "\u65E0\u6CD5\u9A8C\u8BC1\u5BF9\u65B9\u8BC1\u4E66\u7684\u7B7E\u540D",
+  CERT_HAS_EXPIRED: "\u5BF9\u65B9\u8BC1\u4E66\u5DF2\u8FC7\u671F"
+};
+function parseIPv4(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return void 0;
+  const parts = m.slice(1).map((p) => Number(p));
+  if (parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return void 0;
+  return parts;
+}
+function classifyIPv4(host) {
+  const parts = parseIPv4(host);
+  if (!parts) return "public";
+  const [a, b, c] = parts;
+  if (a === 127) return "loopback";
+  if (a === 10) return "private";
+  if (a === 172 && b >= 16 && b <= 31) return "private";
+  if (a === 192 && b === 168) return "private";
+  if (a === 169 && b === 254) return "private";
+  if (a === 100 && b >= 64 && b <= 127) return "private";
+  if (a === 0) return "reserved";
+  if (a >= 224 && a <= 239) return "reserved";
+  if (a >= 240) return "reserved";
+  if (a === 192 && b === 0 && c === 2) return "reserved";
+  if (a === 198 && (b === 18 || b === 19)) return "reserved";
+  if (a === 198 && b === 51 && c === 100) return "reserved";
+  if (a === 203 && b === 0 && c === 113) return "reserved";
+  return "public";
+}
+function expandIPv6(host) {
+  let text = host.toLowerCase();
+  if (!text.includes(":")) return void 0;
+  const zone = text.indexOf("%");
+  if (zone >= 0) text = text.slice(0, zone);
+  const halves = text.split("::");
+  if (halves.length > 2) return void 0;
+  const parseSide = (side) => {
+    if (side === "") return [];
+    const out = [];
+    const items = side.split(":");
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] ?? "";
+      if (item === "") return void 0;
+      if (item.includes(".")) {
+        if (i !== items.length - 1) return void 0;
+        const v4 = parseIPv4(item);
+        if (!v4) return void 0;
+        out.push((v4[0] ?? 0) << 8 | (v4[1] ?? 0));
+        out.push((v4[2] ?? 0) << 8 | (v4[3] ?? 0));
+        continue;
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(item)) return void 0;
+      out.push(parseInt(item, 16));
+    }
+    return out;
+  };
+  const head = parseSide(halves[0] ?? "");
+  const tail = parseSide(halves.length === 2 ? halves[1] ?? "" : "");
+  if (!head || !tail) return void 0;
+  const groups = [...head];
+  if (halves.length === 2) {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return void 0;
+    for (let i = 0; i < fill; i++) groups.push(0);
+    groups.push(...tail);
+  } else if (head.length !== 8) {
+    return void 0;
+  }
+  return groups.length === 8 ? groups : void 0;
+}
+function classifyIPv6(host) {
+  const groups = expandIPv6(host);
+  if (!groups) return "public";
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (groups.every((v) => v === 0)) return "reserved";
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) {
+    return "loopback";
+  }
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 65535 || g5 === 0)) {
+    return classifyIPv4(`${(g6 ?? 0) >> 8}.${(g6 ?? 0) & 255}.${(g7 ?? 0) >> 8}.${(g7 ?? 0) & 255}`);
+  }
+  if ((g0 & 65024) === 64512) return "private";
+  if ((g0 & 65472) === 65152) return "private";
+  if ((g0 & 65280) === 65280) return "reserved";
+  return "public";
+}
+function classifyHost(hostname2) {
+  let host = String(hostname2 ?? "").trim().toLowerCase();
+  if (!host) return "reserved";
+  host = host.replace(/^\[/, "").replace(/\]$/, "");
+  host = host.split("%")[0];
+  if (!host) return "reserved";
+  if (host === "localhost" || host.endsWith(".localhost")) return "loopback";
+  if (parseIPv4(host)) return classifyIPv4(host);
+  if (host.includes(":")) return classifyIPv6(host);
+  return "public";
+}
+function normalizeHostEntry(entry) {
+  let host = String(entry ?? "").trim().toLowerCase();
+  if (!host) return "";
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end > 0 ? host.slice(1, end) : host.slice(1);
+  }
+  const idx = host.indexOf(":");
+  if (idx >= 0 && host.indexOf(":", idx + 1) < 0) host = host.slice(0, idx);
+  return host;
+}
+function assertResourceUrl(raw, allowedHosts, policy) {
+  let url;
+  try {
+    url = new URL(String(raw ?? "").trim());
+  } catch {
+    throw new DownloadError(`\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${raw}\u300D\u4E0D\u662F\u5408\u6CD5\u7684\u7F51\u5740\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u914D\u7F6E\u3002`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new DownloadError(
+      `\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u53EA\u652F\u6301 http/https \u4E0B\u8F7D\u5730\u5740\uFF0C\u5F53\u524D\u662F\u300C${url.protocol}\u300D\u3002\u8BF7\u6539\u7528 http(s) \u94FE\u63A5\u3002`
+    );
+  }
+  if (url.username || url.password) {
+    throw new DownloadError(
+      "\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u4E0B\u8F7D\u5730\u5740\u91CC\u4E0D\u5141\u8BB8\u5E26\u8D26\u53F7\u5BC6\u7801\uFF08user:pass@\u2026\uFF09\u3002\u8BF7\u6539\u7528\u4E0D\u542B\u51ED\u636E\u7684\u4E0B\u8F7D\u94FE\u63A5\u3002"
+    );
+  }
+  const host = url.hostname.toLowerCase();
+  const kind = classifyHost(host);
+  if (kind === "loopback" && policy === "public") {
+    throw new DownloadError(
+      `\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${host}\u300D\u662F\u672C\u673A\u56DE\u73AF\u5730\u5740\uFF0C\u63D2\u4EF6\u4E0D\u5141\u8BB8\u4ECE\u672C\u673A\u53D1\u8D77\u8FD9\u7C7B\u4E0B\u8F7D\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u914D\u7F6E\u3002`
+    );
+  }
+  if (kind === "private") {
+    throw new DownloadError(
+      `\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${host}\u300D\u5C5E\u4E8E\u5185\u7F51\u5730\u5740\uFF0C\u63D2\u4EF6\u4E0D\u5141\u8BB8\u4E0B\u8F7D\u5185\u7F51\u8D44\u6E90\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u914D\u7F6E\u3002`
+    );
+  }
+  if (kind === "reserved") {
+    throw new DownloadError(`\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${host}\u300D\u662F\u4FDD\u7559\u5730\u5740\uFF0C\u4E0D\u80FD\u4F5C\u4E3A\u4E0B\u8F7D\u6E90\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u914D\u7F6E\u3002`);
+  }
+  if (policy !== "public" && kind !== "loopback") {
+    throw new DownloadError(`\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u6D4B\u8BD5\u4E0B\u8F7D\u5165\u53E3\u53EA\u5141\u8BB8\u672C\u673A\u56DE\u73AF\u5730\u5740\uFF0C\u5F53\u524D\u662F\u300C${host}\u300D\u3002`);
+  }
+  const allowed = new Set(
+    (Array.isArray(allowedHosts) ? allowedHosts : []).map(normalizeHostEntry).filter((h) => h !== "")
+  );
+  if (!allowed.has(normalizeHostEntry(host))) {
+    throw new DownloadError(
+      `\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${host}\u300D\u4E0D\u5728\u5141\u8BB8\u7684\u4E0B\u8F7D\u6E90\u6E05\u5355\u5185\u3002\u8BF7\u628A\u4E0B\u8F7D\u6E90\u6539\u6210\u6E05\u5355\u5185\u7684\u5730\u5740\uFF08\u4F8B\u5982 GitHub \u5B98\u65B9\u53D1\u5E03\u9875\uFF09\u3002`
+    );
+  }
+  return url;
+}
+function assertProxyUrlAllowed(proxy) {
+  let url;
+  try {
+    url = new URL(String(proxy ?? "").trim());
+  } catch {
+    throw new DownloadError(
+      `\u4EE3\u7406\u5730\u5740\u65E0\u6548\uFF1A\u300C${proxy}\u300D\u3002\u8BF7\u586B\u5199\u5F62\u5982 http://127.0.0.1:7897 \u7684\u672C\u673A\u4EE3\u7406\u5730\u5740\u3002`
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new DownloadError(
+      `\u4EE3\u7406\u88AB\u62D2\u7EDD\uFF1A\u53EA\u652F\u6301 http/https \u4EE3\u7406\uFF0C\u5F53\u524D\u662F\u300C${url.protocol}\u300D\u3002\u8BF7\u6539\u7528 http(s) \u4EE3\u7406\u5730\u5740\u3002`
+    );
+  }
+  if (url.username || url.password) {
+    throw new DownloadError("\u4EE3\u7406\u88AB\u62D2\u7EDD\uFF1A\u4EE3\u7406\u5730\u5740\u91CC\u4E0D\u5141\u8BB8\u5E26\u8D26\u53F7\u5BC6\u7801\u3002\u8BF7\u6539\u7528\u4E0D\u542B\u51ED\u636E\u7684\u4EE3\u7406\u5730\u5740\u3002");
+  }
+  const host = url.hostname.toLowerCase();
+  if (classifyHost(host) !== "loopback") {
+    throw new DownloadError(
+      `\u4EE3\u7406\u88AB\u62D2\u7EDD\uFF1A\u4EE3\u7406\u5FC5\u987B\u843D\u5728\u672C\u673A\u56DE\u73AF\u5730\u5740\uFF08\u5982 http://127.0.0.1:7897\uFF09\uFF0C\u5F53\u524D\u662F\u300C${host}\u300D\u3002\u8FDC\u7A0B\u4EE3\u7406\u4E0D\u53D7\u652F\u6301\u3002`
+    );
+  }
+  return url;
+}
+function percentOf(bytes, total) {
+  if (!total || total <= 0) return void 0;
+  return Math.round(bytes / total * 1e3) / 10;
+}
+function createReporter(onProgress) {
+  let lastEmit = 0;
+  let lastPhase;
+  const emit = (p) => {
+    if (!onProgress) return;
+    const now = Date.now();
+    const phaseChanged = p.phase !== lastPhase;
+    if (!phaseChanged && now - lastEmit < PROGRESS_INTERVAL_MS) return;
+    lastEmit = now;
+    lastPhase = p.phase;
+    try {
+      onProgress(p);
+    } catch {
+    }
+  };
+  return {
+    emit,
+    downloading(bytesReceived, totalBytes) {
+      emit({
+        bytesReceived,
+        totalBytes,
+        percent: percentOf(bytesReceived, totalBytes),
+        phase: "downloading"
+      });
+    }
+  };
+}
+function timeoutError(timeoutMs) {
+  return new DownloadError(
+    `\u4E0B\u8F7D\u8D85\u65F6\uFF1A\u8D85\u8FC7 ${humanDuration(timeoutMs)} \u4ECD\u672A\u5B8C\u6210\uFF08\u8FDE\u63A5\u4E0B\u8F7D\u6E90\u6216\u4EE3\u7406\u9636\u6BB5\u8D85\u65F6\uFF09\uFF0C\u5DF2\u4E2D\u6B62\u5E76\u6E05\u7406\u4E34\u65F6\u6587\u4EF6\u3002\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u6216\u4EE3\u7406\u8BBE\u7F6E\u540E\u91CD\u8BD5\u3002`
+  );
+}
+function cancelledError() {
+  return new DownloadError("\u4E0B\u8F7D\u5DF2\u53D6\u6D88\uFF1A\u5DF2\u4E2D\u6B62\u5E76\u6E05\u7406\u4E34\u65F6\u6587\u4EF6\u3002");
+}
+function abortError(ctx) {
+  return ctx.timedOut ? timeoutError(ctx.timeoutMs) : cancelledError();
+}
+function bareHost(url) {
+  return url.hostname.replace(/^\[/, "").replace(/\]$/, "");
+}
+function absoluteForm(url) {
+  return `${url.protocol}//${url.host}${url.pathname}${url.search}`;
+}
+function connectTcp(host, port, ctx) {
+  return new Promise((resolve4, reject) => {
+    let settled = false;
+    const socket = tcpConnect({ host, port });
+    const cleanup = () => {
+      ctx.signal.removeEventListener("abort", onAbort);
+    };
+    const fail2 = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(err);
+    };
+    const onError = (err) => {
+      fail2(new DownloadError(`\u8FDE\u63A5\u5931\u8D25\uFF1A\u65E0\u6CD5\u8FDE\u5230 ${host}:${port}\uFF08${err.message}\uFF09\u3002\u8BF7\u68C0\u67E5\u7F51\u7EDC\u6216\u4EE3\u7406\u8BBE\u7F6E\u3002`));
+    };
+    const onConnect = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve4(socket);
+    };
+    const onAbort = () => fail2(abortError(ctx));
+    socket.on("error", onError);
+    socket.once("connect", onConnect);
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function wrapTls(socket, host, ctx) {
+  return new Promise((resolve4, reject) => {
+    let settled = false;
+    const tlsSocket = tlsConnect({
+      socket,
+      // IP 不能当 SNI 传（会被对端拒），域名必须传（证书校验要用）
+      servername: isIP(host) ? void 0 : host,
+      ALPNProtocols: ["http/1.1"]
+    });
+    const fail2 = (err) => {
+      if (settled) return;
+      settled = true;
+      ctx.signal.removeEventListener("abort", onAbort);
+      tlsSocket.destroy();
+      reject(err);
+    };
+    const onError = (err) => {
+      fail2(new DownloadError(`TLS \u63E1\u624B\u5931\u8D25\uFF1A${err.message}\u3002\u8BF7\u68C0\u67E5\u4EE3\u7406\u8BBE\u7F6E\u4E0E\u7F51\u7EDC\u73AF\u5883\u3002`));
+    };
+    const onAbort = () => fail2(abortError(ctx));
+    tlsSocket.on("error", onError);
+    tlsSocket.once("secureConnect", () => {
+      if (settled) return;
+      settled = true;
+      ctx.signal.removeEventListener("abort", onAbort);
+      tlsSocket.setTimeout(0);
+      resolve4(tlsSocket);
+    });
+    tlsSocket.setTimeout(ctx.timeoutMs, () => fail2(timeoutError(ctx.timeoutMs)));
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function readHead(socket, ctx) {
+  return new Promise((resolve4, reject) => {
+    let buf = Buffer.alloc(0);
+    let settled = false;
+    const cleanup = () => {
+      socket.off("data", onData);
+      socket.off("end", onEnd);
+      socket.off("error", onError);
+      socket.setTimeout(0);
+      socket.pause();
+      ctx.signal.removeEventListener("abort", onAbort);
+    };
+    const fail2 = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      const idx = buf.indexOf("\r\n\r\n");
+      if (idx < 0) return;
+      const leftover = buf.subarray(idx + 4);
+      settled = true;
+      cleanup();
+      if (leftover.length > 0) socket.unshift(leftover);
+      resolve4(buf.subarray(0, idx).toString("latin1"));
+    };
+    const onEnd = () => {
+      fail2(new DownloadError("\u4EE3\u7406\u8FDE\u63A5\u5931\u8D25\uFF1A\u4EE3\u7406\u6CA1\u6709\u8FD4\u56DE CONNECT \u54CD\u5E94\u5C31\u65AD\u5F00\u4E86\u8FDE\u63A5\u3002\u8BF7\u786E\u8BA4\u4EE3\u7406\u8F6F\u4EF6\u5DF2\u542F\u52A8\u3002"));
+    };
+    const onError = (err) => fail2(err);
+    const onAbort = () => fail2(abortError(ctx));
+    socket.on("data", onData);
+    socket.once("end", onEnd);
+    socket.on("error", onError);
+    socket.setTimeout(ctx.timeoutMs, () => fail2(timeoutError(ctx.timeoutMs)));
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+async function openTunnel(url, proxyUrl, ctx) {
+  const targetHost = bareHost(url);
+  const targetPort = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  const proxyHost = bareHost(proxyUrl);
+  const proxyPort = Number(proxyUrl.port || (proxyUrl.protocol === "https:" ? 443 : 80));
+  let socket = await connectTcp(proxyHost, proxyPort, ctx);
+  try {
+    if (proxyUrl.protocol === "https:") {
+      socket = await wrapTls(socket, proxyHost, ctx);
+    }
+    const handshake = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r
+Host: ${targetHost}:${targetPort}\r
+Proxy-Connection: keep-alive\r
+User-Agent: ${USER_AGENT}\r
+\r
+`;
+    socket.write(handshake);
+    const head = await readHead(socket, ctx);
+    const statusLine = head.split("\r\n")[0] ?? "";
+    const m = /^HTTP\/1\.[01]\s+(\d{3})/.exec(statusLine);
+    if (!m || Number(m[1]) !== 200) {
+      socket.destroy();
+      throw new DownloadError(
+        `\u4EE3\u7406\u8FDE\u63A5\u5931\u8D25\uFF1A\u4EE3\u7406\u8FD4\u56DE\u300C${statusLine || "\u7A7A\u54CD\u5E94"}\u300D\uFF0C\u6CA1\u80FD\u5EFA\u7ACB\u5230 ${targetHost}:${targetPort} \u7684\u96A7\u9053\u3002\u8BF7\u786E\u8BA4\u4EE3\u7406\u8F6F\u4EF6\u5DF2\u542F\u52A8\u3001\u4EE3\u7406\u5730\u5740\u4E0E\u7AEF\u53E3\u586B\u5199\u6B63\u786E\u3002`
+      );
+    }
+    if (url.protocol === "https:") {
+      return await wrapTls(socket, targetHost, ctx);
+    }
+    return socket;
+  } catch (err) {
+    socket.destroy();
+    throw err;
+  }
+}
+function requestOnce(url, tunnel, signal) {
+  const isHttps = url.protocol === "https:";
+  const options = {
+    protocol: url.protocol,
+    hostname: bareHost(url),
+    port: url.port || (isHttps ? 443 : 80),
+    // 直连用 origin-form；穿隧道用 absolute-form（代理隧道里要带完整 URL）
+    path: tunnel ? absoluteForm(url) : `${url.pathname}${url.search}`,
+    method: "GET",
+    headers: {
+      // 显式带 Host（IPv6 要带方括号），并要求服务端不要压缩（否则 sha256 对不上）
+      host: url.host,
+      "accept-encoding": "identity",
+      "user-agent": USER_AGENT
+    },
+    signal
+  };
+  if (tunnel) {
+    options.createConnection = () => tunnel;
+  } else {
+    options.agent = false;
+  }
+  return new Promise((resolve4, reject) => {
+    const req = (isHttps ? httpsRequest : httpRequest)(options, resolve4);
+    req.on("error", reject);
+    if (tunnel) tunnel.resume();
+    req.end();
+  });
+}
+function isRedirectStatus(status) {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+function parseContentLength(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string") return void 0;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return void 0;
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) && n >= 0 ? n : void 0;
+}
+function normalizeTimeout(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_DOWNLOAD_TIMEOUT_MS;
+  return Math.floor(value);
+}
+function humanDuration(ms) {
+  if (ms % 6e4 === 0) return `${ms / 6e4} \u5206\u949F`;
+  if (ms % 1e3 === 0) return `${ms / 1e3} \u79D2`;
+  return `${ms} \u6BEB\u79D2`;
+}
+function removeQuietly(path) {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+  }
+}
+async function downloadVerified(opts) {
+  return runDownload(opts, "public");
+}
+async function runDownload(opts, policy) {
+  const expected = String(opts.sha256 ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    throw new DownloadError("sha256 \u671F\u671B\u503C\u65E0\u6548\uFF1A\u5FC5\u987B\u662F 64 \u4F4D\u5341\u516D\u8FDB\u5236\u5B57\u7B26\u4E32\u3002\u8BF7\u68C0\u67E5\u5236\u54C1\u7684\u6821\u9A8C\u503C\u914D\u7F6E\u3002");
+  }
+  const url = assertResourceUrl(opts.url, opts.allowedHosts, policy);
+  const proxyUrl = opts.proxy ? assertProxyUrlAllowed(opts.proxy) : void 0;
+  const timeoutMs = normalizeTimeout(opts.timeoutMs);
+  const destFile = opts.destFile;
+  const partFile = `${destFile}.part`;
+  try {
+    mkdirSync3(dirname(destFile), { recursive: true });
+  } catch {
+    throw new DownloadError("\u4E0B\u8F7D\u5931\u8D25\uFF1A\u65E0\u6CD5\u521B\u5EFA\u4FDD\u5B58\u76EE\u5F55\u3002\u8BF7\u68C0\u67E5\u5B89\u88C5\u8DEF\u5F84\u662F\u5426\u53EF\u5199\u3002");
+  }
+  removeQuietly(partFile);
+  const report = createReporter(opts.onProgress);
+  report.emit({
+    bytesReceived: 0,
+    phase: "connecting",
+    message: proxyUrl ? "\u6B63\u5728\u901A\u8FC7\u672C\u673A\u4EE3\u7406\u5EFA\u7ACB\u96A7\u9053\u2026" : "\u6B63\u5728\u8FDE\u63A5\u4E0B\u8F7D\u6E90\u2026"
+  });
+  const controller = new AbortController();
+  const ctx = { signal: controller.signal, timedOut: false, timeoutMs };
+  const timer = setTimeout(() => {
+    ctx.timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onUserAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", onUserAbort, { once: true });
+  }
+  let bytesReceived = 0;
+  try {
+    let current = url;
+    let response;
+    for (let hop = 0; ; hop++) {
+      const tunnel = proxyUrl ? await openTunnel(current, proxyUrl, ctx) : void 0;
+      response = await requestOnce(current, tunnel, controller.signal);
+      const status2 = response.statusCode ?? 0;
+      const location = response.headers.location;
+      if (isRedirectStatus(status2) && location) {
+        response.on("error", () => {
+        });
+        response.resume();
+        if (tunnel) tunnel.destroy();
+        if (hop >= MAX_REDIRECTS) {
+          throw new DownloadError(
+            `\u4E0B\u8F7D\u5931\u8D25\uFF1A\u91CD\u5B9A\u5411\u8DF3\u6570\u8D85\u8FC7 ${MAX_REDIRECTS} \u6B21\u4ECD\u6CA1\u62FF\u5230\u6587\u4EF6\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u5730\u5740\u662F\u5426\u6B63\u786E\uFF08\u7248\u672C\u53F7\u53EF\u80FD\u5DF2\u5931\u6548\uFF09\u3002`
+          );
+        }
+        let next;
+        try {
+          next = new URL(location, current);
+        } catch {
+          throw new DownloadError("\u4E0B\u8F7D\u5931\u8D25\uFF1A\u670D\u52A1\u5668\u7ED9\u51FA\u7684\u91CD\u5B9A\u5411\u5730\u5740\u4E0D\u662F\u5408\u6CD5\u7F51\u5740\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u3002");
+        }
+        current = assertResourceUrl(next.toString(), opts.allowedHosts, policy);
+        continue;
+      }
+      break;
+    }
+    const status = response.statusCode ?? 0;
+    if (status < 200 || status >= 300) {
+      response.resume();
+      throw new DownloadError(
+        `\u4E0B\u8F7D\u5931\u8D25\uFF1A\u670D\u52A1\u5668\u8FD4\u56DE HTTP ${status}\u3002\u8BF7\u68C0\u67E5\u4E0B\u8F7D\u6E90\u5730\u5740\u4E0E\u7248\u672C\u53F7\u662F\u5426\u6B63\u786E\uFF08\u7248\u672C\u53EF\u80FD\u5DF2\u4E0B\u67B6\uFF09\u3002`
+      );
+    }
+    const totalBytes = parseContentLength(response.headers["content-length"]);
+    const hash = createHash("sha256");
+    const sink = createWriteStream(partFile);
+    const counter = new Transform({
+      transform(chunk, _encoding, callback) {
+        bytesReceived += chunk.length;
+        hash.update(chunk);
+        report.downloading(bytesReceived, totalBytes);
+        callback(null, chunk);
+      }
+    });
+    report.downloading(0, totalBytes);
+    await pipeline(response, counter, sink);
+    if (totalBytes !== void 0 && bytesReceived !== totalBytes) {
+      throw new DownloadError(
+        `\u4E0B\u8F7D\u5931\u8D25\uFF1A\u5B9E\u9645\u6536\u5230 ${bytesReceived} \u5B57\u8282\uFF0C\u4E0E\u670D\u52A1\u5668\u58F0\u660E\u7684 ${totalBytes} \u5B57\u8282\u4E0D\u4E00\u81F4\uFF08\u8FDE\u63A5\u5728\u4F20\u8F93\u8FC7\u7A0B\u4E2D\u88AB\u65AD\u5F00\uFF09\u3002\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u6216\u4EE3\u7406\u8BBE\u7F6E\u540E\u91CD\u8BD5\u3002`
+      );
+    }
+    report.emit({
+      bytesReceived,
+      totalBytes,
+      percent: percentOf(bytesReceived, totalBytes),
+      phase: "verifying",
+      message: "\u6B63\u5728\u6821\u9A8C sha256\u2026"
+    });
+    const digest = hash.digest("hex");
+    if (digest !== expected) {
+      removeQuietly(partFile);
+      throw new DownloadError(
+        `\u6821\u9A8C\u5931\u8D25\uFF1A\u4E0B\u8F7D\u5185\u5BB9\u7684 sha256\uFF08${digest}\uFF09\u4E0E\u9884\u671F\uFF08${expected}\uFF09\u4E0D\u4E00\u81F4\uFF0C\u5DF2\u4E22\u5F03\u4E34\u65F6\u6587\u4EF6\uFF0C\u4E0D\u4F1A\u5B89\u88C5\u672A\u7ECF\u6821\u9A8C\u7684\u5305\u3002\u8BF7\u91CD\u65B0\u4E0B\u8F7D\uFF1B\u82E5\u53CD\u590D\u5931\u8D25\uFF0C\u8BF4\u660E\u4E0B\u8F7D\u6E90\u53EF\u80FD\u88AB\u52AB\u6301\u6216\u6587\u4EF6\u5DF2\u635F\u574F\uFF0C\u8BF7\u6362\u4E00\u4E2A\u4E0B\u8F7D\u6E90\u3002`
+      );
+    }
+    renameSync2(partFile, destFile);
+    report.emit({
+      bytesReceived,
+      totalBytes,
+      percent: totalBytes !== void 0 ? 100 : void 0,
+      phase: "done",
+      message: "\u4E0B\u8F7D\u5B8C\u6210\uFF0Csha256 \u6821\u9A8C\u901A\u8FC7\u3002"
+    });
+    return { path: destFile, bytes: bytesReceived, sha256: digest };
+  } catch (err) {
+    removeQuietly(partFile);
+    const message = describeError(err, { timedOut: ctx.timedOut, timeoutMs, aborted: opts.signal?.aborted === true });
+    report.emit({ bytesReceived, phase: "failed", message });
+    throw new DownloadError(message, { cause: err });
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onUserAbort);
+  }
+}
+function errorCodeOf(err) {
+  if (err && typeof err === "object") {
+    const code = err.code;
+    if (typeof code === "string") return code;
+  }
+  return "";
+}
+function describeError(err, ctx) {
+  if (err instanceof DownloadError) return err.message;
+  if (ctx.timedOut) return timeoutError(ctx.timeoutMs).message;
+  if (ctx.aborted) return cancelledError().message;
+  const raw = err instanceof Error ? err.message : String(err);
+  const code = errorCodeOf(err);
+  const hint = NETWORK_ERROR_TEXT[code] ?? (/aborted|socket hang up|premature close/i.test(raw) ? NETWORK_ERROR_TEXT.ECONNRESET : "");
+  return hint ? `\u4E0B\u8F7D\u5931\u8D25\uFF1A${hint}\u3002\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u6216\u4EE3\u7406\u8BBE\u7F6E\u540E\u91CD\u8BD5\u3002` : `\u4E0B\u8F7D\u5931\u8D25\uFF1A${raw}\u3002\u8BF7\u68C0\u67E5\u7F51\u7EDC\u8FDE\u63A5\u6216\u4EE3\u7406\u8BBE\u7F6E\u540E\u91CD\u8BD5\u3002`;
+}
+
+// src/server/host/unzip.ts
+import { lstatSync, mkdirSync as mkdirSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname2, resolve as resolve2, sep } from "node:path";
+import { inflateRawSync } from "node:zlib";
+var EOCD_SIGNATURE = 101010256;
+var CENTRAL_SIGNATURE = 33639248;
+var LOCAL_SIGNATURE = 67324752;
+var ZIP64_EOCD_SIGNATURE = 101075792;
+var ZIP64_LOCATOR_SIGNATURE = 117853008;
+var EOCD_SIZE = 22;
+var CENTRAL_SIZE = 46;
+var LOCAL_SIZE = 30;
+var MAX_COMMENT_SIZE = 65535;
+var UNIX_S_IFMT = 61440;
+var UNIX_S_IFLNK = 40960;
+var DEFAULT_MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
+var METHOD_NAMES = {
+  1: "shrink",
+  2: "reduce1",
+  3: "reduce2",
+  4: "reduce3",
+  5: "reduce4",
+  6: "implode",
+  7: "implode",
+  9: "deflate64",
+  10: "ibm teras",
+  12: "bzip2",
+  14: "lzma",
+  93: "zstd",
+  94: "xz",
+  95: "xz",
+  96: "jpeg",
+  97: "wavpack",
+  98: "ppmd",
+  99: "aes"
+};
+var CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(buf) {
+  let c = 4294967295;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+function findEocd(buf) {
+  const minPos = Math.max(0, buf.length - EOCD_SIZE - MAX_COMMENT_SIZE);
+  let fallback = -1;
+  for (let pos = buf.length - EOCD_SIZE; pos >= minPos; pos--) {
+    if (pos < 0 || pos + 4 > buf.length) continue;
+    if (buf.readUInt32LE(pos) !== EOCD_SIGNATURE) continue;
+    const commentLen = buf.readUInt16LE(pos + 20);
+    if (pos + EOCD_SIZE + commentLen === buf.length) return pos;
+    if (fallback < 0 && pos + EOCD_SIZE + commentLen <= buf.length) fallback = pos;
+  }
+  if (fallback >= 0) return fallback;
+  throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u8FD9\u4E0D\u662F\u4E00\u4E2A\u6709\u6548\u7684 ZIP \u6587\u4EF6\uFF08\u627E\u4E0D\u5230\u4E2D\u592E\u76EE\u5F55\u7ED3\u675F\u8BB0\u5F55\uFF0C\u6587\u4EF6\u53EF\u80FD\u5DF2\u635F\u574F\u6216\u4E0D\u662F\u538B\u7F29\u5305\uFF09\u3002");
+}
+function readZip64Eocd(buf, eocdPos) {
+  const locatorPos = eocdPos - 20;
+  if (locatorPos < 0 || buf.readUInt32LE(locatorPos) !== ZIP64_LOCATOR_SIGNATURE) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u4F7F\u7528\u4E86 ZIP64 \u6269\u5C55\uFF0C\u4F46\u7F3A\u5C11 ZIP64 \u5B9A\u4F4D\u8BB0\u5F55\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002");
+  }
+  const z64Offset = Number(buf.readBigUInt64LE(locatorPos + 8));
+  if (!Number.isSafeInteger(z64Offset) || z64Offset < 0 || z64Offset + 56 > buf.length) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684 ZIP64 \u4E2D\u592E\u76EE\u5F55\u8BB0\u5F55\u4F4D\u7F6E\u65E0\u6548\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002");
+  }
+  if (buf.readUInt32LE(z64Offset) !== ZIP64_EOCD_SIGNATURE) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684 ZIP64 \u4E2D\u592E\u76EE\u5F55\u8BB0\u5F55\u5DF2\u635F\u574F\u3002");
+  }
+  const total = Number(buf.readBigUInt64LE(z64Offset + 32));
+  const size = Number(buf.readBigUInt64LE(z64Offset + 40));
+  const offset = Number(buf.readBigUInt64LE(z64Offset + 48));
+  if (!Number.isSafeInteger(total) || !Number.isSafeInteger(size) || !Number.isSafeInteger(offset)) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684 ZIP64 \u4E2D\u592E\u76EE\u5F55\u6570\u503C\u8D85\u51FA\u53EF\u5904\u7406\u8303\u56F4\u3002");
+  }
+  return { total, size, offset };
+}
+function readZip64Extra(extra, current) {
+  const needSize = current.size === 4294967295;
+  const needCompressed = current.compressedSize === 4294967295;
+  const needOffset = current.offset === 4294967295;
+  if (!needSize && !needCompressed && !needOffset) return current;
+  let pos = 0;
+  while (pos + 4 <= extra.length) {
+    const id = extra.readUInt16LE(pos);
+    const fieldSize = extra.readUInt16LE(pos + 2);
+    const dataStart = pos + 4;
+    const dataEnd = dataStart + fieldSize;
+    if (dataEnd > extra.length) break;
+    if (id === 1) {
+      let cursor = dataStart;
+      let uncompressedSize = current.size;
+      let compressedSize = current.compressedSize;
+      let localOffset = current.offset;
+      if (needSize) {
+        if (cursor + 8 > dataEnd) break;
+        uncompressedSize = Number(extra.readBigUInt64LE(cursor));
+        cursor += 8;
+      }
+      if (needCompressed) {
+        if (cursor + 8 > dataEnd) break;
+        compressedSize = Number(extra.readBigUInt64LE(cursor));
+        cursor += 8;
+      }
+      if (needOffset) {
+        if (cursor + 8 > dataEnd) break;
+        localOffset = Number(extra.readBigUInt64LE(cursor));
+        cursor += 8;
+      }
+      if (!Number.isSafeInteger(uncompressedSize) || !Number.isSafeInteger(compressedSize) || !Number.isSafeInteger(localOffset)) {
+        throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684 ZIP64 \u6269\u5C55\u6570\u503C\u8D85\u51FA\u53EF\u5904\u7406\u8303\u56F4\u3002");
+      }
+      return { size: uncompressedSize, compressedSize, offset: localOffset };
+    }
+    pos = dataEnd;
+  }
+  throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684 ZIP64 \u6269\u5C55\u4FE1\u606F\u4E0D\u5B8C\u6574\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002");
+}
+function parseCentralDirectory(buf) {
+  const eocdPos = findEocd(buf);
+  let total = buf.readUInt16LE(eocdPos + 10);
+  let cdOffset = buf.readUInt32LE(eocdPos + 16);
+  if (total === 65535 || cdOffset === 4294967295) {
+    const z64 = readZip64Eocd(buf, eocdPos);
+    total = z64.total;
+    cdOffset = z64.offset;
+  }
+  if (!Number.isSafeInteger(cdOffset) || cdOffset < 0 || cdOffset > buf.length) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u7684\u4E2D\u592E\u76EE\u5F55\u4F4D\u7F6E\u65E0\u6548\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002");
+  }
+  const records = [];
+  let pos = cdOffset;
+  for (let i = 0; i < total; i++) {
+    if (pos + CENTRAL_SIZE > buf.length || buf.readUInt32LE(pos) !== CENTRAL_SIGNATURE) {
+      throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u4E2D\u592E\u76EE\u5F55\u5DF2\u635F\u574F\uFF08\u8BFB\u5230\u7B2C ${i + 1} \u4E2A\u6761\u76EE\u65F6\u4E2D\u65AD\uFF09\u3002`);
+    }
+    const method = buf.readUInt16LE(pos + 10);
+    const crc = buf.readUInt32LE(pos + 16);
+    let compressedSize = buf.readUInt32LE(pos + 20);
+    let size = buf.readUInt32LE(pos + 24);
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const externalAttrs = buf.readUInt32LE(pos + 38);
+    let offset = buf.readUInt32LE(pos + 42);
+    const nameStart = pos + CENTRAL_SIZE;
+    if (nameStart + nameLen + extraLen + commentLen > buf.length) {
+      throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u4E2D\u592E\u76EE\u5F55\u7684\u6761\u76EE\u4FE1\u606F\u4E0D\u5B8C\u6574\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002");
+    }
+    const name = buf.subarray(nameStart, nameStart + nameLen).toString("utf8");
+    const extra = buf.subarray(nameStart + nameLen, nameStart + nameLen + extraLen);
+    if (compressedSize === 4294967295 || size === 4294967295 || offset === 4294967295) {
+      const z64 = readZip64Extra(extra, { size, compressedSize, offset });
+      size = z64.size;
+      compressedSize = z64.compressedSize;
+      offset = z64.offset;
+    }
+    records.push({ name, size, compressedSize, method, offset, crc, externalAttrs });
+    pos = nameStart + nameLen + extraLen + commentLen;
+  }
+  return records;
+}
+function assertSafeEntryName(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error("\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u538B\u7F29\u5305\u91CC\u6709\u6761\u76EE\u540D\u65E0\u6548\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002");
+  }
+  if (name.includes("\0")) {
+    throw new Error("\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u540D\u5305\u542B\u975E\u6CD5\u5B57\u7B26\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002");
+  }
+  const normalized = name.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) {
+    throw new Error(`\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${name}\u300D\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u4E0D\u5141\u8BB8\u5199\u5230\u76EE\u6807\u76EE\u5F55\u4E4B\u5916\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`);
+  }
+  if (/^[A-Za-z]:/.test(normalized)) {
+    throw new Error(`\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${name}\u300D\u5E26\u76D8\u7B26\uFF08\u7EDD\u5BF9\u8DEF\u5F84\uFF09\uFF0C\u4E0D\u5141\u8BB8\u5199\u5230\u76EE\u6807\u76EE\u5F55\u4E4B\u5916\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`);
+  }
+  if (normalized.split("/").includes("..")) {
+    throw new Error(
+      `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${name}\u300D\u542B\u6709\u300C..\u300D\uFF08Zip Slip\uFF09\uFF0C\u8BD5\u56FE\u5199\u5230\u76EE\u6807\u76EE\u5F55\u4E4B\u5916\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`
+    );
+  }
+}
+function isSymlinkEntry(rec) {
+  const mode = rec.externalAttrs >>> 16 & 65535;
+  return (mode & UNIX_S_IFMT) === UNIX_S_IFLNK;
+}
+function assertNotSymlink(rec) {
+  if (isSymlinkEntry(rec)) {
+    throw new Error(
+      `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u662F\u7B26\u53F7\u94FE\u63A5\uFF0C\u4E0D\u5141\u8BB8\u5199\u8FDB\u76EE\u6807\u76EE\u5F55\uFF08\u7B26\u53F7\u94FE\u63A5\u80FD\u628A\u5B89\u88C5\u76EE\u5F55\u91CC\u7684\u6587\u4EF6\u6307\u5230\u522B\u5904\uFF09\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`
+    );
+  }
+}
+function assertSupportedMethod(rec) {
+  if (rec.method === 0 || rec.method === 8) return;
+  const label = METHOD_NAMES[rec.method];
+  throw new Error(
+    `\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u4F7F\u7528\u4E86\u4E0D\u652F\u6301\u7684\u538B\u7F29\u65B9\u6CD5 ${rec.method}${label ? `\uFF08${label}\uFF09` : ""}\u3002\u672C\u63D2\u4EF6\u53EA\u652F\u6301 0\uFF08\u4E0D\u538B\u7F29\uFF09\u4E0E 8\uFF08deflate\uFF09\u4E24\u79CD\u65B9\u6CD5\u3002`
+  );
+}
+function resolveTarget(root, name) {
+  const rel = name.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (rel === "") return root;
+  const target = resolve2(root, rel);
+  if (target !== root && !target.startsWith(root + sep)) {
+    throw new Error(`\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${name}\u300D\u7684\u76EE\u6807\u8DEF\u5F84\u8D8A\u51FA\u4E86\u76EE\u6807\u76EE\u5F55\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`);
+  }
+  return target;
+}
+function assertTargetNotSymlink(target, name) {
+  let isSymlink = false;
+  try {
+    isSymlink = lstatSync(target).isSymbolicLink();
+  } catch {
+    return;
+  }
+  if (isSymlink) {
+    throw new Error(
+      `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u76EE\u6807\u4F4D\u7F6E\u300C${name}\u300D\u5DF2\u7ECF\u662F\u4E00\u4E2A\u7B26\u53F7\u94FE\u63A5\uFF0C\u4E0D\u5141\u8BB8\u8986\u76D6\uFF08\u5426\u5219\u4F1A\u5199\u5230\u76EE\u6807\u76EE\u5F55\u4E4B\u5916\uFF09\uFF0C\u5DF2\u4E2D\u6B62\u3002`
+    );
+  }
+}
+function writeMode(rec) {
+  const mode = rec.externalAttrs >>> 16 & 511;
+  return mode ? { mode } : void 0;
+}
+function listZipEntries(buf) {
+  if (!Buffer.isBuffer(buf)) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u5185\u5BB9\u65E0\u6548\uFF08\u4E0D\u662F\u4E8C\u8FDB\u5236\u6570\u636E\uFF09\u3002");
+  }
+  const records = parseCentralDirectory(buf);
+  const out = [];
+  for (const rec of records) {
+    assertSafeEntryName(rec.name);
+    assertNotSymlink(rec);
+    out.push({
+      name: rec.name,
+      size: rec.size,
+      compressedSize: rec.compressedSize,
+      method: rec.method,
+      offset: rec.offset
+    });
+  }
+  return out;
+}
+function readEntryData(buf, rec) {
+  assertSupportedMethod(rec);
+  const lfh = rec.offset;
+  if (!Number.isSafeInteger(lfh) || lfh < 0 || lfh + LOCAL_SIZE > buf.length) {
+    throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u7684\u672C\u5730\u6587\u4EF6\u5934\u4F4D\u7F6E\u65E0\u6548\uFF08\u6587\u4EF6\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002`);
+  }
+  if (buf.readUInt32LE(lfh) !== LOCAL_SIGNATURE) {
+    throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u7684\u672C\u5730\u6587\u4EF6\u5934\u5DF2\u635F\u574F\u3002`);
+  }
+  const nameLen = buf.readUInt16LE(lfh + 26);
+  const extraLen = buf.readUInt16LE(lfh + 28);
+  const dataStart = lfh + LOCAL_SIZE + nameLen + extraLen;
+  const dataEnd = dataStart + rec.compressedSize;
+  if (dataStart > buf.length || dataEnd > buf.length) {
+    throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u7684\u6570\u636E\u4E0D\u5B8C\u6574\uFF08\u538B\u7F29\u5305\u53EF\u80FD\u88AB\u622A\u65AD\uFF09\u3002`);
+  }
+  const raw = buf.subarray(dataStart, dataEnd);
+  let out;
+  if (rec.method === 0) {
+    out = Buffer.from(raw);
+  } else {
+    try {
+      out = inflateRawSync(raw, {
+        // 单条上限：声明多大就只能解出多大（解压炸弹防护）
+        maxOutputLength: Math.max(rec.size, 1)
+      });
+    } catch (err) {
+      const code = err?.code ?? "";
+      if (code === "ERR_BUFFER_TOO_LARGE") {
+        throw new Error(
+          `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u89E3\u538B\u540E\u7684\u4F53\u79EF\u8D85\u8FC7\u4E86\u538B\u7F29\u5305\u58F0\u660E\u7684\u5927\u5C0F\uFF08\u7591\u4F3C\u538B\u7F29\u70B8\u5F39\u6216\u6570\u636E\u5DF2\u635F\u574F\uFF09\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`
+        );
+      }
+      throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u65E0\u6CD5\u7528 deflate \u89E3\u5F00\uFF08\u6570\u636E\u53EF\u80FD\u5DF2\u635F\u574F\uFF09\u3002`);
+    }
+  }
+  if (out.length !== rec.size) {
+    throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u89E3\u51FA\u7684\u5927\u5C0F\uFF08${out.length} \u5B57\u8282\uFF09\u4E0E\u538B\u7F29\u5305\u8BB0\u5F55\uFF08${rec.size} \u5B57\u8282\uFF09\u4E0D\u4E00\u81F4\u3002`);
+  }
+  if (rec.crc !== 0) {
+    const actual = crc32(out);
+    if (actual !== rec.crc) {
+      throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u300C${rec.name}\u300D\u7684 CRC \u6821\u9A8C\u4E0D\u5339\u914D\uFF08\u6570\u636E\u5DF2\u635F\u574F\uFF09\u3002`);
+    }
+  }
+  return out;
+}
+function normalizeBudget(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_MAX_EXTRACTED_BYTES;
+  return Math.floor(value);
+}
+function extractZip(buf, entries, destDir, opts) {
+  if (!Buffer.isBuffer(buf)) {
+    throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u5185\u5BB9\u65E0\u6548\uFF08\u4E0D\u662F\u4E8C\u8FDB\u5236\u6570\u636E\uFF09\u3002");
+  }
+  const root = resolve2(destDir);
+  const records = parseCentralDirectory(buf);
+  const byName = /* @__PURE__ */ new Map();
+  for (const rec of records) byName.set(rec.name, rec);
+  const maxTotalBytes = normalizeBudget(opts?.maxTotalBytes);
+  const plan = [];
+  let declaredTotal = 0;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry.name !== "string") {
+      throw new Error("\u89E3\u538B\u5931\u8D25\uFF1A\u6761\u76EE\u4FE1\u606F\u65E0\u6548\uFF08\u7F3A\u5C11\u6761\u76EE\u540D\uFF09\u3002");
+    }
+    if (opts?.filter && opts.filter(entry) === false) continue;
+    assertSafeEntryName(entry.name);
+    const rec = byName.get(entry.name);
+    if (!rec) {
+      throw new Error(`\u89E3\u538B\u5931\u8D25\uFF1A\u538B\u7F29\u5305\u91CC\u627E\u4E0D\u5230\u6761\u76EE\u300C${entry.name}\u300D\uFF08\u6E05\u5355\u4E0E\u538B\u7F29\u5305\u5185\u5BB9\u4E0D\u4E00\u81F4\uFF09\u3002`);
+    }
+    assertNotSymlink(rec);
+    assertSupportedMethod(rec);
+    const target = resolveTarget(root, rec.name);
+    const isDir = rec.name.endsWith("/") || rec.name.endsWith("\\");
+    declaredTotal += rec.size;
+    if (declaredTotal > maxTotalBytes) {
+      throw new Error(
+        `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u538B\u7F29\u5305\u58F0\u660E\u7684\u89E3\u538B\u603B\u5927\u5C0F\u8D85\u8FC7\u4E0A\u9650\uFF08${maxTotalBytes} \u5B57\u8282\uFF09\uFF0C\u7591\u4F3C\u538B\u7F29\u70B8\u5F39\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`
+      );
+    }
+    plan.push({ rec, target, dir: isDir });
+  }
+  let actualTotal = 0;
+  for (const item of plan) {
+    if (item.dir) continue;
+    const data = readEntryData(buf, item.rec);
+    actualTotal += data.length;
+    if (actualTotal > maxTotalBytes) {
+      throw new Error(
+        `\u89E3\u538B\u88AB\u62D2\u7EDD\uFF1A\u5B9E\u9645\u89E3\u538B\u51FA\u7684\u603B\u5927\u5C0F\u8D85\u8FC7\u4E0A\u9650\uFF08${maxTotalBytes} \u5B57\u8282\uFF09\uFF0C\u7591\u4F3C\u538B\u7F29\u70B8\u5F39\uFF0C\u5DF2\u4E2D\u6B62\uFF08\u6CA1\u6709\u5199\u51FA\u4EFB\u4F55\u6587\u4EF6\uFF09\u3002`
+      );
+    }
+  }
+  mkdirSync4(root, { recursive: true });
+  let files = 0;
+  let bytes = 0;
+  for (const item of plan) {
+    if (item.dir) {
+      mkdirSync4(item.target, { recursive: true });
+      continue;
+    }
+    assertTargetNotSymlink(item.target, item.rec.name);
+    const data = readEntryData(buf, item.rec);
+    mkdirSync4(dirname2(item.target), { recursive: true });
+    writeFileSync3(item.target, data, writeMode(item.rec));
+    files += 1;
+    bytes += data.length;
+  }
+  return { files, bytes };
+}
+
+// src/server/host/manager.ts
+var REGISTRY_FILE_NAME = "managed-hosts.json";
+var JOBS_FILE_NAME = "managed-install-jobs.json";
+var SECRETS_FILE_NAME = "managed-hosts.tokens.json";
+var DEFAULT_WEBUI_PORT = 6099;
+var DEFAULT_ONEBOT_PORT = 3e3;
+var MAX_INSTALLS = 64;
+var MAX_JOBS = 20;
+var JOB_FLUSH_INTERVAL_MS = 2e3;
+var MAX_JOB_NOTES = 20;
+var SCHEMA_VERSION = 1;
+function isObj3(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+var WINDOWS_PATH_RE = /(^|[^\w])([A-Za-z]:[\\/][^\s"'<>|。，、；：！？]*)/g;
+var UNC_PATH_RE = /(^|[^\w])(\\\\[^\s"'<>|\\]+\\[^\s"'<>|\\]*)/g;
+var POSIX_PATH_RE = /(^|[\s(])([/~][^\s"'()<>。，、；：！？]*)/g;
+function scrubLocalPaths(text, platform = process.platform) {
+  if (typeof text !== "string" || text === "") return "";
+  let out = text.replace(WINDOWS_PATH_RE, (_m, pre) => `${pre}<\u8DEF\u5F84>`);
+  out = out.replace(UNC_PATH_RE, (_m, pre) => `${pre}<\u8DEF\u5F84>`);
+  if (platform !== "win32") {
+    out = out.replace(POSIX_PATH_RE, (_m, pre) => `${pre}<\u8DEF\u5F84>`);
+  }
+  return out;
+}
+function maskSecret(value) {
+  if (typeof value !== "string" || value === "") return void 0;
+  if (value.length <= 8) return "***";
+  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+}
+function normalizeDirKey(dir, platform = process.platform) {
+  let abs;
+  try {
+    abs = resolve3(dir);
+  } catch {
+    abs = String(dir ?? "");
+  }
+  const unified = abs.replace(/\\/g, "/");
+  return platform === "win32" ? unified.toLowerCase() : unified;
+}
+function sanitizeVersion(version2) {
+  const cleaned = String(version2 ?? "").trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned === "" ? "unknown" : cleaned;
+}
+function deriveInstallId(version2, dir, platform = process.platform) {
+  const v = sanitizeVersion(version2);
+  const key = `${v}
+${normalizeDirKey(dir, platform)}`;
+  const hash = createHash2("sha256").update(key, "utf8").digest("hex").slice(0, 10);
+  return `napcat-${v}-${hash}`;
+}
+function newJobId() {
+  return `job-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+}
+function generateWebuiToken() {
+  return randomBytes(32).toString("hex");
+}
+function stripUrlCredentials(raw) {
+  try {
+    const url = new URL(String(raw ?? "").trim());
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return String(raw ?? "").split("#")[0].split("?")[0];
+  }
+}
+function sanitizeRequest(req) {
+  return { ...req, url: stripUrlCredentials(req.url) };
+}
+function removeQuietly2(target) {
+  try {
+    rmSync2(target, { recursive: true, force: true });
+  } catch {
+  }
+}
+function readJsonFile(path) {
+  try {
+    return JSON.parse(readFileSync4(path, "utf-8"));
+  } catch {
+    return void 0;
+  }
+}
+function writeJsonAtomic(path, value, opts = {}) {
+  const payload = `${JSON.stringify(value, null, 2)}
+`;
+  mkdirSync5(dirname3(path), { recursive: true });
+  const suffix = opts.tmpSuffix ?? `${process.pid}.${Date.now()}`;
+  const tmp = `${path}.${suffix}.tmp`;
+  const writeTmp = opts.writeTmp ?? ((target, data) => {
+    writeFileSync4(target, data, { encoding: "utf-8", mode: 384 });
+  });
+  try {
+    writeTmp(tmp, payload);
+  } catch (err) {
+    try {
+      unlinkSync3(tmp);
+    } catch {
+    }
+    throw err;
+  }
+  try {
+    renameSync3(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync3(tmp);
+    } catch {
+    }
+    throw err;
+  }
+  try {
+    chmodSync3(path, 384);
+  } catch {
+  }
+}
+function safeReaddir2(dir) {
+  try {
+    return readdirSync2(dir);
+  } catch {
+    return [];
+  }
+}
+function defaultDesktopQqRoots(env = process.env, platform = process.platform) {
+  const out = [];
+  const add = (p) => {
+    if (typeof p === "string" && p.trim() !== "") out.push(p.trim());
+  };
+  if (platform === "win32") {
+    for (const base of [env.ProgramFiles, env["ProgramFiles(x86)"], env.LOCALAPPDATA, env.APPDATA]) {
+      if (!base) continue;
+      add(join4(base, "Tencent", "QQ"));
+      add(join4(base, "Tencent", "QQNT"));
+    }
+    if (env.USERPROFILE) add(join4(env.USERPROFILE, "AppData", "Roaming", "Tencent", "QQ"));
+    if (env.LOCALAPPDATA) add(join4(env.LOCALAPPDATA, "Tencent", "QQ"));
+  } else {
+    add("/Applications/QQ.app");
+    add(join4(env.HOME ?? "", "Applications", "QQ.app"));
+  }
+  return Array.from(new Set(out.filter((p) => p !== "")));
+}
+function compareVersionStrings(a, b) {
+  const pa = /^(\d+)\.(\d+)\.(\d+)/.exec(a);
+  const pb = /^(\d+)\.(\d+)\.(\d+)/.exec(b);
+  if (!pa || !pb) return a < b ? -1 : a > b ? 1 : 0;
+  for (let i = 1; i <= 3; i++) {
+    const na = Number(pa[i]);
+    const nb = Number(pb[i]);
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+function findDesktopQqPackage(roots) {
+  const candidates = [];
+  for (const raw of Array.isArray(roots) ? roots : []) {
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    const root = raw.trim();
+    candidates.push({ path: join4(root, "resources", "app", "package.json") });
+    candidates.push({ path: join4(root, "Contents", "Resources", "app", "package.json") });
+    for (const versionDir of safeReaddir2(join4(root, "versions"))) {
+      candidates.push({
+        path: join4(root, "versions", versionDir, "resources", "app", "package.json"),
+        versionDir
+      });
+    }
+  }
+  candidates.sort((a, b) => {
+    if (!!a.versionDir !== !!b.versionDir) return a.versionDir ? -1 : 1;
+    if (a.versionDir && b.versionDir) return compareVersionStrings(b.versionDir, a.versionDir);
+    return 0;
+  });
+  for (const candidate of candidates) {
+    const json = readJsonFile(candidate.path);
+    if (!isObj3(json)) continue;
+    const out = { path: candidate.path, packageJson: json };
+    if (typeof json.version === "string") out.version = json.version;
+    if (typeof json.buildVersion === "string") out.buildVersion = json.buildVersion;
+    if (candidate.versionDir) out.versionDir = candidate.versionDir;
+    return out;
+  }
+  return void 0;
+}
+function sanitizeInstall(raw) {
+  if (!isObj3(raw)) return void 0;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  const dir = typeof raw.dir === "string" ? raw.dir.trim() : "";
+  const version2 = typeof raw.version === "string" ? raw.version.trim() : "";
+  if (id === "" || dir === "" || version2 === "") return void 0;
+  const out = {
+    id,
+    dir,
+    version: version2,
+    mode: raw.mode === "inject" ? "inject" : "standalone",
+    installedAt: typeof raw.installedAt === "string" ? raw.installedAt : (/* @__PURE__ */ new Date(0)).toISOString(),
+    artifactSha256: typeof raw.artifactSha256 === "string" ? raw.artifactSha256 : ""
+  };
+  if (typeof raw.pid === "number" && Number.isInteger(raw.pid) && raw.pid > 0) out.pid = raw.pid;
+  if (typeof raw.pidRecordedAt === "string") out.pidRecordedAt = raw.pidRecordedAt;
+  return out;
+}
+function sanitizeJob(raw) {
+  if (!isObj3(raw)) return void 0;
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (id === "") return void 0;
+  const phases = [
+    "connecting",
+    "downloading",
+    "verifying",
+    "extracting",
+    "done",
+    "failed"
+  ];
+  const out = {
+    id,
+    startedAt: typeof raw.startedAt === "string" ? raw.startedAt : (/* @__PURE__ */ new Date(0)).toISOString(),
+    state: raw.state === "succeeded" || raw.state === "failed" ? raw.state : "running",
+    phase: phases.includes(raw.phase) ? raw.phase : "connecting",
+    bytesReceived: typeof raw.bytesReceived === "number" && Number.isFinite(raw.bytesReceived) ? Math.max(0, Math.floor(raw.bytesReceived)) : 0
+  };
+  if (typeof raw.finishedAt === "string") out.finishedAt = raw.finishedAt;
+  if (typeof raw.totalBytes === "number" && Number.isFinite(raw.totalBytes) && raw.totalBytes > 0) {
+    out.totalBytes = raw.totalBytes;
+  }
+  if (out.totalBytes !== void 0 && typeof raw.percent === "number" && Number.isFinite(raw.percent)) {
+    out.percent = Math.max(0, Math.min(100, raw.percent));
+  }
+  if (typeof raw.error === "string" && raw.error !== "") out.error = raw.error;
+  if (Array.isArray(raw.notes)) {
+    const notes = raw.notes.filter((n) => typeof n === "string" && n !== "");
+    if (notes.length > 0) out.notes = notes.slice(-MAX_JOB_NOTES);
+  }
+  const install = sanitizeInstall(raw.install);
+  if (install) out.install = install;
+  if (isObj3(raw.request)) {
+    const req = raw.request;
+    out.request = {
+      dir: typeof req.dir === "string" ? req.dir : "",
+      version: typeof req.version === "string" ? req.version : "",
+      mode: req.mode === "inject" ? "inject" : "standalone",
+      url: typeof req.url === "string" ? req.url : "",
+      sha256: typeof req.sha256 === "string" ? req.sha256 : "",
+      allowedHosts: Array.isArray(req.allowedHosts) ? req.allowedHosts.filter((h) => typeof h === "string") : [],
+      ...typeof req.proxy === "string" ? { proxy: req.proxy } : {},
+      ...typeof req.uin === "string" ? { uin: req.uin } : {}
+    };
+  }
+  return out;
+}
+var DirectorySwap = class {
+  constructor(target, backup) {
+    this.target = target;
+    this.backup = backup;
+  }
+  /** 成功：删掉备份。 */
+  commit() {
+    if (this.backup) removeQuietly2(this.backup);
+  }
+  /**
+   * 失败：撤掉新目录，把旧目录换回来。
+   *
+   * @returns 换不回来时的说明（成功则 undefined）。旧目录会留在
+   *          `<target>.napcat-old-<jobId>`，**必须**告诉用户 ——
+   *          否则他的安装目录「凭空消失」而他毫不知情。
+   */
+  rollback() {
+    if (!this.backup) {
+      removeQuietly2(this.target);
+      return void 0;
+    }
+    if (!existsSync2(this.backup)) return void 0;
+    removeQuietly2(this.target);
+    try {
+      renameSync3(this.backup, this.target);
+      return void 0;
+    } catch {
+      return `\u65E7\u76EE\u5F55\u6CA1\u80FD\u6362\u56DE\u539F\u4F4D\uFF0C\u5B83\u4FDD\u7559\u5728 ${this.backup}\uFF0C\u8BF7\u624B\u52A8\u6539\u540D\u56DE\u53BB\u3002`;
+    }
+  }
+};
+function assertInstallTargetSafe(dir, managed) {
+  let stat;
+  try {
+    stat = lstatSync2(dir);
+  } catch (err) {
+    if (err.code === "ENOENT") return;
+    throw err;
+  }
+  if (stat.isSymbolicLink()) {
+    throw new Error("\u5B89\u88C5\u76EE\u6807\u4E0D\u80FD\u662F\u7B26\u53F7\u94FE\u63A5\uFF1A\u8BF7\u9009\u62E9\u666E\u901A\u76EE\u5F55\u3002");
+  }
+  if (managed) return;
+  if (!stat.isDirectory()) {
+    throw new Error("\u76EE\u6807\u8DEF\u5F84\u5DF2\u5B58\u5728\u4E14\u4E0D\u662F\u76EE\u5F55\uFF1A\u4E3A\u907F\u514D\u8986\u76D6\u7528\u6237\u6587\u4EF6\uFF0C\u8BF7\u9009\u62E9\u4E00\u4E2A\u7A7A\u76EE\u5F55\u3002");
+  }
+  if (readdirSync2(dir).length !== 0) {
+    throw new Error("\u76EE\u6807\u76EE\u5F55\u5DF2\u5B58\u5728\u4E14\u4E0D\u5C5E\u4E8E\u63D2\u4EF6\u53D7\u7BA1\u5B89\u88C5\uFF1A\u4E3A\u907F\u514D\u8986\u76D6\u7528\u6237\u6587\u4EF6\uFF0C\u8BF7\u9009\u62E9\u4E00\u4E2A\u7A7A\u76EE\u5F55\u3002");
+  }
+}
+var ManagedHost = class {
+  /** 插件数据目录。 */
+  dataDir;
+  /** 台账路径。 */
+  registryPath;
+  /** 作业记录路径。 */
+  jobsPath;
+  /** 私有凭据路径。 */
+  secretsPath;
+  /** 平台（影响路径归一化）。 */
+  platform;
+  opts;
+  download;
+  /** 台账里的安装条目。 */
+  installs = [];
+  /** 作业表（内存态始终最新；落盘按节流）。 */
+  jobs = /* @__PURE__ */ new Map();
+  /** 私有凭据：归一化目录 → WebUI token。 */
+  secrets = /* @__PURE__ */ new Map();
+  /** 本进程生成过的 token（用于就地遮蔽文案里的明文）。 */
+  knownTokens = /* @__PURE__ */ new Set();
+  /** 作业记录上次落盘的时间。 */
+  jobsFlushedAt = 0;
+  constructor(opts) {
+    if (!opts || typeof opts.dataDir !== "string" || opts.dataDir.trim() === "") {
+      throw new Error("\u53D7\u7BA1\u5BBF\u4E3B\u521D\u59CB\u5316\u5931\u8D25\uFF1A\u7F3A\u5C11\u63D2\u4EF6\u6570\u636E\u76EE\u5F55\u3002");
+    }
+    this.opts = opts;
+    this.dataDir = resolve3(opts.dataDir);
+    this.registryPath = opts.registryPath ? resolve3(opts.registryPath) : join4(this.dataDir, REGISTRY_FILE_NAME);
+    this.jobsPath = opts.jobsPath ? resolve3(opts.jobsPath) : join4(this.dataDir, JOBS_FILE_NAME);
+    this.secretsPath = opts.secretsPath ? resolve3(opts.secretsPath) : join4(this.dataDir, SECRETS_FILE_NAME);
+    this.platform = opts.platform ?? process.platform;
+    this.download = opts.download ?? downloadVerified;
+    this.installs = this.loadRegistry();
+    this.loadJobs();
+    this.loadSecrets();
+  }
+  // ── 台账 ──────────────────────────────────────────────────────────
+  /** 全部受管安装（按登记顺序）。 */
+  list() {
+    return this.installs.map((i) => ({ ...i }));
+  }
+  /** 按 id 取一条。 */
+  get(id) {
+    const found = this.installs.find((i) => i.id === id);
+    return found ? { ...found } : void 0;
+  }
+  /** 按安装目录取一条（归一化比较；Windows 上不区分大小写）。 */
+  findByDir(dir) {
+    const key = normalizeDirKey(dir, this.platform);
+    const found = this.installs.find((i) => normalizeDirKey(i.dir, this.platform) === key);
+    return found ? { ...found } : void 0;
+  }
+  /**
+   * 登记一条安装（**幂等**）。
+   *
+   * - 同 id → 覆盖（同一条不会变成两条）；
+   * - 同目录（不同 id，例如换了版本重装）→ 覆盖那一条：**一个目录在台账里永远只有一条**。
+   *
+   * 写盘失败会抛错，且**内存态不变**（磁盘是权威）。
+   */
+  add(install) {
+    const normalized = this.assertInstall(install);
+    const dirKey = normalizeDirKey(normalized.dir, this.platform);
+    const next = [];
+    let replaced = false;
+    for (const cur of this.installs) {
+      if (cur.id === normalized.id) {
+        next.push(normalized);
+        replaced = true;
+        continue;
+      }
+      if (normalizeDirKey(cur.dir, this.platform) === dirKey) {
+        if (!replaced) {
+          next.push(normalized);
+          replaced = true;
+        }
+        continue;
+      }
+      next.push(cur);
+    }
+    if (!replaced) next.push(normalized);
+    this.persistRegistry(next.slice(-MAX_INSTALLS));
+  }
+  /**
+   * 从台账里移除一条（**只**销号，不删目录——删目录是 Task 4 的卸载流程）。
+   *
+   * @returns 真的移除了才返回 true。
+   */
+  remove(id) {
+    const next = this.installs.filter((i) => i.id !== id);
+    if (next.length === this.installs.length) return false;
+    const removed = this.installs.find((i) => i.id === id);
+    this.persistRegistry(next);
+    if (removed) this.forgetSecret(removed.dir);
+    return true;
+  }
+  /**
+   * 记录 / 清除**插件自己拉起的**进程 pid（Task 3 用）。
+   *
+   * @param pid 传 `undefined` 表示清除（进程已经停了）。
+   */
+  setPid(id, pid) {
+    const index = this.installs.findIndex((i) => i.id === id);
+    if (index < 0) return;
+    const current = this.installs[index];
+    const next = [...this.installs];
+    const updated = { ...current };
+    if (pid === void 0) {
+      delete updated.pid;
+      delete updated.pidRecordedAt;
+    } else {
+      if (!Number.isInteger(pid) || pid <= 0) {
+        throw new Error("\u8BB0\u5F55\u8FDB\u7A0B pid \u5931\u8D25\uFF1Apid \u5FC5\u987B\u662F\u6B63\u6574\u6570\u3002");
+      }
+      updated.pid = pid;
+      updated.pidRecordedAt = (/* @__PURE__ */ new Date()).toISOString();
+    }
+    next[index] = updated;
+    this.persistRegistry(next);
+  }
+  /** 取某个安装当前记录的 pid（没有 → undefined：不是本插件启动的实例）。 */
+  pidOf(id) {
+    return this.installs.find((i) => i.id === id)?.pid;
+  }
+  // ── 安装作业 ──────────────────────────────────────────────────────
+  /**
+   * 开始一次安装作业（**立刻返回**，不阻塞在 124MB 的下载上）。
+   *
+   * 状态机：`connecting → downloading → verifying → extracting → done | failed`。
+   * 进度通过 `updateJob` 推进，面板用 `getJob(id)` 轮询。
+   *
+   * @param job 作业（没有 id 时会自动补一个）。
+   * @param req  安装请求；不传则用 `job.request`。
+   */
+  startInstall(job, req) {
+    if (!job || typeof job !== "object") {
+      throw new Error("\u542F\u52A8\u5B89\u88C5\u4F5C\u4E1A\u5931\u8D25\uFF1A\u4F5C\u4E1A\u5BF9\u8C61\u65E0\u6548\u3002");
+    }
+    const request = req ?? job.request;
+    const record2 = {
+      ...job,
+      id: typeof job.id === "string" && job.id.trim() !== "" ? job.id : newJobId(),
+      startedAt: typeof job.startedAt === "string" ? job.startedAt : (/* @__PURE__ */ new Date()).toISOString(),
+      state: "running",
+      phase: "connecting",
+      bytesReceived: 0
+    };
+    delete record2.totalBytes;
+    delete record2.percent;
+    delete record2.finishedAt;
+    delete record2.error;
+    delete record2.install;
+    if (request) record2.request = sanitizeRequest(request);
+    this.jobs.set(record2.id, record2);
+    this.updateJob(record2);
+    if (!request) {
+      record2.state = "failed";
+      record2.phase = "failed";
+      record2.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      record2.error = "\u5B89\u88C5\u4F5C\u4E1A\u7F3A\u5C11\u5B89\u88C5\u8BF7\u6C42\uFF08\u7248\u672C\u3001\u5B89\u88C5\u76EE\u5F55\u3001\u4E0B\u8F7D\u5730\u5740\u3001\u6821\u9A8C\u503C\uFF09\uFF0C\u65E0\u6CD5\u5F00\u59CB\u3002";
+      this.updateJob(record2);
+      return;
+    }
+    void this.runInstall(record2, request);
+  }
+  /**
+   * 更新作业（进度 / 状态 / 说明）。
+   *
+   * 落盘是**节流**的（124MB 下载时不该把磁盘写爆），但内存态永远是最新的一份；
+   * 作业进入终态（成功 / 失败）时一定落盘。
+   */
+  updateJob(job) {
+    if (!job || typeof job.id !== "string" || job.id === "") return;
+    const record2 = { ...job };
+    if (record2.error) record2.error = this.redactText(record2.error);
+    if (record2.notes) record2.notes = record2.notes.map((n) => this.redactText(n));
+    this.jobs.set(record2.id, record2);
+    this.flushJobs(record2.state === "running" ? false : true);
+    try {
+      this.opts.onJobUpdate?.({ ...record2 });
+    } catch {
+    }
+  }
+  /** 按 id 取作业。 */
+  getJob(id) {
+    const found = this.jobs.get(id);
+    return found ? { ...found } : void 0;
+  }
+  /** 全部作业（按开始时间排序，最新在后）。 */
+  listJobs() {
+    return [...this.jobs.values()].sort((a, b) => a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0).map((j) => ({ ...j }));
+  }
+  // ── 视图（对外暴露用，一律脱敏） ──────────────────────────────────
+  /** 安装视图（token 永远是掩码）。 */
+  view(install) {
+    const masked = this.maskWebuiToken(install.dir);
+    const out = {
+      id: install.id,
+      version: install.version,
+      mode: install.mode,
+      installedAt: install.installedAt,
+      artifactSha256: install.artifactSha256,
+      dir: install.dir
+    };
+    if (install.pid !== void 0) out.pid = install.pid;
+    if (masked !== void 0) out.webuiTokenMasked = masked;
+    return out;
+  }
+  /** 全部安装的视图。 */
+  listViews() {
+    return this.installs.map((i) => this.view(i));
+  }
+  /** 作业视图（安装部分也走视图，明文 token 不会出现）。 */
+  jobView(job) {
+    const out = {
+      id: job.id,
+      startedAt: job.startedAt,
+      state: job.state,
+      phase: job.phase,
+      bytesReceived: job.bytesReceived
+    };
+    if (job.finishedAt !== void 0) out.finishedAt = job.finishedAt;
+    if (job.totalBytes !== void 0) out.totalBytes = job.totalBytes;
+    if (job.percent !== void 0) out.percent = job.percent;
+    if (job.error !== void 0) out.error = job.error;
+    if (job.notes !== void 0) out.notes = [...job.notes];
+    if (job.install !== void 0) out.install = this.view(job.install);
+    return out;
+  }
+  // ── WebUI token ───────────────────────────────────────────────────
+  /**
+   * 取某个安装的 WebUI token **明文**（插件内部用；对外一律走 `maskWebuiToken`）。
+   *
+   * @param target 安装 id 或安装目录。
+   */
+  webuiTokenOf(target) {
+    const key = this.secretKeyOf(target);
+    return key ? this.secrets.get(key) : void 0;
+  }
+  /** 取某个安装的 WebUI token **掩码**（对外唯一允许的形态）。 */
+  maskWebuiToken(target) {
+    return maskSecret(this.webuiTokenOf(target));
+  }
+  // ── 脱敏 ──────────────────────────────────────────────────────────
+  /**
+   * 脱敏一段文本：先过调用方的 `redact`（Task 4 接 `state.redact`），
+   * 再遮蔽**本模块见过的 token**（插件自己生成的 WebUI token）。
+   */
+  redactText(text) {
+    if (typeof text !== "string" || text === "") return "";
+    let out = text;
+    const external = this.opts.redact;
+    if (typeof external === "function") {
+      try {
+        out = external(out);
+      } catch {
+        out = "[\u5185\u5BB9\u5DF2\u7701\u7565]";
+      }
+    }
+    for (const token of this.knownTokens) {
+      if (token) out = out.split(token).join("***");
+    }
+    return out;
+  }
+  // ── 内部：安装流水线 ──────────────────────────────────────────────
+  /** 校验安装请求（不合格就抛中文错误）。 */
+  assertRequest(req) {
+    if (!req || typeof req !== "object") {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u7F3A\u5C11\u5FC5\u8981\u53C2\u6570\u3002");
+    }
+    if (typeof req.dir !== "string" || req.dir.trim() === "") {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u7F3A\u5C11\u5B89\u88C5\u76EE\u5F55\u3002");
+    }
+    if (!isAbsolute3(req.dir)) {
+      throw new Error("\u5B89\u88C5\u76EE\u5F55\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF1A\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u968F\u5BBF\u4E3B\u7684\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF0C\u65E0\u6CD5\u590D\u73B0\u3002");
+    }
+    if (typeof req.version !== "string" || req.version.trim() === "") {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u7F3A\u5C11\u7248\u672C\u53F7\u3002");
+    }
+    if (typeof req.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(req.sha256.trim())) {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u5236\u54C1\u6821\u9A8C\u503C\u5FC5\u987B\u662F 64 \u4F4D sha256 \u5341\u516D\u8FDB\u5236\u4E32\u3002");
+    }
+    if (typeof req.url !== "string" || req.url.trim() === "") {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u7F3A\u5C11\u4E0B\u8F7D\u5730\u5740\u3002");
+    }
+    if (req.mode !== "standalone" && req.mode !== "inject") {
+      throw new Error("\u5B89\u88C5\u8BF7\u6C42\u65E0\u6548\uFF1A\u6A21\u5F0F\u53EA\u80FD\u662F\u300C\u72EC\u7ACB\u300D\u6216\u300C\u6CE8\u5165\u300D\u3002");
+    }
+    assertInstallTargetSafe(req.dir, Boolean(this.findByDir(req.dir)));
+  }
+  /** 校验并收敛一条安装条目。 */
+  assertInstall(install) {
+    if (!install || typeof install !== "object") {
+      throw new Error("\u767B\u8BB0\u5B89\u88C5\u5931\u8D25\uFF1A\u5B89\u88C5\u6761\u76EE\u65E0\u6548\u3002");
+    }
+    const dir = typeof install.dir === "string" ? install.dir.trim() : "";
+    if (dir === "") throw new Error("\u767B\u8BB0\u5B89\u88C5\u5931\u8D25\uFF1A\u5B89\u88C5\u6761\u76EE\u7F3A\u5C11\u5B89\u88C5\u76EE\u5F55\u3002");
+    if (!isAbsolute3(dir)) throw new Error("\u767B\u8BB0\u5B89\u88C5\u5931\u8D25\uFF1A\u5B89\u88C5\u76EE\u5F55\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\u3002");
+    const version2 = typeof install.version === "string" ? install.version.trim() : "";
+    if (version2 === "") throw new Error("\u767B\u8BB0\u5B89\u88C5\u5931\u8D25\uFF1A\u5B89\u88C5\u6761\u76EE\u7F3A\u5C11\u7248\u672C\u53F7\u3002");
+    const out = {
+      id: typeof install.id === "string" && install.id.trim() !== "" ? install.id.trim() : deriveInstallId(version2, dir, this.platform),
+      dir,
+      version: version2,
+      mode: install.mode === "inject" ? "inject" : "standalone",
+      installedAt: typeof install.installedAt === "string" && install.installedAt.trim() !== "" ? install.installedAt : (/* @__PURE__ */ new Date()).toISOString(),
+      artifactSha256: typeof install.artifactSha256 === "string" ? install.artifactSha256.trim().toLowerCase() : ""
+    };
+    if (typeof install.pid === "number" && Number.isInteger(install.pid) && install.pid > 0) {
+      out.pid = install.pid;
+    }
+    if (typeof install.pidRecordedAt === "string") out.pidRecordedAt = install.pidRecordedAt;
+    return out;
+  }
+  /** 暂存目录：与目标目录**同父** → 换位是同文件系统内的 rename（原子）。 */
+  stagingDirFor(target, jobId) {
+    const abs = resolve3(target);
+    const parent = dirname3(abs);
+    mkdirSync5(parent, { recursive: true });
+    return join4(parent, `.${basename(abs)}.napcat-install-${jobId}.tmp`);
+  }
+  /** 把暂存内容换到目标目录（覆盖安装时先备份旧目录）。 */
+  swapIntoPlace(payloadDir, target, jobId) {
+    const abs = resolve3(target);
+    let backup;
+    if (existsSync2(abs)) {
+      backup = `${abs}.napcat-old-${jobId}`;
+      removeQuietly2(backup);
+      try {
+        renameSync3(abs, backup);
+      } catch (err) {
+        throw new Error(
+          `\u5B89\u88C5\u5931\u8D25\uFF1A\u65E0\u6CD5\u628A\u5DF2\u6709\u76EE\u5F55\u632A\u5F00\uFF08\u53EF\u80FD\u6B63\u88AB\u5360\u7528\uFF09\u3002\u8BF7\u5173\u95ED\u6B63\u5728\u8FD0\u884C\u7684 NapCat \u540E\u91CD\u8BD5\u3002\uFF08${errText3(err)}\uFF09`
+        );
+      }
+    }
+    try {
+      renameSync3(payloadDir, abs);
+    } catch (err) {
+      if (backup && existsSync2(backup)) {
+        try {
+          renameSync3(backup, abs);
+        } catch {
+        }
+      }
+      throw new Error(`\u5B89\u88C5\u5931\u8D25\uFF1A\u65E0\u6CD5\u628A\u5B89\u88C5\u5185\u5BB9\u653E\u5230\u76EE\u6807\u76EE\u5F55\uFF08${errText3(err)}\uFF09\u3002\u8BF7\u68C0\u67E5\u5B89\u88C5\u8DEF\u5F84\u662F\u5426\u53EF\u5199\u3002`);
+    }
+    return new DirectorySwap(abs, backup);
+  }
+  /** 往受管安装目录里写配置（WebUI / OneBot / qqnt.json）。 */
+  writeInstallConfig(payloadDir, job, req) {
+    const napcatDir = join4(payloadDir, "napcat");
+    const configDir = join4(napcatDir, "config");
+    mkdirSync5(configDir, { recursive: true });
+    const token = generateWebuiToken();
+    this.knownTokens.add(token);
+    const webui = {
+      host: "127.0.0.1",
+      port: req.webuiPort ?? DEFAULT_WEBUI_PORT,
+      token,
+      loginRate: 30,
+      isLoginRate: false,
+      enableAutoLogin: false
+    };
+    this.writeJson(join4(configDir, "webui.json"), webui);
+    const uin = typeof req.uin === "string" ? req.uin.trim() : "";
+    if (uin !== "") {
+      const onebot = {
+        network: {
+          httpServers: [
+            {
+              name: "napcat-zcode",
+              enable: true,
+              host: "127.0.0.1",
+              port: req.onebotPort ?? DEFAULT_ONEBOT_PORT
+            }
+          ],
+          websocketServers: []
+        }
+      };
+      this.writeJson(join4(configDir, `onebot11_${uin}.json`), onebot);
+    } else {
+      this.note(job, "\u672A\u63D0\u4F9B QQ \u53F7\uFF08uin\uFF09\uFF0C\u5DF2\u8DF3\u8FC7 OneBot \u8D26\u53F7\u914D\u7F6E\u7684\u5199\u5165\uFF1ANapCat \u9996\u6B21\u542F\u52A8\u540E\u4F1A\u81EA\u884C\u751F\u6210\u3002");
+    }
+    if (req.mode === "inject") {
+      this.writeQqntJson(napcatDir, job, req);
+    }
+    this.rememberSecret(req.dir, token);
+  }
+  /** 生成注入模式需要的 `qqnt.json`。 */
+  writeQqntJson(napcatDir, job, req) {
+    const target = join4(napcatDir, "qqnt.json");
+    const roots = Array.isArray(req.desktopQqRoots) && req.desktopQqRoots.length > 0 ? req.desktopQqRoots : defaultDesktopQqRoots(process.env, this.platform);
+    const found = findDesktopQqPackage(roots);
+    if (!found) {
+      this.note(
+        job,
+        "\u6CE8\u5165\u6A21\u5F0F\uFF1A\u672A\u627E\u5230\u672C\u673A\u684C\u9762 QQ \u7684 resources/app/package.json\uFF0C\u5DF2\u4FDD\u7559\u5236\u54C1\u81EA\u5E26\u7684 qqnt.json\u3002\u82E5\u684C\u9762 QQ \u7248\u672C\u4E0E\u5236\u54C1\u4E0D\u4E00\u81F4\uFF0CQQ \u542F\u52A8\u5668\u53EF\u80FD\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\u300D\u2014\u2014\u5EFA\u8BAE\u6539\u7528\u72EC\u7ACB\u6A21\u5F0F\u3002"
+      );
+      return;
+    }
+    const base = { ...found.packageJson };
+    base.main = "./loadNapCat.js";
+    this.writeJson(target, base);
+    const versionText = found.version ?? found.versionDir ?? "\u672A\u77E5\u7248\u672C";
+    this.note(
+      job,
+      `\u6CE8\u5165\u6A21\u5F0F\uFF1A\u5DF2\u6309\u672C\u673A\u684C\u9762 QQ\uFF08${versionText}\uFF09\u751F\u6210 qqnt.json\uFF08main = ./loadNapCat.js\uFF0C\u7248\u672C\u4E0E\u672C\u673A\u4E00\u81F4\uFF09\u3002`
+    );
+  }
+  /** 安装流水线（下载 → 校验 → 解压 → 写配置 → 换位 → 登记）。 */
+  async runInstall(job, req) {
+    let staging;
+    let swap;
+    try {
+      this.assertRequest(req);
+      staging = this.stagingDirFor(req.dir, job.id);
+      removeQuietly2(staging);
+      mkdirSync5(staging, { recursive: true });
+      const zipFile = join4(staging, "artifact.zip");
+      this.setPhase(job, "connecting", { bytesReceived: 0 });
+      const downloaded = await this.download({
+        url: req.url,
+        destFile: zipFile,
+        sha256: req.sha256,
+        proxy: req.proxy,
+        allowedHosts: req.allowedHosts,
+        onProgress: (p) => this.onDownloadProgress(job, p)
+      });
+      this.setPhase(job, "extracting", { bytesReceived: downloaded.bytes });
+      const buffer = readFileSync4(downloaded.path);
+      const entries = listZipEntries(buffer);
+      const payloadDir = join4(staging, "payload");
+      const extracted = extractZip(buffer, entries, payloadDir);
+      this.writeInstallConfig(payloadDir, job, req);
+      assertInstallTargetSafe(req.dir, Boolean(this.findByDir(req.dir)));
+      swap = this.swapIntoPlace(payloadDir, req.dir, job.id);
+      const install = {
+        id: deriveInstallId(req.version, req.dir, this.platform),
+        dir: resolve3(req.dir),
+        version: req.version,
+        mode: req.mode,
+        installedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        artifactSha256: req.sha256.toLowerCase()
+      };
+      this.add(install);
+      job.install = install;
+      job.state = "succeeded";
+      job.phase = "done";
+      job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.note(job, `\u5B89\u88C5\u5B8C\u6210\uFF1A\u5171\u89E3\u51FA ${extracted.files} \u4E2A\u6587\u4EF6\uFF0C${extracted.bytes} \u5B57\u8282\u3002`);
+      swap.commit();
+      swap = void 0;
+    } catch (err) {
+      if (swap) {
+        const leftover = swap.rollback();
+        if (leftover) {
+          this.note(job, `\u6CE8\u610F\uFF1A${leftover}`);
+        }
+      }
+      this.forgetSecret(req.dir);
+      job.state = "failed";
+      job.phase = "failed";
+      job.error = this.describeError(err);
+      job.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+    } finally {
+      if (staging) removeQuietly2(staging);
+      this.updateJob(job);
+    }
+  }
+  /** 下载进度 → 作业进度。 */
+  onDownloadProgress(job, p) {
+    job.phase = p.phase === "done" ? "verifying" : p.phase;
+    job.bytesReceived = p.bytesReceived;
+    if (p.totalBytes !== void 0) job.totalBytes = p.totalBytes;
+    else delete job.totalBytes;
+    if (p.percent !== void 0) job.percent = p.percent;
+    else delete job.percent;
+    if (p.message) this.note(job, p.message);
+    this.updateJob(job);
+  }
+  /**
+   * 推进到某个阶段。
+   *
+   * `totalBytes` / `percent` **只在明确给出时才更新**（不给就保持原样）：
+   * 服务器没声明 Content-Length 时它们就该一直是「未知」，
+   * 不能因为「反正下完了」就反推一个 100% 出来（那是伪造进度）。
+   */
+  setPhase(job, phase, progress) {
+    job.phase = phase;
+    job.bytesReceived = progress.bytesReceived;
+    if (progress.totalBytes !== void 0) job.totalBytes = progress.totalBytes;
+    if (progress.percent !== void 0) job.percent = progress.percent;
+    this.updateJob(job);
+  }
+  /** 追加一条说明（只保留最近若干条）。 */
+  note(job, text) {
+    const value = this.redactText(text);
+    if (!value) return;
+    const notes = [...job.notes ?? [], value];
+    job.notes = notes.slice(-MAX_JOB_NOTES);
+  }
+  /** 把异常翻译成给用户看的中文说明。 */
+  describeError(err) {
+    const raw = errText3(err);
+    const cleaned = scrubLocalPaths(this.redactText(raw), this.platform).trim();
+    if (cleaned === "") return "\u5B89\u88C5\u5931\u8D25\uFF1A\u539F\u56E0\u672A\u77E5\uFF0C\u8BF7\u91CD\u8BD5\u3002";
+    if (/^[一-鿿]/.test(cleaned)) return cleaned;
+    return `\u5B89\u88C5\u5931\u8D25\uFF1A${cleaned}\u3002\u8BF7\u68C0\u67E5\u5B89\u88C5\u8DEF\u5F84\u662F\u5426\u53EF\u5199\u3001\u78C1\u76D8\u7A7A\u95F4\u662F\u5426\u5145\u8DB3\u540E\u91CD\u8BD5\u3002`;
+  }
+  // ── 内部：落盘 ────────────────────────────────────────────────────
+  /** 读台账（文件缺失 / 损坏 → 空台账，不抛错）。 */
+  loadRegistry() {
+    const raw = readJsonFile(this.registryPath);
+    if (!isObj3(raw)) return [];
+    const list = Array.isArray(raw.installs) ? raw.installs : [];
+    const out = [];
+    for (const item of list) {
+      const install = sanitizeInstall(item);
+      if (install) out.push(install);
+    }
+    return out.slice(-MAX_INSTALLS);
+  }
+  /** 写台账（原子写）。 */
+  persistRegistry(next) {
+    this.writeJson(this.registryPath, { schemaVersion: SCHEMA_VERSION, installs: next });
+    this.installs = next;
+  }
+  /** 读作业记录。 */
+  loadJobs() {
+    const raw = readJsonFile(this.jobsPath);
+    if (!isObj3(raw)) return;
+    const list = Array.isArray(raw.jobs) ? raw.jobs : [];
+    for (const item of list) {
+      const job = sanitizeJob(item);
+      if (!job) continue;
+      if (job.state === "running") {
+        job.state = "failed";
+        job.phase = "failed";
+        job.error = "\u4E0A\u6B21\u5B89\u88C5\u5728\u63D2\u4EF6\u9000\u51FA\u65F6\u88AB\u4E2D\u65AD\uFF0C\u672A\u80FD\u5B8C\u6210\u3002";
+        job.finishedAt = job.finishedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+      }
+      this.jobs.set(job.id, job);
+    }
+  }
+  /** 写作业记录（按节流；终态强制落盘）。 */
+  flushJobs(force) {
+    const now = Date.now();
+    if (!force && now - this.jobsFlushedAt < JOB_FLUSH_INTERVAL_MS) return;
+    this.jobsFlushedAt = now;
+    const jobs = [...this.jobs.values()].slice(-MAX_JOBS);
+    try {
+      this.writeJson(this.jobsPath, { schemaVersion: SCHEMA_VERSION, jobs });
+    } catch {
+    }
+  }
+  /** 读私有凭据。 */
+  loadSecrets() {
+    const raw = readJsonFile(this.secretsPath);
+    if (!isObj3(raw)) return;
+    const tokens = isObj3(raw.tokens) ? raw.tokens : {};
+    for (const [key, value] of Object.entries(tokens)) {
+      if (typeof value === "string" && value !== "") {
+        this.secrets.set(key, value);
+        this.knownTokens.add(value);
+      }
+    }
+  }
+  /** 写私有凭据（原子写，0600）。 */
+  persistSecrets() {
+    const tokens = {};
+    for (const [key, value] of this.secrets) tokens[key] = value;
+    this.writeJson(this.secretsPath, { schemaVersion: SCHEMA_VERSION, tokens });
+  }
+  /** 凭据的键：优先用归一化目录，兼容按 id 查。 */
+  secretKeyOf(target) {
+    if (typeof target !== "string" || target === "") return void 0;
+    const byDir = normalizeDirKey(target, this.platform);
+    if (this.secrets.has(byDir)) return byDir;
+    const install = this.installs.find((i) => i.id === target);
+    if (install) {
+      const key = normalizeDirKey(install.dir, this.platform);
+      if (this.secrets.has(key)) return key;
+    }
+    return void 0;
+  }
+  /** 记住某个安装目录的 token。 */
+  rememberSecret(dir, token) {
+    const key = normalizeDirKey(dir, this.platform);
+    this.secrets.set(key, token);
+    this.knownTokens.add(token);
+    this.persistSecrets();
+  }
+  /** 忘掉某个安装目录的 token（卸载 / 销号时）。 */
+  forgetSecret(dir) {
+    const key = normalizeDirKey(dir, this.platform);
+    if (!this.secrets.delete(key)) return;
+    try {
+      this.persistSecrets();
+    } catch {
+    }
+  }
+  /** 统一的 JSON 落盘入口（可注入，便于测试模拟写到一半失败）。 */
+  writeJson(path, value) {
+    if (this.opts.writeJson) {
+      this.opts.writeJson(path, value);
+      return;
+    }
+    writeJsonAtomic(path, value);
+  }
+};
+function errText3(err) {
+  if (err instanceof Error) return err.message;
+  return String(err ?? "");
+}
+
+// src/server/host/supervise.ts
+import { spawn } from "node:child_process";
+import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
+import { connect as connect2 } from "node:net";
+import { delimiter, join as join5 } from "node:path";
+var INJECT_MODE_WARNING = "\u6CE8\u5165\u6A21\u5F0F\u4F1A\u542F\u52A8\u684C\u9762 QQ \u5E76\u5411\u5176\u8FDB\u7A0B\u6CE8\u5165\u672C\u7EC4\u4EF6\u3002QQ 9.9.36 \u53CA\u4EE5\u4E0A\u7248\u672C\u5728\u542F\u52A8\u524D\u4F1A\u505A\u539F\u751F\u5B8C\u6574\u6027\u68C0\u67E5\uFF0C\u6CE8\u5165\u53EF\u80FD\u5BFC\u81F4\u5B83\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\uFF0C\u8BF7\u91CD\u65B0\u5B89\u88C5\u300D\u5E76\u4E2D\u6B62\u542F\u52A8\u3002\u4E0D\u786E\u5B9A\u65F6\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002";
+function isProcessAlive(pid) {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+function tcpReachable(port, timeoutMs = 1200, host = "127.0.0.1") {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false);
+  return new Promise((resolve4) => {
+    const socket = connect2({ host, port });
+    let settled = false;
+    const finish = (ok2) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve4(ok2);
+    };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+  });
+}
+async function fetchLoginInfo(port, timeoutMs = 1500) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return void 0;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/get_login_info`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: controller.signal
+    });
+    const json = await res.json();
+    if (json?.retcode !== 0) return void 0;
+    const id = json.data?.user_id;
+    const nickname = json.data?.nickname;
+    if (id === void 0 || !nickname) return void 0;
+    return { user_id: String(id), nickname };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function pathWithFirst(dir) {
+  return `${dir}${delimiter}${process.env.PATH ?? ""}`;
+}
+function assertManagedProgram(dir, fileName) {
+  if (!existsSync3(join5(dir, fileName))) {
+    throw new Error(`\u542F\u52A8\u5931\u8D25\uFF1A\u5B89\u88C5\u76EE\u5F55\u91CC\u627E\u4E0D\u5230 ${fileName}\uFF08\u5B89\u88C5\u53EF\u80FD\u4E0D\u5B8C\u6574\uFF09\u3002`);
+  }
+}
+async function startManagedHost(install, opts) {
+  if (!install || !install.dir) {
+    throw new Error("\u542F\u52A8\u5931\u8D25\uFF1A\u5B89\u88C5\u4FE1\u606F\u65E0\u6548\u3002");
+  }
+  const mode = install.mode ?? "standalone";
+  if (mode === "inject") {
+    const napcatDir = join5(install.dir, "napcat");
+    assertManagedProgram(napcatDir, "NapCatWinBootMain.exe");
+    const qqPath = resolveDesktopQqPath(install, opts);
+    const hook = join5(napcatDir, "NapCatWinBootHook.dll");
+    const child2 = spawn("NapCatWinBootMain.exe", [qqPath, hook], {
+      cwd: napcatDir,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      shell: false,
+      env: {
+        ...process.env,
+        PATH: pathWithFirst(napcatDir),
+        NAPCAT_PATCH_PACKAGE: join5(napcatDir, "qqnt.json"),
+        NAPCAT_LOAD_PATH: join5(napcatDir, "loadNapCat.js"),
+        NAPCAT_INJECT_PATH: hook,
+        NAPCAT_LAUNCHER_PATH: join5(napcatDir, "NapCatWinBootMain.exe"),
+        NAPCAT_MAIN_PATH: join5(napcatDir, "napcat.mjs")
+      }
+    });
+    await waitForSpawn(child2);
+    if (!child2.pid) {
+      throw new Error("\u542F\u52A8\u5931\u8D25\uFF1A\u6CE8\u5165\u6A21\u5F0F\u7684\u542F\u52A8\u5668\u6CA1\u80FD\u62C9\u8D77\u8FDB\u7A0B\u3002");
+    }
+    opts.host.setPid(install.id, child2.pid);
+    return {
+      pid: child2.pid,
+      mode,
+      message: "\u5DF2\u542F\u52A8\uFF08\u6CE8\u5165\u6A21\u5F0F\uFF09\u3002",
+      warning: INJECT_MODE_WARNING
+    };
+  }
+  assertManagedProgram(install.dir, "node.exe");
+  const child = spawn("node.exe", ["index.js"], {
+    cwd: install.dir,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    shell: false,
+    env: { ...process.env, PATH: pathWithFirst(install.dir) }
+  });
+  await waitForSpawn(child);
+  if (!child.pid) {
+    throw new Error("\u542F\u52A8\u5931\u8D25\uFF1A\u6CA1\u80FD\u62C9\u8D77\u8FDB\u7A0B\u3002");
+  }
+  opts.host.setPid(install.id, child.pid);
+  return {
+    pid: child.pid,
+    mode,
+    message: "\u5DF2\u542F\u52A8\uFF08\u72EC\u7ACB\u6A21\u5F0F\uFF0C\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002"
+  };
+}
+async function stopManagedHost(status, opts) {
+  const pid = status?.pid;
+  if (!pid || !Number.isInteger(pid) || pid <= 0) {
+    return {
+      stopped: false,
+      message: "\u8FD9\u4E2A\u5B9E\u4F8B\u4E0D\u662F\u672C\u63D2\u4EF6\u542F\u52A8\u7684\uFF0C\u65E0\u6CD5\u505C\u6B62\u3002"
+    };
+  }
+  const platform = opts.platform ?? process.platform;
+  let descendantsMayRemain = false;
+  if (platform === "win32") {
+    const killed = await taskkill(pid);
+    if (!killed) {
+      descendantsMayRemain = true;
+      try {
+        process.kill(pid);
+      } catch {
+        return { stopped: false, message: "\u505C\u6B62\u5931\u8D25\uFF1A\u8FDB\u7A0B\u5DF2\u4E0D\u5728\uFF0C\u65E0\u9700\u505C\u6B62\u3002" };
+      }
+    }
+  } else {
+    try {
+      process.kill(-pid);
+    } catch {
+      try {
+        process.kill(pid);
+        descendantsMayRemain = true;
+      } catch {
+        return { stopped: false, message: "\u505C\u6B62\u5931\u8D25\uFF1A\u8FDB\u7A0B\u5DF2\u4E0D\u5728\uFF0C\u65E0\u9700\u505C\u6B62\u3002" };
+      }
+    }
+  }
+  const gone = await waitProcessGone(pid, 6e3);
+  if (!gone) {
+    return {
+      stopped: false,
+      message: "\u5DF2\u53D1\u51FA\u7EC8\u6B62\u4FE1\u53F7\uFF0C\u4F46\u8FDB\u7A0B\u5C1A\u672A\u9000\u51FA\u3002",
+      descendantsMayRemain
+    };
+  }
+  if (status.install?.id) {
+    try {
+      opts.host.setPid(status.install.id, void 0);
+    } catch {
+    }
+  }
+  return {
+    stopped: true,
+    message: descendantsMayRemain ? "\u5DF2\u505C\u6B62\uFF08\u53EA\u7ED3\u675F\u4E86\u4E3B\u8FDB\u7A0B\uFF0C\u5B50\u5B59\u8FDB\u7A0B\u53EF\u80FD\u4ECD\u5728\u8FD0\u884C\uFF09\u3002" : "\u5DF2\u505C\u6B62\u3002",
+    descendantsMayRemain
+  };
+}
+async function probeManagedHost(install, opts) {
+  const webuiPort = opts.webuiPort ?? DEFAULT_WEBUI_PORT;
+  const onebotPort = opts.onebotPort ?? DEFAULT_ONEBOT_PORT;
+  const timeoutMs = opts.probeTimeoutMs ?? 1200;
+  const pid = install ? opts.host.pidOf(install.id) : void 0;
+  const alive = isProcessAlive(pid);
+  const [webuiReachable, onebotReachable] = await Promise.all([
+    tcpReachable(webuiPort, timeoutMs),
+    tcpReachable(onebotPort, timeoutMs)
+  ]);
+  const base = {
+    state: "stopped",
+    install: install ? opts.host.view(install) : void 0,
+    pid,
+    webuiPort,
+    webuiReachable,
+    onebotPort,
+    onebotPortReachable: onebotReachable
+  };
+  if (!alive) {
+    if (webuiReachable || onebotReachable) {
+      return {
+        ...base,
+        state: "unknown",
+        message: "\u7AEF\u53E3\u4E0A\u8FD8\u6709\u522B\u7684\u5B9E\u4F8B\u5728\u8DD1\uFF0C\u4F46\u8FD9\u4E2A\u5B89\u88C5\u4E0D\u662F\u672C\u63D2\u4EF6\u542F\u52A8\u7684\u8FDB\u7A0B\uFF08\u65E0\u6CD5\u6258\u7BA1\u5B83\uFF09\u3002"
+      };
+    }
+    return { ...base, state: "stopped", message: "\u672A\u8FD0\u884C\u3002" };
+  }
+  if (!webuiReachable) {
+    return { ...base, state: "starting", message: "\u6B63\u5728\u542F\u52A8\uFF0C\u7AEF\u53E3\u8FD8\u6CA1\u901A\u3002" };
+  }
+  if (!onebotReachable) {
+    return {
+      ...base,
+      state: "degraded",
+      message: "NapCat \u5728\u8DD1\uFF0C\u4F46 OneBot Server \u6CA1\u5F00\uFF08\u9700\u8981\u5728 WebUI \u91CC\u5F00\u542F\uFF0C\u63D2\u4EF6\u4E0D\u4F1A\u4EE3\u5F00\uFF09\u3002"
+    };
+  }
+  const login = await fetchLoginInfo(onebotPort, timeoutMs + 300);
+  return {
+    ...base,
+    state: "running",
+    login,
+    message: login ? `\u8FD0\u884C\u4E2D\uFF08\u5DF2\u767B\u5F55 ${login.nickname}\uFF09\u3002` : "\u8FD0\u884C\u4E2D\u3002"
+  };
+}
+function resolveDesktopQqPath(install, opts) {
+  const configured = opts.desktopQqPath?.trim();
+  if (configured) {
+    if (!existsSync3(configured)) {
+      throw new Error("\u6CE8\u5165\u6A21\u5F0F\u914D\u7F6E\u7684\u684C\u9762 QQ \u8DEF\u5F84\u4E0D\u5B58\u5728\uFF0C\u8BF7\u68C0\u67E5\u8BBE\u7F6E\u3002");
+    }
+    return configured;
+  }
+  for (const rel of [
+    ["napcat", "config", "qq_path.txt"],
+    ["config", "qq_path.txt"]
+  ]) {
+    try {
+      const text = readFileSync5(join5(install.dir, ...rel), "utf8").trim();
+      if (text) {
+        if (!existsSync3(text)) {
+          throw new Error("\u6CE8\u5165\u6A21\u5F0F\u4FDD\u5B58\u7684\u684C\u9762 QQ \u8DEF\u5F84\u5DF2\u5931\u6548\uFF08\u6587\u4EF6\u4E0D\u5B58\u5728\uFF09\uFF0C\u8BF7\u91CD\u65B0\u8BBE\u7F6E\u3002");
+        }
+        return text;
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("\u8DEF\u5F84\u5DF2\u5931\u6548")) throw err;
+    }
+  }
+  throw new Error(
+    "\u6CE8\u5165\u6A21\u5F0F\u9700\u8981\u684C\u9762 QQ \u7684\u8DEF\u5F84\uFF0C\u4F46\u6CA1\u80FD\u627E\u5230\uFF08\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u6CA1\u586B\uFF0C\u5B89\u88C5\u76EE\u5F55\u91CC\u4E5F\u6CA1\u6709 qq_path.txt\uFF09\u3002\u8BF7\u5728\u8BBE\u7F6E\u91CC\u586B\u4E0A QQ.exe \u7684\u8DEF\u5F84\uFF0C\u6216\u6539\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002"
+  );
+}
+async function waitForSpawn(child) {
+  if (!child.pid) {
+    await new Promise((resolve4) => {
+      child.once("error", () => resolve4());
+      child.once("spawn", () => resolve4());
+      setTimeout(resolve4, 3e3);
+    });
+    return;
+  }
+  child.unref();
+  await new Promise((resolve4) => setTimeout(resolve4, 400));
+  if (!isProcessAlive(child.pid)) {
+    throw new Error("\u542F\u52A8\u5931\u8D25\uFF1A\u8FDB\u7A0B\u521A\u62C9\u8D77\u5C31\u9000\u51FA\u4E86\uFF08\u53EF\u80FD\u662F\u5B89\u88C5\u76EE\u5F55\u4E0D\u5B8C\u6574\u6216\u542F\u52A8\u811A\u672C\u62A5\u9519\uFF09\u3002");
+  }
+}
+async function taskkill(pid) {
+  return new Promise((resolve4) => {
+    try {
+      const child = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+        shell: false
+      });
+      child.once("error", () => resolve4(false));
+      child.once("exit", (code) => resolve4(code === 0));
+    } catch {
+      resolve4(false);
+    }
+  });
+}
+async function waitProcessGone(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve4) => setTimeout(resolve4, 250));
+  }
+  return !isProcessAlive(pid);
+}
+
+// src/server/host/host-tools.ts
+var PANEL_URI = "ui://napcat-zcode/panel.html";
+var SURFACE_ID = "napcat-zcode";
+var DEFAULT_WEBUI_PORT2 = 6099;
+var DEFAULT_ONEBOT_PORT2 = 3e3;
+function portsOf(install) {
+  let webuiPort = DEFAULT_WEBUI_PORT2;
+  let onebotPort = DEFAULT_ONEBOT_PORT2;
+  const configDir = join6(install.dir, "napcat", "config");
+  try {
+    const webui = JSON.parse(readFileSync6(join6(configDir, "webui.json"), "utf8"));
+    if (Number.isInteger(webui?.port) && (webui?.port ?? 0) > 0) webuiPort = webui.port;
+  } catch {
+  }
+  try {
+    const files = readdirSync3(configDir);
+    const onebotFile = files.find((f) => f.startsWith("onebot11_") && f.endsWith(".json"));
+    if (onebotFile) {
+      const cfg = JSON.parse(readFileSync6(join6(configDir, onebotFile), "utf8"));
+      const http = cfg.network?.httpServers?.find((s) => s.enable !== false);
+      if (Number.isInteger(http?.port) && (http?.port ?? 0) > 0) onebotPort = http.port;
+    }
+  } catch {
+  }
+  return { webuiPort, onebotPort };
+}
+function pickInstall(host, id) {
+  if (id) return host.get(id);
+  const all = host.list();
+  return all.length ? all[all.length - 1] : void 0;
+}
+function registerHostTools(server2, state) {
+  let host;
+  const getHost = () => {
+    if (!host) {
+      host = new ManagedHost({ dataDir: dataDir(), redact: (text) => state.redact(text) });
+    }
+    return host;
+  };
+  server2.registerTool(
+    "napcat_open_panel",
+    {
+      description: "\u6253\u5F00 NapCat \u9762\u677F\uFF1A\u6D4F\u89C8\u804A\u5929\u8BB0\u5F55\u3001\u6311\u9009\u8BB0\u5F55\u6CE8\u5165\u5230\u5BF9\u8BDD\u4E0A\u4E0B\u6587\u3001\u5BFC\u51FA\u4E3A\u9644\u4EF6\u3002\u5728\u5BF9\u8BDD\u91CC\u8C03\u7528\u5B83\u4F1A\u628A\u9762\u677F\u5185\u5D4C\u6E32\u67D3\u51FA\u6765\u3002",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+      _meta: {
+        ui: { resourceUri: PANEL_URI, surface: SURFACE_ID, visibility: ["app", "model"] },
+        "openai/ui": { preferredModelDisplayMode: "fullscreen" }
+      }
+    },
+    async () => {
+      try {
+        return ok({ opened: true, surface: SURFACE_ID });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_host_status",
+    {
+      description: "\u53D7\u7BA1\u5BBF\u4E3B\u72B6\u6001\uFF1A\u63D2\u4EF6\u81EA\u5DF1\u88C5\u8FC7\u7684 NapCat\uFF08\u76EE\u5F55\u3001\u7248\u672C\u3001\u6A21\u5F0F\uFF09\u3001\u6BCF\u4E2A\u7684\u8FD0\u884C\u72B6\u6001\uFF08\u8FD0\u884C\u4E2D / \u5DF2\u505C\u6B62 / \u964D\u7EA7 / \u7AEF\u53E3\u88AB\u522B\u7684\u5B9E\u4F8B\u5360\u7528\uFF09\u3001\u4EE5\u53CA\u6700\u8FD1\u7684\u5B89\u88C5\u4F5C\u4E1A\u8FDB\u5EA6\u3002",
+      inputSchema: {},
+      annotations: { readOnlyHint: true }
+    },
+    async () => {
+      try {
+        const h = getHost();
+        const installs = h.listViews();
+        const probed = await Promise.all(
+          installs.map(async (view) => {
+            const install = h.get(view.id);
+            if (!install) return void 0;
+            const ports = portsOf(install);
+            return probeManagedHost(install, {
+              host: h,
+              webuiPort: ports.webuiPort,
+              onebotPort: ports.onebotPort,
+              probeTimeoutMs: 800,
+              desktopQqPath: state.config.managed?.desktopQqPath
+            });
+          })
+        );
+        const statuses = probed.filter((s) => s !== void 0);
+        return ok({
+          installs,
+          status: statuses,
+          jobs: h.listJobs().map((j) => h.jobView(j)),
+          versions: availableVersions()
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_install",
+    {
+      description: "\u4E0B\u8F7D\u5E76\u5B89\u88C5 NapCat\uFF08\u53D7\u7BA1\u5BBF\u4E3B\uFF09\u3002**\u7ACB\u5373\u8FD4\u56DE**\u4E00\u4E2A jobId\uFF0C\u8FDB\u5EA6\u7528 napcat_install_status \u67E5\u3002\u5236\u54C1\u7684 sha256 \u5DF2\u9489\u6B7B\uFF0C\u6821\u9A8C\u4E0D\u8FC7\u4F1A\u76F4\u63A5\u5931\u8D25\u5E76\u4E22\u5F03\u3002",
+      inputSchema: {
+        dir: external_exports.string().optional().describe("\u5B89\u88C5\u76EE\u5F55\uFF08**\u7EDD\u5BF9\u8DEF\u5F84**\uFF09\uFF1B\u4E0D\u4F20 = \u63D2\u4EF6\u6570\u636E\u76EE\u5F55\u4E0B\u7684 napcat-<\u7248\u672C>"),
+        version: external_exports.string().optional().describe("NapCat \u7248\u672C\uFF08\u9ED8\u8BA4\u7528\u914D\u7F6E\u91CC\u7684\u7248\u672C\uFF09"),
+        mode: external_exports.enum(["standalone", "inject"]).optional().describe(
+          "\u8FD0\u884C\u6A21\u5F0F\uFF1Astandalone=\u72EC\u7ACB\u6A21\u5F0F\uFF08\u81EA\u5E26\u5185\u5D4C QQ\uFF0C\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF0C\u9ED8\u8BA4\uFF09\uFF1Binject=\u6CE8\u5165\u684C\u9762 QQ\uFF08QQ 9.9.36+ \u6709\u5B8C\u6574\u6027\u68C0\u67E5\uFF0C\u53EF\u80FD\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\u300D\uFF09"
+        ),
+        proxy: external_exports.string().optional().describe("\u4E0B\u8F7D\u4EE3\u7406\uFF08\u5982 http://127.0.0.1:7897\uFF09\uFF1B\u4E0D\u4F20 = \u7528\u914D\u7F6E\u91CC\u7684")
+      }
+    },
+    async ({ dir, version: version2, mode, proxy }) => {
+      try {
+        const h = getHost();
+        const cfg = state.config;
+        const wantVersion = version2 || cfg.managed?.napcatVersion || "4.18.42";
+        const artifact = resolveArtifact(wantVersion);
+        if (!artifact) {
+          throw new Error(
+            `\u6CA1\u6709\u53EF\u7528\u7684 NapCat ${wantVersion} \u5236\u54C1\uFF08\u5F53\u524D\u5E73\u53F0\u53EA\u63D0\u4F9B ${availableVersions().join("\u3001")}\uFF09\u3002`
+          );
+        }
+        const targetDir = dir || join6(dataDir(), `napcat-${artifact.version}`);
+        if (!isAbsolute4(targetDir)) {
+          throw new Error("\u5B89\u88C5\u76EE\u5F55\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF1A\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u968F\u5BBF\u4E3B\u7684\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF0C\u65E0\u6CD5\u590D\u73B0\u3002");
+        }
+        assertInstallTargetSafe(targetDir, Boolean(h.findByDir(targetDir)));
+        const selectedMode = mode ?? "standalone";
+        const request = {
+          dir: targetDir,
+          version: artifact.version,
+          mode: selectedMode,
+          url: artifact.url,
+          sha256: artifact.sha256,
+          allowedHosts: artifact.allowedHosts,
+          proxy: proxy || cfg.managed?.downloadProxy || void 0,
+          desktopQqRoots: cfg.managed?.desktopQqPath ? [dirname4(cfg.managed.desktopQqPath)] : void 0
+        };
+        const job = {
+          id: newJobId(),
+          startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          state: "running",
+          phase: "connecting",
+          bytesReceived: 0,
+          request
+        };
+        h.startInstall(job, request);
+        return ok({ jobId: job.id, version: artifact.version, dir: targetDir, mode: selectedMode });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_install_status",
+    {
+      description: "\u5B89\u88C5\u4F5C\u4E1A\u7684\u8FDB\u5EA6\u4E0E\u7ED3\u679C\uFF08phase / \u5DF2\u4E0B\u8F7D\u5B57\u8282 / \u767E\u5206\u6BD4 / \u5931\u8D25\u539F\u56E0\uFF09\u3002\u4E0D\u4F20 jobId = \u6700\u8FD1\u4E00\u6B21\u4F5C\u4E1A\u3002",
+      inputSchema: {
+        jobId: external_exports.string().optional().describe("\u4F5C\u4E1A id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u4E00\u6B21\u4F5C\u4E1A\uFF09")
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ jobId }) => {
+      try {
+        const h = getHost();
+        const job = jobId ? h.getJob(jobId) : h.listJobs().slice(-1)[0];
+        if (!job) {
+          return ok({ state: "none", message: "\u8FD8\u6CA1\u6709\u8FC7\u5B89\u88C5\u4F5C\u4E1A\u3002" });
+        }
+        return ok(h.jobView(job));
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_start",
+    {
+      description: "\u542F\u52A8\u53D7\u7BA1 NapCat\uFF1B\u542F\u52A8\u6A21\u5F0F\u6CBF\u7528\u5B89\u88C5\u65F6\u767B\u8BB0\u7684\u6A21\u5F0F\uFF0C\u4E0D\u63A5\u53D7\u4E34\u65F6\u8986\u76D6\u3002\u72EC\u7ACB\u6A21\u5F0F\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF1B\u6CE8\u5165\u6A21\u5F0F\u5728 QQ 9.9.36+ \u53EF\u80FD\u89E6\u53D1\u300C\u6587\u4EF6\u5DF2\u635F\u574F\u300D\u3002\u4E0D\u4F20 id = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\u3002",
+      inputSchema: {
+        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u4E00\u4E2A\uFF09")
+      }
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u5148\u7528 napcat_install \u4E0B\u8F7D\u4E00\u4E2A\u3002");
+        }
+        const ports = portsOf(install);
+        const started = await startManagedHost(install, {
+          host: h,
+          desktopQqPath: state.config.managed?.desktopQqPath
+        });
+        return ok({
+          started: true,
+          pid: started.pid,
+          mode: started.mode,
+          message: started.message,
+          warning: started.warning,
+          webuiPort: ports.webuiPort,
+          onebotPort: ports.onebotPort
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_stop",
+    {
+      description: "\u505C\u6B62\u4E00\u4E2A\u53D7\u7BA1\u7684 NapCat\u3002\u53EA\u505C**\u672C\u63D2\u4EF6\u81EA\u5DF1\u542F\u52A8**\u7684\u8FDB\u7A0B\uFF1B\u7AEF\u53E3\u88AB\u522B\u7684\u5B9E\u4F8B\u5360\u7740\u65F6\u4F1A\u660E\u786E\u544A\u8BC9\u4F60\u300C\u90A3\u4E0D\u662F\u672C\u63D2\u4EF6\u7684\u8FDB\u7A0B\u300D\uFF0C\u4E0D\u4F1A\u53BB\u52A8\u5B83\u3002",
+      inputSchema: {
+        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09")
+      }
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u6CA1\u6709\u53EF\u505C\u6B62\u7684\u5B9E\u4F8B\u3002");
+        }
+        const ports = portsOf(install);
+        const status = await probeManagedHost(install, {
+          host: h,
+          webuiPort: ports.webuiPort,
+          onebotPort: ports.onebotPort,
+          probeTimeoutMs: 800,
+          desktopQqPath: state.config.managed?.desktopQqPath
+        });
+        const result = await stopManagedHost(status, { host: h });
+        return ok({ stopped: result.stopped, message: result.message });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+}
+
+// src/server/tools.ts
+var MAX_PAGES2 = 40;
+var MAX_COUNT = 200;
+var DEFAULT_COUNT = 50;
+var SEARCH_PAGE_SIZE = 100;
+var SEARCH_DEFAULT_MAX_PAGES = 20;
+var SEARCH_MAX_PAGES = 100;
+var SEARCH_MAX_HITS = 20;
 function earliestTimeOf(messages) {
   let min;
   for (const m of messages) {
@@ -24358,7 +26818,7 @@ function registerTools(server2, state) {
         let cleanPaths;
         if (wantPaths !== void 0) {
           cleanPaths = wantPaths.filter((p) => typeof p === "string").map((p) => p.trim()).filter((p) => p !== "");
-          const bad = cleanPaths.filter((p) => !isAbsolute3(p));
+          const bad = cleanPaths.filter((p) => !isAbsolute5(p));
           if (bad.length > 0) {
             throw new Error(
               `\u626B\u63CF\u8DEF\u5F84\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF08\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u968F\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF0C\u5DF2\u62D2\u7EDD\u672C\u6B21\u4FDD\u5B58\uFF09\uFF1A${bad.join("\u3001")}`
@@ -24608,20 +27068,28 @@ function registerTools(server2, state) {
         const token = cfg.connection?.token ?? "";
         const endpoint = cfg.connection?.endpoint ?? "";
         const maskEndpoint = (ep) => state.redact(safeEndpointLabel(ep));
-        const { paths: _localPaths, ...autoDetectRest } = cfg.autoDetect ?? {};
         const masked = {
-          ...cfg,
           connection: {
-            ...cfg.connection,
+            mode: cfg.connection.mode,
             endpoint: maskEndpoint(endpoint),
             token: token ? "***" : ""
           },
           autoDetect: {
-            ...autoDetectRest,
-            endpoints: (cfg.autoDetect?.endpoints ?? []).map(maskEndpoint),
-            /** 本机扫描路径的**条数**（路径本身不外泄）。 */
-            pathsCount: (cfg.autoDetect?.paths ?? []).length
-          }
+            ports: [...cfg.autoDetect.ports],
+            endpoints: cfg.autoDetect.endpoints.map(maskEndpoint),
+            pathsCount: cfg.autoDetect.paths.length,
+            probeTimeoutMs: cfg.autoDetect.probeTimeoutMs,
+            scanDrives: cfg.autoDetect.scanDrives,
+            maxRoots: cfg.autoDetect.maxRoots
+          },
+          managed: {
+            napcatVersion: cfg.managed.napcatVersion,
+            downloadMirror: cfg.managed.downloadMirror,
+            downloadProxyConfigured: cfg.managed.downloadProxy !== "",
+            desktopQqPathConfigured: cfg.managed.desktopQqPath !== ""
+          },
+          export: { ...cfg.export },
+          inject: { ...cfg.inject }
         };
         return ok(masked);
       } catch (e) {
@@ -24629,18 +27097,19 @@ function registerTools(server2, state) {
       }
     }
   );
+  registerHostTools(server2, state);
 }
 
 // src/server/uiresource.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-var PANEL_URI = "ui://napcat-zcode/panel.html";
+import { readFileSync as readFileSync7 } from "node:fs";
+var PANEL_URI2 = "ui://napcat-zcode/panel.html";
 var PANEL_MIME = "text/html;profile=mcp-app";
 var ERROR_HTML = "<!doctype html><html><body><p>panel.html missing \u2014 run `npm run build`</p></body></html>";
 function registerPanelResource(server2, htmlPath) {
-  server2.registerResource("panel", PANEL_URI, { mimeType: PANEL_MIME }, async (uri) => {
+  server2.registerResource("panel", PANEL_URI2, { mimeType: PANEL_MIME }, async (uri) => {
     let html;
     try {
-      html = readFileSync4(htmlPath, "utf-8");
+      html = readFileSync7(htmlPath, "utf-8");
     } catch {
       html = ERROR_HTML;
     }
@@ -24649,10 +27118,10 @@ function registerPanelResource(server2, htmlPath) {
 }
 
 // src/server/index.ts
-var here = dirname(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.3.0" });
+var here = dirname5(fileURLToPath(import.meta.url));
+var server = new McpServer({ name: "napcat", version: "0.5.0" });
 registerTools(server, appState);
-registerPanelResource(server, join4(here, "ui", "panel.html"));
+registerPanelResource(server, join7(here, "ui", "panel.html"));
 await server.connect(new StdioServerTransport());
 server.server.onclose = () => {
   void closeConnection(appState);

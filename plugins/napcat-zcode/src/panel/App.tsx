@@ -8,6 +8,7 @@ import { Toolbar } from './components/Toolbar.js';
 import { ActionBar, type Notice } from './components/ActionBar.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
 import { UnconfiguredForm } from './components/UnconfiguredForm.js';
+import { HostPanel } from './components/HostPanel.js';
 
 /** 面板状态机。 */
 export type Phase = 'init' | 'unconfigured' | 'error' | 'ready';
@@ -142,6 +143,21 @@ export function App() {
    * 面板只是需要知道「这次是不是落在工作区」→ 决定要不要在提示里提 .gitignore。
    */
   const [exportDir, setExportDir] = useState<'user' | 'workspace' | undefined>(undefined);
+  /**
+   * 右侧视图：记录（消息流）/ 宿主（受管宿主的装与启停）。
+   *
+   * 面板是**窄侧栏**，两件事没法并排：消息流要宽度，宿主管理要一整块表单。
+   * 做成两个标签而不是左右分栏——侧栏放不下两个都舒服的列。
+   */
+  const [tab, setTab] = useState<'records' | 'host'>('records');
+  /**
+   * 会话抽屉是否展开。
+   *
+   * 会话列表在窄侧栏里会吃掉消息流的宽度 → 收成抽屉：
+   * 打开面板时**默认展开**（用户第一件事往往是挑一个会话），选中之后自动收起；
+   * 之后想换会话，点工具栏的「会话」按钮再展开。
+   */
+  const [drawerOpen, setDrawerOpen] = useState(true);
 
   /**
    * 抛面板提示。
@@ -259,6 +275,8 @@ export function App() {
   const openChat = useCallback(async (chat: Chat) => {
     activeRef.current = chat;
     setActive(chat);
+    // 选中即收起抽屉：把宽度还给消息流（这是窄侧栏里最值钱的空间）
+    setDrawerOpen(false);
     setSelection(new Set());
     anchorRef.current = null;
     messagesRef.current = [];
@@ -476,8 +494,40 @@ export function App() {
         hadDetection={hadDetection}
       />
       <div className="main">
-        <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
+        {/*
+          会话抽屉：窄侧栏里，消息流比会话列表更值钱 → 列表收成抽屉，
+          选中会话后自动收起，工具栏的「会话」按钮再展开。
+        */}
+        <div className={`drawer ${drawerOpen ? 'open' : ''}`} data-testid="chat-drawer">
+          <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
+        </div>
         <div className="right">
+          {phase === 'ready' && (
+            <div className="tabs" role="tablist" data-testid="tabs">
+              <button
+                role="tab"
+                aria-selected={tab === 'records'}
+                data-testid="tab-records"
+                onClick={() => {
+                  setTab('records');
+                  setDrawerOpen(false); // 抽屉是浮层：切页签就收起，别盖住新页签的内容
+                }}
+              >
+                记录
+              </button>
+              <button
+                role="tab"
+                aria-selected={tab === 'host'}
+                data-testid="tab-host"
+                onClick={() => {
+                  setTab('host');
+                  setDrawerOpen(false);
+                }}
+              >
+                宿主
+              </button>
+            </div>
+          )}
           {phase === 'init' && (
             <div className="placeholder" data-testid="phase-init">
               正在连接宿主…（首次握手最坏约 46 秒）
@@ -497,15 +547,15 @@ export function App() {
             ) : (
               <div className="placeholder" data-testid="phase-error">
                 <p>{notice?.text || status?.error || '连接失败'}</p>
-                <button data-testid="retry-btn" onClick={() => void reload()}>
+                <button className="btn primary" data-testid="retry-btn" onClick={() => void reload()}>
                   重试
                 </button>
-                <button data-testid="reconfigure-btn" onClick={() => setReconfiguring(true)}>
+                <button className="btn" data-testid="reconfigure-btn" onClick={() => setReconfiguring(true)}>
                   重新配置端点
                 </button>
               </div>
             ))}
-          {phase === 'ready' && (
+          {phase === 'ready' && tab === 'records' && (
             <>
               {capped && (
                 <div className="capnote" data-testid="cap-note">
@@ -522,6 +572,8 @@ export function App() {
                 onRange={setRange}
                 includeImages={includeImages}
                 onIncludeImages={setIncludeImages}
+                onToggleChats={() => setDrawerOpen((v) => !v)}
+                chatName={active?.name ?? ''}
               />
               <MessageList
                 messages={visible}
@@ -532,19 +584,27 @@ export function App() {
                 loadingOlder={loadingOlder}
                 note={olderNote}
                 onDragSelect={dragSelect}
+                selfId={status?.login?.user_id}
               />
             </>
           )}
+          {phase === 'ready' && tab === 'host' && (
+            <div className="pane">
+              <HostPanel onChanged={() => void refreshStatus()} />
+            </div>
+          )}
         </div>
       </div>
-      <ActionBar
-        selected={selected}
-        chat={active}
-        caps={caps}
-        setNotice={showNotice}
-        phase={phase}
-        exportDir={exportDir}
-      />
+      {!(phase === 'ready' && tab === 'host') && (
+        <ActionBar
+          selected={selected}
+          chat={active}
+          caps={caps}
+          setNotice={showNotice}
+          phase={phase}
+          exportDir={exportDir}
+        />
+      )}
       {notice && phase !== 'error' && (
         <div className="toast" data-testid="toast">
           <span className="toast-text" onClick={() => setNotice(null)}>

@@ -13,13 +13,19 @@ export function hm(t: number | undefined): string {
 }
 
 /**
- * 右栏：消息流（时间正序）。
+ * 消息流（时间正序）——面板的主视图。
  *
- * - 向上滚（滚到顶部 sentinel）触发 `onLoadOlder()` 载入更早的消息；
- * - 没有 `IntersectionObserver` 的环境（jsdom / 老宿主）退回「加载更早」按钮；
- * - 不做完整虚拟滚动（行高可变，复杂度高），改用「增量加载 + 渲染上限」，
- *   行为与虚拟滚动等价（向上滚加载更早），差异与理由见 Task 12 的 brief；
- * - 支持**拖拽划选**：按住一条消息并划过其它消息 → 按可见列表序选中区间。
+ * 读起来要像**一段聊天**：连续的同一发言者归成一组，组头只出现一次名字；
+ * 「我」的消息用 ZCode 的 user-message-bubble 填充，一眼能分出哪条是自己发的；
+ * 时间跟在组头旁边，不在每条消息里重复。
+ *
+ * 交互：
+ * - 点击选中 / 取消；Ctrl（Cmd）加选；Shift 连选；
+ * - **按住一条消息并划过其它消息** → 按可见顺序选中区间；
+ * - 滚到顶部哨兵时载入更早的消息（没有 IntersectionObserver 的环境退回按钮）。
+ *
+ * 不做完整虚拟滚动（行高可变，复杂度高），改用「增量加载 + 渲染上限」，
+ * 行为与虚拟滚动等价（向上滚加载更早），差异与理由见 Task 12 的 brief。
  */
 export function MessageList({
   messages,
@@ -30,6 +36,7 @@ export function MessageList({
   loadingOlder,
   note,
   onDragSelect,
+  selfId,
 }: {
   messages: Msg[];
   selection: Set<string>;
@@ -42,6 +49,8 @@ export function MessageList({
   note?: string;
   /** 拖拽划选：上报起点与终点（`additive` = Ctrl/Cmd 拖拽 → 与已有选区合并）。 */
   onDragSelect?: (fromId: string, toId: string, additive: boolean) => void;
+  /** 本机登录账号（用来区分「我发的」与「别人发的」；不传则不区分）。 */
+  selfId?: string;
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
   const listwrap = useRef<HTMLDivElement>(null);
@@ -100,67 +109,94 @@ export function MessageList({
     prevCount.current = messages.length;
   }, [messages]);
 
+  /** 连续同一发言者归一组。 */
+  const groups: { senderId: string; senderName: string; items: { m: Msg; key: string; index: number }[] }[] = [];
+  for (const m of messages) {
+    // key / testid 用 msgKey：服务端的 id 在缺 message_id/real_id/message_seq 时是空串
+    // → 直接用 m.id 会让多条消息撞 key（React 警告）并串选中态、撞 testid。
+    // msgKey 返回 null = 这条消息**无法与别的消息区分** → 干脆不渲染
+    // （渲染出来只能共用一个 key，选中态会串成一片）。
+    const key = msgKey(m);
+    if (key === null) continue;
+    // 下标按**已渲染**的条数计：被跳过的消息不占位，
+    // 与上层 `orderRef`（同样只含可见且有键的消息）逐项对齐。
+    const i = renderedIndex++;
+    const last = groups[groups.length - 1];
+    if (last && last.senderId === m.senderId) last.items.push({ m, key, index: i });
+    else groups.push({ senderId: m.senderId, senderName: m.senderName, items: [{ m, key, index: i }] });
+  }
+
   return (
     <div className="listwrap" ref={listwrap}>
       <div ref={sentinel} className="sentinel" data-testid="older-sentinel">
         {note ? <span className="note">{note}</span> : <span>向上滚动加载更早…</span>}
         {!noMore && (
-          <button data-testid="load-older" onClick={onLoadOlder} disabled={loadingOlder}>
+          <button className="btn" data-testid="load-older" onClick={onLoadOlder} disabled={loadingOlder}>
             {loadingOlder ? '加载中…' : '加载更早'}
           </button>
         )}
       </div>
-      {messages.map((m) => {
-        // key / testid 用 msgKey：服务端的 id 在缺 message_id/real_id/message_seq 时是空串
-        // → 直接用 m.id 会让多条消息撞 key（React 警告）并串选中态、撞 testid。
-        // msgKey 返回 null = 这条消息**无法与别的消息区分** → 干脆不渲染
-        // （渲染出来只能共用一个 key，选中态会串成一片）。
-        const key = msgKey(m);
-        if (key === null) return null;
-        // 下标按**已渲染**的条数计：被跳过的消息不占位，
-        // 与上层 `orderRef`（同样只含可见且有键的消息）逐项对齐。
-        const i = renderedIndex++;
-        return (
-        <div
-          key={key}
-          data-testid={`msg-${key}`}
-          className={`msg ${selection.has(key) ? 'sel' : ''}`}
-          onMouseDown={(e) => {
-            if (e.button !== 0) return;
-            dragFrom.current = key;
-            dragging.current = true;
-            suppressClick.current = false;
-          }}
-          onMouseOver={(e) => {
-            if (!dragging.current) return;
-            // 只认落在消息行本身的悬停（划过行内的子元素不重复触发）
-            if (e.target !== e.currentTarget) return;
-            const from = dragFrom.current;
-            if (!from || from === key) return;
-            suppressClick.current = true;
-            // 划选优先于文本选择：把浏览器已经开始的文本选区清掉
-            e.preventDefault();
-            if (typeof window.getSelection === 'function') window.getSelection()?.removeAllRanges();
-            onDragSelect?.(from, key, e.ctrlKey || e.metaKey);
-          }}
-          onClick={(e) => {
-            // 刚拖拽过 → 这个 click 是浏览器补的，别让它把区间改成单选
-            if (suppressClick.current) {
-              suppressClick.current = false;
-              return;
-            }
-            const mode = e.ctrlKey || e.metaKey ? 'ctrl' : e.shiftKey ? 'shift' : 'click';
-            onToggle(key, mode, i);
-          }}
-        >
-          {m.replyTo && <div className="reply">↪ {m.replyTo.preview}</div>}
-          <span className="t">{hm(m.time)}</span>
-          <span className="who">{m.senderName}</span>
-          <span className="body">{m.text}</span>
+      {groups.map((g) => (
+        <div className="msggroup" key={g.senderId + ':' + g.items[0].key}>
+          <div className="who">
+            {g.senderName}
+            {g.items[0].m.time !== undefined && <span className="t"> · {hm(g.items[0].m.time)}</span>}
+          </div>
+          {g.items.map(({ m, key, index }) => (
+            <div
+              key={key}
+              data-testid={`msg-${key}`}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selection.has(key)}
+              className={`msg ${selection.has(key) ? 'sel' : ''} ${
+                selfId && m.senderId === selfId ? 'mine' : ''
+              }`}
+              onMouseDown={(e) => {
+                if (e.button !== 0) return;
+                dragFrom.current = key;
+                dragging.current = true;
+                suppressClick.current = false;
+              }}
+              onMouseOver={(e) => {
+                if (!dragging.current) return;
+                // 只认落在消息行本身的悬停（划过行内的子元素不重复触发）
+                if (e.target !== e.currentTarget) return;
+                const from = dragFrom.current;
+                if (!from || from === key) return;
+                suppressClick.current = true;
+                // 划选优先于文本选择：把浏览器已经开始的文本选区清掉
+                e.preventDefault();
+                if (typeof window.getSelection === 'function') window.getSelection()?.removeAllRanges();
+                onDragSelect?.(from, key, e.ctrlKey || e.metaKey);
+              }}
+              onClick={(e) => {
+                // 刚拖拽过 → 这个 click 是浏览器补的，别让它把区间改成单选
+                if (suppressClick.current) {
+                  suppressClick.current = false;
+                  return;
+                }
+                const mode = e.ctrlKey || e.metaKey ? 'ctrl' : e.shiftKey ? 'shift' : 'click';
+                onToggle(key, mode, index);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                onToggle(key, e.ctrlKey || e.metaKey ? 'ctrl' : e.shiftKey ? 'shift' : 'click', index);
+              }}
+            >
+              {m.replyTo && <div className="reply">↪ {m.replyTo.preview}</div>}
+              <div className="body">{m.text}</div>
+            </div>
+          ))}
         </div>
-        );
-      })}
-      {messages.length === 0 && <div className="empty">没有消息</div>}
+      ))}
+      {messages.length === 0 && (
+        <div className="empty">
+          <span className="title">这里还没有消息</span>
+          <span>换个会话，或在「宿主」里连上 NapCat。</span>
+        </div>
+      )}
     </div>
   );
 }

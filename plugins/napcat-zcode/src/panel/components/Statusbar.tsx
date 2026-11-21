@@ -56,7 +56,10 @@ export function detectionSummary(
 }
 
 /**
- * 顶部状态条：连接状态（未配置 / 未连接 / 已连接+昵称+连接模式 / 连接中）+「设置」入口。
+ * 标题栏：连接状态 + 探测结论 + 安全警告 +「设置」入口。
+ *
+ * 视觉：一个小圆点表达状态（不是文字符号），主文案一行，次要信息逐级弱化。
+ * ZCode 的规矩：**用文字层级制造密度**，不靠边框和色块。
  *
  * `phase === 'init'` 是「正在连接宿主…」的中间态 —— 首次握手最坏要 3×15s+2×500ms ≈ 46s，
  * 这段时间里动作按钮必须禁用（见 ActionBar）。
@@ -82,12 +85,12 @@ export function Statusbar({
   const mode = status?.mode ?? '';
   const text =
     phase === 'ready' && status?.connected
-      ? `● 已连接 · ${status.login?.nickname ?? ''} · ${modeLabel(mode)}`
+      ? `已连接${status.login?.nickname ? ` · ${status.login.nickname}` : ''}${mode ? ` · ${modeLabel(mode)}` : ''}`
       : phase === 'unconfigured'
-        ? '○ 未配置 OneBot 端点'
+        ? '未配置 OneBot 端点'
         : phase === 'error'
-          ? `✕ ${status?.error || notice || '未连接 OneBot'}`
-          : '… 正在连接宿主…';
+          ? (status?.error || notice || '未连接 OneBot')
+          : '正在连接宿主…';
   const detection = status?.detection;
   /**
    * 摘要行只在「结论有意义」时出现：
@@ -102,22 +105,23 @@ export function Statusbar({
       data-phase={phase}
       data-mode={mode || undefined}
     >
-      <span className="status-text" title={mode ? `连接模式：${mode}` : undefined}>
+      <span className="dot" aria-hidden="true" />
+      <span className="status-text" title={mode ? `连接模式：${modeLabel(mode)}` : undefined}>
         {text}
       </span>
       {showSummary && (
-        <span className="detect-summary" data-testid="detect-summary">
+        <span className="detect-summary" data-testid="detect-summary" title={detectionSummary(detection, hadDetection)}>
           {detectionSummary(detection, hadDetection)}
         </span>
       )}
       {status?.warning && (
         <span className="status-warning" data-testid="status-warning" title={status.warning}>
-          ⚠ {status.warning}
+          {status.warning}
         </span>
       )}
       {onSettings && (
         <button
-          className="settings"
+          className="btn ghost"
           data-testid="settings-btn"
           onClick={onSettings}
           title="查看插件配置（只读）"

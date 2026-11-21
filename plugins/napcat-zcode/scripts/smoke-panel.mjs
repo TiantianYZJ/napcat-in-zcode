@@ -102,7 +102,8 @@ try {
   const statusbar = q('[data-testid="statusbar"]');
   check('状态条渲染且显示已连接', !!statusbar && /已连接/.test(statusbar.textContent || ''), statusbar?.textContent?.slice(0, 40));
 
-  const chats = qa('[data-testid^="chat-"]').filter((el) => el.getAttribute('data-testid') !== 'chat-search');
+  // chat-drawer（抽屉壳）与 chat-search（搜索框）是结构节点，不算会话项
+  const chats = qa('[data-testid^="chat-"]').filter((el) => !['chat-drawer', 'chat-search'].includes(el.getAttribute('data-testid') ?? ''));
   check('会话列表渲染出 3 个会话且不重复', chats.length === 3, chats.map((c) => c.getAttribute('data-testid')).join(','));
 
   const msgBtn = q('[data-testid="act-message"]');
@@ -113,9 +114,10 @@ try {
   await sleep(400);
   const msgs = qa('[data-testid^="msg-"]');
   check('点击会话后消息流渲染出 3 条', msgs.length === 3, msgs.map((m) => m.getAttribute('data-testid')).join(','));
-  check('消息行含发言人名与正文',
-    (msgs[0]?.textContent || '').includes('Alice') && (msgs[0]?.textContent || '').includes('场地定了吗'),
-    msgs[0]?.textContent?.slice(0, 40));
+  // ZCode 风格改版后发言人名渲染在 .msggroup 组头（连续同发言者归组），消息行本体是正文
+  check('消息组含发言人名与正文',
+    (msgs[0]?.closest('.msggroup')?.textContent || '').includes('Alice') && (msgs[0]?.textContent || '').includes('场地定了吗'),
+    msgs[0]?.closest('.msggroup')?.textContent?.slice(0, 40));
 
   const msgBtn2 = q('[data-testid="act-message"]');
   check('打开会话后动作按钮仍置灰（未选消息）', msgBtn2?.disabled === true, msgBtn2?.getAttribute('data-reason'));

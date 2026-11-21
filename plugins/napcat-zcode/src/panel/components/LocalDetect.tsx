@@ -55,11 +55,12 @@ export function LocalDetect({
 
   return (
     <div className="detect" data-testid="detect-panel">
-      <button data-testid="detect-btn" disabled={busy} onClick={() => void run()}>
+      <div className="section-title">本机已装的 NapCat</div>
+      <button className="btn" data-testid="detect-btn" disabled={busy} onClick={() => void run()}>
         {busy ? '检测中…' : '检测本机 NapCat'}
       </button>
       {err && (
-        <div className="err" data-testid="detect-error">
+        <div className="detect-budget" data-testid="detect-error">
           {err}
         </div>
       )}
@@ -95,12 +96,16 @@ export function LocalDetect({
                     <span className="label">目标无响应（超时）</span>
                   )}
                   {c.suspectToken && (
-                    <span className="badge" data-testid={`detect-token-badge-${i}`}>
+                    <span className="badge warn" data-testid={`detect-token-badge-${i}`}>
                       {tokenBadge(c.entry.endpoint)}
                     </span>
                   )}
                   {c.entry.error && <span className="detail">{c.entry.error}</span>}
-                  <button data-testid={`detect-use-${i}`} onClick={() => onPick(c.entry.endpoint, c.suspectToken)}>
+                  <button
+                    className="btn"
+                    data-testid={`detect-use-${i}`}
+                    onClick={() => onPick(c.entry.endpoint, c.suspectToken)}
+                  >
                     使用这个
                   </button>
                 </div>

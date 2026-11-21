@@ -14,15 +14,15 @@
  * 4. **动作名与结果名一致**：点了「启动」就说「已启动」，不玩文字游戏。
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { dataDir } from '../config.js';
 import { fail, ok } from '../tool-results.js';
 import type { AppState } from '../state.js';
 import { availableVersions, resolveArtifact } from './artifacts.js';
-import { ManagedHost, newJobId, type InstallJob, type ManagedInstall } from './manager.js';
+import { assertInstallTargetSafe, ManagedHost, newJobId, type InstallJob, type ManagedInstall } from './manager.js';
 import { probeManagedHost, startManagedHost, stopManagedHost, type HostStatus } from './supervise.js';
 
 /** 面板资源 URI（必须与清单 `ui.surfaces[0].resourceUri` 一致）。 */
@@ -184,18 +184,17 @@ export function registerHostTools(server: McpServer, state: AppState): void {
         if (!isAbsolute(targetDir)) {
           throw new Error('安装目录必须是绝对路径：相对路径会随宿主的工作目录变化，无法复现。');
         }
-        if (existsSync(join(targetDir, 'node.exe')) && h.findByDir(targetDir)) {
-          // 同一目录已在册 → 允许覆盖安装（作业内部会先备份旧目录，失败会换回来）
-        }
+        assertInstallTargetSafe(targetDir, Boolean(h.findByDir(targetDir)));
+        const selectedMode = mode ?? 'standalone';
         const request = {
           dir: targetDir,
           version: artifact.version,
-          mode: mode ?? 'standalone',
+          mode: selectedMode,
           url: artifact.url,
           sha256: artifact.sha256,
           allowedHosts: artifact.allowedHosts,
           proxy: proxy || cfg.managed?.downloadProxy || undefined,
-          desktopQqRoots: cfg.managed?.desktopQqPath ? [cfg.managed.desktopQqPath] : undefined,
+          desktopQqRoots: cfg.managed?.desktopQqPath ? [dirname(cfg.managed.desktopQqPath)] : undefined,
         };
         const job: InstallJob = {
           id: newJobId(),
@@ -206,7 +205,7 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           request,
         };
         h.startInstall(job, request);
-        return ok({ jobId: job.id, version: artifact.version, dir: targetDir, mode: request.mode });
+        return ok({ jobId: job.id, version: artifact.version, dir: targetDir, mode: selectedMode });
       } catch (e) {
         return fail(state, e);
       }
@@ -242,8 +241,8 @@ export function registerHostTools(server: McpServer, state: AppState): void {
     'napcat_start',
     {
       description:
-        '启动一个受管的 NapCat（独立模式 = 自带内嵌 QQ，不影响桌面 QQ；注入模式会注入桌面 QQ，' +
-        'QQ 9.9.36+ 可能因此报「文件已损坏」）。不传 id = 最近登记的那个。',
+        '启动受管 NapCat；启动模式沿用安装时登记的模式，不接受临时覆盖。' +
+        '独立模式不影响桌面 QQ；注入模式在 QQ 9.9.36+ 可能触发「文件已损坏」。不传 id = 最近登记的那个。',
       inputSchema: {
         id: z.string().optional().describe('受管安装 id（不传 = 最近登记的一个）'),
       },

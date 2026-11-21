@@ -36,6 +36,7 @@ const defaultResponder: Responder = (method) => {
           updateModelContext: {},
           downloadFile: {},
           serverTools: {},
+          openLinks: {},
         },
       },
     };
@@ -109,6 +110,7 @@ describe('HostBridge', () => {
     const caps = await b.initialize();
     expect(caps.message).toBe(true);
     expect(caps.serverTools).toBe(true);
+    expect(caps.openLinks).toBe(true);
     expect(host.sent[0].method).toBe('ui/initialize');
     expect(host.sent.some((m) => m.method === 'ui/notifications/initialized')).toBe(true);
   });
@@ -119,6 +121,36 @@ describe('HostBridge', () => {
     await b.initialize();
     const r = (await b.callTool('napcat_status', {})) as { content: [{ text: string }] };
     expect(JSON.parse(r.content[0].text)).toEqual({ ok: 1 });
+  });
+
+  it('opens a loopback link through ui/open-link', async () => {
+    const host = fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    await b.openLocalLink('http://127.0.0.1:6099');
+    const call = host.sent.find((m) => m.method === 'ui/open-link');
+    expect(call?.params).toEqual({ url: 'http://127.0.0.1:6099/' });
+  });
+
+  it('rejects non-loopback and non-http links before contacting the host', async () => {
+    const host = fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    await expect(b.openLocalLink('https://example.com')).rejects.toThrow('只允许打开本机');
+    await expect(b.openLocalLink('file:///etc/passwd')).rejects.toThrow('只允许打开本机');
+    expect(host.sent.some((m) => m.method === 'ui/open-link')).toBe(false);
+  });
+
+  it('refuses openLocalLink when the host does not advertise openLinks', async () => {
+    const host = fakeHost((method) =>
+      method === 'ui/initialize'
+        ? { result: { protocolVersion: '2026-01-26', hostCapabilities: {} } }
+        : { result: {} },
+    );
+    const b = new HostBridge();
+    await b.initialize();
+    await expect(b.openLocalLink('http://127.0.0.1:6099')).rejects.toThrow(/openLinks/);
+    expect(host.sent.some((m) => m.method === 'ui/open-link')).toBe(false);
   });
 
   it('downloadFile passes embedded contents and returns filePath', async () => {
@@ -142,8 +174,8 @@ describe('HostBridge', () => {
     const params = init.params as { appInfo: unknown; appCapabilities: unknown; protocolVersion: string };
     // protocolVersion 在协议 schema 里是必填的（brief 漏了，按实测补上）
     expect(params.protocolVersion).toBe('2026-01-26');
-    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.1.0' });
-    expect(params.appCapabilities).toEqual({});
+    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.5.0' });
+    expect(params.appCapabilities).toEqual({ availableDisplayModes: ['inline', 'fullscreen'] });
 
     const notified = host.sent.find((m) => m.method === 'ui/notifications/initialized');
     expect(notified).toBeDefined();
@@ -177,7 +209,13 @@ describe('HostBridge', () => {
     );
     const b = new HostBridge();
     const caps = await b.initialize();
-    expect(caps).toEqual({ message: false, updateModelContext: false, downloadFile: false, serverTools: false });
+    expect(caps).toEqual({
+      message: false,
+      updateModelContext: false,
+      downloadFile: false,
+      serverTools: false,
+      openLinks: false,
+    });
   });
 
   it('ignores unknown host capability keys without failing', async () => {
@@ -200,6 +238,7 @@ describe('HostBridge', () => {
     const b = new HostBridge();
     const caps = await b.initialize();
     expect(caps.serverTools).toBe(true);
+    expect(caps.openLinks).toBe(true);
     expect(caps.message).toBe(false);
     expect(caps.downloadFile).toBe(false);
     expect(caps.updateModelContext).toBe(false);
@@ -386,6 +425,7 @@ describe('HostBridge', () => {
       updateModelContext: false,
       downloadFile: false,
       serverTools: false,
+      openLinks: false,
     });
     expect(b.hostCapabilities).toEqual({});
     // 销毁后再调用动作类方法必须被挡住
@@ -417,6 +457,7 @@ describe('HostBridge', () => {
       downloadFile: false,
       serverTools: true,
       updateModelContext: false,
+      openLinks: false,
     });
   });
 

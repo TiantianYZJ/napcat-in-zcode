@@ -70,7 +70,14 @@ let envSnapshot: Record<string, string | undefined>;
  * 「dir 缺省取配置」的用例会读到 env 而不是配置文件 → 假失败。
  * `ZCODE_PROJECT_DIR` 同理（工作区目录的兜底来源）。
  */
-const ENV_KEYS = ['ZCODE_PLUGIN_DATA', 'NAPCAT_EXPORT_DIR', 'NAPCAT_INCLUDE_IMAGES', 'ZCODE_PROJECT_DIR'] as const;
+const ENV_KEYS = [
+  'ZCODE_PLUGIN_DATA',
+  'NAPCAT_EXPORT_DIR',
+  'NAPCAT_INCLUDE_IMAGES',
+  'NAPCAT_DOWNLOAD_PROXY',
+  'NAPCAT_DESKTOP_QQ_PATH',
+  'ZCODE_PROJECT_DIR',
+] as const;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'napcat-exp-'));
@@ -523,6 +530,28 @@ describe('napcat_get_config', () => {
     expect(payload(r).autoDetect.endpoints[0]).toContain('127.0.0.1:3000');
   });
 
+  it('does not leak configured proxy URLs or desktop QQ paths', async () => {
+    const c = await makeClient();
+    writeFileSync(
+      join(tmp, 'config.json'),
+      JSON.stringify({
+        managed: {
+          downloadProxy: 'http://user:proxy-pass@127.0.0.1:7897',
+          desktopQqPath: 'D:\\PrivateQQ\\QQ.exe',
+        },
+      }),
+    );
+    const r = await c.callTool({ name: 'napcat_get_config', arguments: {} });
+    const text = (r.content as Array<{ text: string }>)[0].text;
+    const config = payload(r);
+    expect(text).not.toContain('proxy-pass');
+    expect(text).not.toContain('PrivateQQ');
+    expect(config.managed.downloadProxy).toBeUndefined();
+    expect(config.managed.desktopQqPath).toBeUndefined();
+    expect(config.managed.downloadProxyConfigured).toBe(true);
+    expect(config.managed.desktopQqPathConfigured).toBe(true);
+  });
+
   // B9：工具返回值会进 agent 的上下文 → 本机绝对路径不该出现在里面。
   it('does not leak local absolute paths (autoDetect.paths) — only the count', async () => {
     const c = await makeClient();
@@ -580,6 +609,7 @@ describe('mcp tool registration (T10)', () => {
     expect(props('napcat_format_selection')).toEqual(['chatName', 'maxChars', 'messages']);
     expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromTime', 'includeImages', 'messages', 'toTime', 'workspaceDir']);
     expect(props('napcat_get_config')).toEqual([]);
+    expect(props('napcat_start')).toEqual(['id']);
   });
 
   it('publishes the chat structure in the export input schema', async () => {

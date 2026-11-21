@@ -104,10 +104,24 @@ describe('清单契约：两份 MCP server 声明同源', () => {
     );
   });
 
-  it('env 声明了设置界面的两项接线', () => {
+  it('清单版本与包版本保持同步', () => {
+    const packageJson = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf-8'),
+    ) as { version: string };
+    const marketplace = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../../marketplace.json', import.meta.url)), 'utf-8'),
+    ) as { plugins: Array<{ name: string; version: string }> };
+    expect(plugin.version).toBe('0.5.0');
+    expect(packageJson.version).toBe(plugin.version);
+    expect(marketplace.plugins.find((item) => item.name === plugin.name)?.version).toBe(plugin.version);
+  });
+
+  it('env 声明了用户配置项的完整接线', () => {
     const env = plugin.mcpServers.napcat.env ?? {};
     expect(env.NAPCAT_EXPORT_DIR).toBe('${user_config.exportDir}');
     expect(env.NAPCAT_INCLUDE_IMAGES).toBe('${user_config.includeImages}');
+    expect(env.NAPCAT_DOWNLOAD_PROXY).toBe('${user_config.downloadProxy}');
+    expect(env.NAPCAT_DESKTOP_QQ_PATH).toBe('${user_config.desktopQqPath}');
   });
 
   it('env 显式声明了插件数据目录与工作区目录（服务端靠它们定位数据/工作区）', () => {
@@ -138,7 +152,7 @@ describe('清单契约：两份 MCP server 声明同源', () => {
 describe('清单契约：userConfig', () => {
   it('两项设置的 type 是 string、default 是空串（空串非法 → 不覆盖 config.json）', () => {
     const uc = plugin.userConfig ?? {};
-    expect(Object.keys(uc).sort()).toEqual(['exportDir', 'includeImages']);
+    expect(Object.keys(uc).sort()).toEqual(['desktopQqPath', 'downloadProxy', 'exportDir', 'includeImages']);
     for (const key of Object.keys(uc)) {
       expect(uc[key].type).toBe('string');
       expect(uc[key].default).toBe('');

@@ -147,6 +147,9 @@ export function gitignoreNote(
  * - `保存为附件…`：**服务端导出 + 复制 `@路径`**（主路径，拿到真实落盘路径）。
  * - `另存一份…`：`ui/download-file` 降级通道（宿主弹另存为，但**不回传路径**）。
  * - `导出▾`：静默写导出目录（用户目录 / 当前工作区），**不弹宿主另存为**。
+ *
+ * 左侧是**当前选区的事实**（几条、跨了多久、哪个会话），右侧是动作。
+ * 主按钮（保存为附件）用 primary 样式——它是这条链路上最常用、最该被看见的那个。
  */
 export function ActionBar({
   selected,
@@ -326,13 +329,14 @@ export function ActionBar({
     cap: keyof HostCaps,
     method: string,
     onClick: () => void,
+    variant?: 'primary',
   ) => {
     const reason = disabledReason(cap, method, caps, p, precondition);
     return (
       <button
         key={id}
         data-testid={id}
-        className={`act${reason ? ' disabled' : ''}`}
+        className={`btn ${variant ?? ''}`}
         disabled={reason !== ''}
         title={reason || undefined}
         data-reason={reason}
@@ -360,13 +364,20 @@ export function ActionBar({
           'ui/update-model-context',
           run(actions.background),
         )}
-        {actBtn('act-attach', '保存为附件…', 'serverTools', 'tools/call', run(actions.attach))}
+        {actBtn(
+          'act-attach',
+          '保存为附件…',
+          'serverTools',
+          'tools/call',
+          run(actions.attach),
+          'primary',
+        )}
         {actBtn('act-download', '另存一份…', 'downloadFile', 'ui/download-file', run(actions.download))}
         <div className="menu-wrap" ref={menuRef}>
           <button
             data-testid="act-export"
             data-cap="serverTools"
-            className={`act${exportReason ? ' disabled' : ''}`}
+            className="btn"
             disabled={exportReason !== ''}
             title={exportReason || undefined}
             data-reason={exportReason}

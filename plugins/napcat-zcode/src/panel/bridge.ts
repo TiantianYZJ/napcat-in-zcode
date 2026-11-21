@@ -24,6 +24,8 @@ export interface HostCaps {
   downloadFile: boolean;
   /** 宿主能把 `tools/call` 代理到 MCP server。 */
   serverTools: boolean;
+  /** 宿主支持 `ui/open-link`。 */
+  openLinks?: boolean;
 }
 
 /** 宿主原始能力集（未知能力位也保留，面板可自行判断）。 */
@@ -80,7 +82,7 @@ export interface HostBridgeOptions {
   retryDelayMs?: number;
   /** `appInfo.name`。默认 'napcat-zcode'。 */
   appName?: string;
-  /** `appInfo.version`。默认 '0.1.0'（与 plugin.json / package.json 保持一致）。 */
+  /** `appInfo.version`。默认 '0.5.0'（与 plugin.json / package.json 保持一致）。 */
   appVersion?: string;
   /** 协议版本。默认 '2026-01-26'（官方 bundle 里的常量）。 */
   protocolVersion?: number | string;
@@ -90,7 +92,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_INIT_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 500;
 const DEFAULT_APP_NAME = 'napcat-zcode';
-const DEFAULT_APP_VERSION = '0.1.0';
+const DEFAULT_APP_VERSION = '0.5.0';
 const DEFAULT_PROTOCOL_VERSION = '2026-01-26';
 
 /** 一个在途请求。 */
@@ -116,19 +118,19 @@ function delay(ms: number): Promise<void> {
  * 值是个描述子对象（可含 `text` / `image` / `structuredContent` 等子开关）。
  * 值是 `null` / `undefined` / `false` 时按「不支持」算。
  *
- * 未知能力位（`experimental` / `openLinks` / `logging` / …）直接忽略 —— 只认已知的那几个键。
+ * 未知能力位（`experimental` / `logging` / …）直接忽略 —— 只认面板用到的能力键。
  */
-function capEnabled(caps: RawHostCapabilities, key: keyof HostCaps): boolean {
+function capEnabled(caps: RawHostCapabilities, key: string): boolean {
   if (!Object.prototype.hasOwnProperty.call(caps, key)) return false;
   const value = caps[key];
   return value !== undefined && value !== null && value !== false;
 }
 
 /**
- * 把宿主的能力集收敛成面板要用的四个布尔位。
+ * 把宿主的能力集收敛成面板要用的布尔位。
  *
  * 边界（都有测试覆盖）：
- * - 宿主返回**空能力集** → 四个位全 false（面板据此全部禁用并说明原因）；
+ * - 宿主返回**空能力集** → 所有能力位全 false（面板据此全部禁用并说明原因）；
  * - 宿主返回**未知能力位** → 忽略，不崩，已知位照常解析；
  * - 某个位是 `null` / `false` → 视为不支持。
  */
@@ -139,6 +141,7 @@ export function parseHostCapabilities(raw: unknown): HostCaps {
     updateModelContext: capEnabled(caps, 'updateModelContext'),
     downloadFile: capEnabled(caps, 'downloadFile'),
     serverTools: capEnabled(caps, 'serverTools'),
+    openLinks: capEnabled(caps, 'openLinks'),
   };
 }
 
@@ -197,6 +200,7 @@ export class HostBridge {
     updateModelContext: false,
     downloadFile: false,
     serverTools: false,
+    openLinks: false,
   };
   private rawCaps: RawHostCapabilities = {};
   private handshakeDone = false;
@@ -344,7 +348,7 @@ export class HostBridge {
       try {
         const result = (await this.request('ui/initialize', {
           appInfo: { name: this.appName, version: this.appVersion },
-          appCapabilities: {},
+          appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
           protocolVersion: this.protocolVersion,
         })) as { hostCapabilities?: unknown } | undefined;
 
@@ -406,6 +410,45 @@ export class HostBridge {
     if (isRecord(result) && result.isError === true) {
       const detail = typeof result.error === 'string' ? `: ${result.error}` : '';
       throw new Error(`host rejected ui/update-model-context${detail}`);
+    }
+  }
+
+  /**
+   * 在宿主浏览器中打开本机 WebUI。
+   *
+   * 仅允许 loopback HTTP(S) URL，避免把宿主浏览器当成任意外链跳板。
+   */
+  async openLocalLink(rawUrl: string): Promise<void> {
+    this.requireHandshake('openLocalLink');
+    this.requireCap('openLinks', 'ui/open-link');
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      throw new Error('本机 NapCat WebUI 地址无效。');
+    }
+    const host = url.hostname.replace('[', '').replace(']', '').toLowerCase();
+    const pieces = host.split('.');
+    const ipv4Loopback =
+      pieces.length === 4 &&
+      pieces[0] === '127' &&
+      pieces.slice(1).every((part) => /^[0-9]{1,3}$/.test(part) && Number(part) <= 255);
+    const loopback =
+      host === 'localhost' ||
+      host === '::1' ||
+      host === '0:0:0:0:0:0:0:1' ||
+      ipv4Loopback;
+    if (
+      !loopback ||
+      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      url.username !== '' ||
+      url.password !== ''
+    ) {
+      throw new Error('只允许打开本机 NapCat WebUI 地址。');
+    }
+    const result = await this.request('ui/open-link', { url: url.toString() });
+    if (isRecord(result) && result.isError === true) {
+      throw new Error('宿主未能打开本机 NapCat WebUI。');
     }
   }
 
@@ -497,7 +540,13 @@ export class HostBridge {
     this.pending.clear();
     this.handshakeDone = false;
     this.lastInitError = undefined;
-    this.caps = { message: false, updateModelContext: false, downloadFile: false, serverTools: false };
+    this.caps = {
+      message: false,
+      updateModelContext: false,
+      downloadFile: false,
+      serverTools: false,
+      openLinks: false,
+    };
     this.rawCaps = {};
   }
 }
