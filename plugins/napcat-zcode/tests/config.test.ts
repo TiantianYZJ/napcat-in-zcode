@@ -156,6 +156,86 @@ describe('config hardening', () => {
     expect(loadConfig(tmp).autoDetect.endpoints).toEqual(['ws://a']);
   });
 
+  it('exposes the new autoDetect fields with their defaults', () => {
+    const c = defaultConfig();
+    expect(c.autoDetect.paths).toEqual([]);
+    expect(c.autoDetect.probeTimeoutMs).toBe(1200);
+    expect(c.autoDetect.scanDrives).toBe(true);
+    expect(c.autoDetect.maxRoots).toBe(32);
+  });
+
+  it('fills the new autoDetect fields when an old config file has none of them', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { ports: [3000] } }));
+    const c = loadConfig(tmp);
+    expect(c.autoDetect.ports).toEqual([3000]);
+    expect(c.autoDetect.paths).toEqual([]);
+    expect(c.autoDetect.probeTimeoutMs).toBe(1200);
+    expect(c.autoDetect.scanDrives).toBe(true);
+    expect(c.autoDetect.maxRoots).toBe(32);
+  });
+
+  it('keeps only absolute paths in autoDetect.paths', () => {
+    const abs = join(tmp, 'NapCat');
+    writeFileSync(
+      join(tmp, 'config.json'),
+      JSON.stringify({ autoDetect: { paths: [abs, 'relative/path', '', '   ', 42, null, abs] } }),
+    );
+    expect(loadConfig(tmp).autoDetect.paths).toEqual([abs]);
+  });
+
+  it('rejects an out of range probe timeout and falls back to the default', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: 99 } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(1200);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: 10001 } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(1200);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: '1500' } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(1200);
+  });
+
+  it('accepts a legal probe timeout', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: 3000 } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(3000);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: 100 } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(100);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { probeTimeoutMs: 10000 } }));
+    expect(loadConfig(tmp).autoDetect.probeTimeoutMs).toBe(10000);
+  });
+
+  it('accepts only real booleans for scanDrives', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { scanDrives: false } }));
+    expect(loadConfig(tmp).autoDetect.scanDrives).toBe(false);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { scanDrives: 'false' } }));
+    expect(loadConfig(tmp).autoDetect.scanDrives).toBe(true);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { scanDrives: 0 } }));
+    expect(loadConfig(tmp).autoDetect.scanDrives).toBe(true);
+  });
+
+  it('accepts maxRoots in 0..512 and treats 0 as disabling the drive discovery', () => {
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { maxRoots: 0 } }));
+    expect(loadConfig(tmp).autoDetect.maxRoots).toBe(0);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { maxRoots: 512 } }));
+    expect(loadConfig(tmp).autoDetect.maxRoots).toBe(512);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { maxRoots: 513 } }));
+    expect(loadConfig(tmp).autoDetect.maxRoots).toBe(32);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { maxRoots: -1 } }));
+    expect(loadConfig(tmp).autoDetect.maxRoots).toBe(32);
+    writeFileSync(join(tmp, 'config.json'), JSON.stringify({ autoDetect: { maxRoots: '8' } }));
+    expect(loadConfig(tmp).autoDetect.maxRoots).toBe(32);
+  });
+
+  it('round-trips the new autoDetect fields through save and load', () => {
+    const cfg = defaultConfig();
+    cfg.autoDetect = {
+      ...cfg.autoDetect,
+      paths: [join(tmp, 'NapCat')],
+      probeTimeoutMs: 2500,
+      scanDrives: false,
+      maxRoots: 8,
+    };
+    saveConfig(tmp, cfg);
+    expect(loadConfig(tmp).autoDetect).toEqual(cfg.autoDetect);
+  });
+
   it('falls back to defaults for empty or non-string managed fields', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ managed: { napcatVersion: '', downloadMirror: 42 } }));
     const c = loadConfig(tmp);
@@ -223,7 +303,12 @@ describe('config hardening', () => {
   it('round-trips every section through save and load', () => {
     const cfg = defaultConfig();
     cfg.connection = { mode: 'external', endpoint: 'http://127.0.0.1:6099', token: 'secret' };
-    cfg.autoDetect = { ports: [3000, 8080], endpoints: ['ws://127.0.0.1:3001'] };
+    // 新字段（paths/probeTimeoutMs/scanDrives/maxRoots）随默认值一起带上；断言未变
+    cfg.autoDetect = {
+      ...defaultConfig().autoDetect,
+      ports: [3000, 8080],
+      endpoints: ['ws://127.0.0.1:3001'],
+    };
     cfg.managed = { napcatVersion: '4.18.43', downloadMirror: 'https://example.test/nc.zip' };
     cfg.export = { dir: 'workspace', includeImages: true };
     cfg.inject = { maxInjectChars: 1234 };

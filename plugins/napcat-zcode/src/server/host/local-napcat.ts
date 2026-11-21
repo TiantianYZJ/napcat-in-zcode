@@ -73,8 +73,11 @@ export interface InstalledNapCatWebUi {
    * 类型里**故意没有** `token` 字段：WebUI token 的明文不进返回值，
    * 留一个恒为 `undefined` 的字段只会让 `webui.token ?? ''` 这类误用**静默通过**——
    * 去掉后 `webui.token` 直接是编译错误，误用在类型系统里就被拦下了。
+   *
+   * 字段名是 `hasToken` 而不是 `tokenRequired`：探测内核的 `DetectResult.tokenRequired` 是
+   * **数组**（探测到需要 token 的候选列表），同名不同义 → 面板汇入时极易混淆。
    */
-  tokenRequired?: boolean;
+  hasToken?: boolean;
   /** `webui.json` 里 `disableWebUI: true` → WebUI 被关掉了。 */
   disabled?: boolean;
 }
@@ -356,7 +359,7 @@ function readWebUi(file: string): InstalledNapCatWebUi | undefined {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
   const out: InstalledNapCatWebUi = { port };
   const token = typeof json.token === 'string' ? json.token.trim() : '';
-  if (token !== '') out.tokenRequired = true;
+  if (token !== '') out.hasToken = true;
   if (json.disableWebUI === true) out.disabled = true;
   return out;
 }
@@ -394,11 +397,12 @@ function buildInstall(scan: { onebot: FoundFile[]; webui: FoundFile[] }): Instal
  * 在给定的根目录里找本机 NapCat 安装，读出它配置的 OneBot 端点。
  *
  * **调用方应当把三类根合并后一起传进来**（顺序即优先级，端点预算先到先得）：
- * 1. **用户显式配置的路径**（`cfg.autoDetect.paths`，只收绝对路径）——覆盖任意命名安装目录最可靠的途径；
+ * 1. **用户显式配置的路径**（`cfg.autoDetect.paths`，只收绝对路径）——覆盖任意命名安装目录最可靠的途径，
+ *    **排在最前**（优先级最高）；
  * 2. `defaultNapCatRoots(homedir(), platform)`——默认安装位置；
  * 3. `discoverNapCatInstallRoots(platform)`——盘根枚举（安装目录在 `D:\` 等用户自选位置时靠它命中）。
  *
- * 也可以直接用 `collectNapCatRoots(homedir(), platform)` 拿 2+3，再自行并入 1。
+ * 也可以直接用 `collectNapCatRoots(homedir(), platform, { maxRoots, scanDrives })` 拿 2+3，再自行并入 1。
  *
  * - 找不到任何 NapCat → 返回**空数组**（不抛错）。
  * - 目录/文件不可读、JSON 损坏 → **跳过**（不抛错）。
@@ -519,6 +523,11 @@ export function napCatDriveRoots(platform: NodeJS.Platform = process.platform): 
  *
  * **只看一级子目录**，且对不认识的目录只做一次 `stat`（`<dir>/config` 是否存在）——
  * 不枚举盘根下所有子目录的内容，避免扫到大量无关目录。
+ * （`entry` 已知是目录时**不再 stat 一遍**——那是上一次实现里的冗余调用。）
+ *
+ * **顺序：名字像 NapCat 的排在前面**，`config` 规则的排后面——
+ * 用户自装的 NapCat 目录名里通常带 NapCat，它必须排在前面，
+ * 否则会被一串「恰好有 config 子目录」的无关目录挤掉。
  */
 export function napCatCandidateDirs(driveRoot: string): string[] {
   let entries: Dirent[];
@@ -527,18 +536,40 @@ export function napCatCandidateDirs(driveRoot: string): string[] {
   } catch {
     return []; // 盘根不可读 → 跳过
   }
-  const out: string[] = [];
+  const named: string[] = [];
+  const byConfig: string[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const isDir = entry.isDirectory();
+    const isLink = entry.isSymbolicLink();
+    if (!isDir && !isLink) continue;
     const full = join(driveRoot, entry.name);
-    if (!dirExists(full)) continue;
-    if (NAPCAT_DIR_NAME_RE.test(entry.name) || dirExists(join(full, 'config'))) out.push(full);
+    if (isLink && !dirExists(full)) continue; // 软链要跟一次（普通目录不用）
+    if (NAPCAT_DIR_NAME_RE.test(entry.name)) named.push(full);
+    else if (dirExists(join(full, 'config'))) byConfig.push(full);
   }
-  return out;
+  return [...named, ...byConfig];
+}
+
+/** 盘根发现的详细结果。 */
+export interface NapCatRootDiscovery {
+  /** 候选根（绝对路径）。 */
+  roots: string[];
+  /** 是否有盘**触到了候选根上限**（被截断 → 可能漏掉某些安装）。 */
+  truncated: boolean;
 }
 
 /**
- * **盘根枚举 → 候选根**：找出「安装目录在用户自选位置」的安装。
+ * 候选根上限的取值：`undefined` → 默认 32；`0` → **禁用盘根发现**；
+ * 非法（负数/非整数/非数字）→ 默认值。
+ */
+function resolveMaxRoots(value: unknown): number {
+  if (value === undefined) return MAX_DISCOVERED_ROOTS;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return MAX_DISCOVERED_ROOTS;
+  return value;
+}
+
+/**
+ * **盘根枚举 → 候选根**（详细版）：找出「安装目录在用户自选位置」的安装。
  *
  * 上游的 `writePath` 在 Windows/Linux 上**就是安装目录本身**，用户可以装在 `D:\NapCat`、
  * `D:\QQChatExporter`、`C:\Tools\NapCat`……默认根清单（`~`、APPDATA、ProgramFiles）**一个都命中不了**。
@@ -546,26 +577,40 @@ export function napCatCandidateDirs(driveRoot: string): string[] {
  *
  * 成本有界：每个盘根一次 `readdir` + 每个一级子目录一次 `stat`；**不做**全盘递归。
  *
- * `opts.driveRoots` / `opts.maxRoots` 供测试注入（默认按平台推导）。
+ * **上限按盘各自计数**（不是跨盘全局）：`C:\` 上攒满候选根不该把 `D:\` 上的真机安装挤掉
+ * （那是假阴性）。盘内顺序为「名字像 NapCat 的优先」，故每个盘的前 `maxRoots` 个里
+ * 一定包含那个名字像 NapCat 的真安装。
+ *
+ * `opts.maxRoots` = 每个盘的候选根上限（`0` = **禁用盘根发现**）；`opts.driveRoots` 供测试注入。
+ */
+export function discoverNapCatInstallRootsDetailed(
+  platform: NodeJS.Platform = process.platform,
+  opts: { maxRoots?: number; driveRoots?: string[] } = {},
+): NapCatRootDiscovery {
+  const maxRoots = resolveMaxRoots(opts.maxRoots);
+  if (maxRoots === 0) return { roots: [], truncated: false }; // 0 = 禁用盘根发现
+  const drives = Array.isArray(opts.driveRoots) ? opts.driveRoots : napCatDriveRoots(platform);
+  const roots: string[] = [];
+  let truncated = false;
+  for (const drive of drives) {
+    if (!dirExists(drive)) continue;
+    const candidates = napCatCandidateDirs(drive);
+    if (candidates.length > maxRoots) truncated = true; // 这个盘触顶了 → 有安装可能被漏掉
+    for (const c of candidates.slice(0, maxRoots)) roots.push(c);
+  }
+  return { roots, truncated };
+}
+
+/**
+ * **盘根枚举 → 候选根**（薄封装，形状不变：返回 `string[]`）。
+ *
+ * 需要知道「有没有触顶」时用 `discoverNapCatInstallRootsDetailed`。
  */
 export function discoverNapCatInstallRoots(
   platform: NodeJS.Platform = process.platform,
   opts: { maxRoots?: number; driveRoots?: string[] } = {},
 ): string[] {
-  const maxRoots = Number.isInteger(opts.maxRoots) && (opts.maxRoots as number) > 0
-    ? (opts.maxRoots as number)
-    : MAX_DISCOVERED_ROOTS;
-  const drives = Array.isArray(opts.driveRoots) ? opts.driveRoots : napCatDriveRoots(platform);
-  const out: string[] = [];
-  for (const drive of drives) {
-    if (out.length >= maxRoots) return out;
-    if (!dirExists(drive)) continue;
-    for (const dir of napCatCandidateDirs(drive)) {
-      if (out.length >= maxRoots) return out;
-      out.push(dir);
-    }
-  }
-  return out;
+  return discoverNapCatInstallRootsDetailed(platform, opts).roots;
 }
 
 /**
@@ -622,15 +667,20 @@ export function defaultNapCatRoots(
 /**
  * 「NapCat 可能装在哪」的完整清单 = 默认根 + 盘根枚举发现的候选根。
  *
- * 调用方（Task 4）还应当把**用户显式配置的路径**（`cfg.autoDetect.paths`）一起并进来——
+ * 调用方（Task 4）还应当把**用户显式配置的路径**（`cfg.autoDetect.paths`）一起并进来，
+ * 且**排在最前**（优先级最高，端点预算先到先得）——
  * 用户自己填的路径是覆盖任意命名安装目录最可靠的途径。
+ *
+ * `opts.scanDrives = false` → 不做盘根发现；`opts.maxRoots` → 每个盘的候选根上限（`0` = 禁用）。
  */
 export function collectNapCatRoots(
   homeDir: string,
   platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
+  opts: { env?: NodeJS.ProcessEnv; maxRoots?: number; scanDrives?: boolean } = {},
 ): string[] {
-  return Array.from(
-    new Set([...defaultNapCatRoots(homeDir, platform, env), ...discoverNapCatInstallRoots(platform)]),
-  );
+  const env = opts.env ?? process.env;
+  const roots = defaultNapCatRoots(homeDir, platform, env);
+  if (opts.scanDrives === false) return Array.from(new Set(roots));
+  const discovered = discoverNapCatInstallRoots(platform, { maxRoots: opts.maxRoots });
+  return Array.from(new Set([...roots, ...discovered]));
 }

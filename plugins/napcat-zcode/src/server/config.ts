@@ -1,10 +1,28 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export interface PluginConfig {
   connection: { mode: 'auto' | 'external'; endpoint: string; token: string };
-  autoDetect: { ports: number[]; endpoints: string[] };
+  autoDetect: {
+    /** 要扫的本机端口（回环）。 */
+    ports: number[];
+    /** 用户显式配置的额外端点（允许非回环——用户自己填的才算数）。 */
+    endpoints: string[];
+    /**
+     * 用户显式指定的**扫描根**（只收绝对路径）。
+     *
+     * 这是覆盖「装在任意命名目录里的 NapCat」最可靠的途径
+     * （上游 `writePath` 在 Windows/Linux 上就是安装目录本身，如 `D:\QQChatExporter`）。
+     */
+    paths: string[];
+    /** 单候选探测超时（ms）。 */
+    probeTimeoutMs: number;
+    /** 是否做盘根自动发现（`A:\`…`Z:\` 的一级子目录）。 */
+    scanDrives: boolean;
+    /** 盘根发现的候选根上限（**每个盘各自计数**；`0` = 禁用盘根发现）。 */
+    maxRoots: number;
+  };
   managed: { napcatVersion: string; downloadMirror: 'auto' | string };
   export: { dir: 'user' | 'workspace'; includeImages: boolean };
   inject: { maxInjectChars: number };
@@ -14,7 +32,14 @@ export interface PluginConfig {
 export function defaultConfig(): PluginConfig {
   return {
     connection: { mode: 'auto', endpoint: '', token: '' },
-    autoDetect: { ports: [3000, 3001, 6099], endpoints: [] },
+    autoDetect: {
+      ports: [3000, 3001, 6099],
+      endpoints: [],
+      paths: [],
+      probeTimeoutMs: 1200,
+      scanDrives: true,
+      maxRoots: 32,
+    },
     managed: { napcatVersion: '4.18.42', downloadMirror: 'auto' },
     export: { dir: 'user', includeImages: false },
     inject: { maxInjectChars: 40_000 },
@@ -70,6 +95,43 @@ function pickEndpoints(v: unknown): string[] {
 }
 
 /**
+ * 扫描根路径：只收**绝对路径**。
+ *
+ * 相对路径一律丢弃——模块是按 CWD 解析相对路径的，
+ * 而 CWD 会随宿主（ZCode 面板 / MCP 客户端 / 终端）变化，语义含糊且不可复现。
+ * 重复路径去重（同一个目录扫两遍纯属浪费）。
+ */
+function pickPaths(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  for (const p of v) {
+    if (typeof p !== 'string') continue;
+    const t = p.trim();
+    if (t === '') continue;
+    if (!isAbsolute(t)) continue; // 相对路径 → 丢弃
+    seen.add(t);
+  }
+  return [...seen];
+}
+
+/** 探测超时：只接受 100–10000 的整数，越界/类型不对 → 默认值。 */
+function pickProbeTimeoutMs(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 100 || v > 10000) return fallback;
+  return v;
+}
+
+/** 布尔项：只接受真正的布尔值，类型不对 → 默认值。 */
+function pickBool(v: unknown, fallback: boolean): boolean {
+  return typeof v === 'boolean' ? v : fallback;
+}
+
+/** 盘根发现上限：只接受 0–512 的整数，越界/类型不对 → 默认值（`0` = 禁用盘根发现，合法）。 */
+function pickMaxRoots(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 512) return fallback;
+  return v;
+}
+
+/**
  * 把（可能来自用户手改的）配置对象收敛成合法的 `PluginConfig`。
  *
  * 字段类型不对时**退回该项的默认值**，而不是把默认值弄坏——深合并只保证「键存在则覆盖」，
@@ -94,6 +156,10 @@ function sanitize(m: Record<string, unknown>): PluginConfig {
     autoDetect: {
       ports: pickPorts(auto.ports, d.autoDetect.ports),
       endpoints: pickEndpoints(auto.endpoints),
+      paths: pickPaths(auto.paths),
+      probeTimeoutMs: pickProbeTimeoutMs(auto.probeTimeoutMs, d.autoDetect.probeTimeoutMs),
+      scanDrives: pickBool(auto.scanDrives, d.autoDetect.scanDrives),
+      maxRoots: pickMaxRoots(auto.maxRoots, d.autoDetect.maxRoots),
     },
     managed: {
       napcatVersion:

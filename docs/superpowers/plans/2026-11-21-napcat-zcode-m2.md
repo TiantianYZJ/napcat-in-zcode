@@ -85,16 +85,22 @@
     configDir: string;             // 找到的 NapCat 配置目录
     onebotConfigs: string[];       // onebot11*.json 的绝对路径
     endpoints: { endpoint: string; transport: 'http'|'ws'; detail: string }[];  // 从配置里读到的端点
-    webui?: { port: number; tokenRequired?: boolean; disabled?: boolean };
+    webui?: { port: number; hasToken?: boolean; disabled?: boolean };
     //   ⚠️ 故意**没有** token 字段：WebUI token 的明文不进返回值
     //   （它不是 OneBot access token，两者不能混用）
+    //   ⚠️ 字段名是 hasToken 而不是 tokenRequired：探测内核的
+    //   `DetectResult.tokenRequired` 是**数组**（需要 token 的候选列表），同名不同义
     truncated?: boolean;           // 端点数超限被截断
     notes?: string[];              // 说明（截断原因等）
   }
   export function findLocalNapCat(roots: string[]): InstalledNapCat[];
   export function defaultNapCatRoots(homeDir: string, platform: NodeJS.Platform): string[];
-  export function discoverNapCatInstallRoots(platform?: NodeJS.Platform): string[];  // 盘根枚举 → 候选根
-  export function collectNapCatRoots(homeDir: string, platform?: NodeJS.Platform): string[];  // 默认根 + 盘根发现
+  export function discoverNapCatInstallRoots(platform?: NodeJS.Platform, opts?: { maxRoots?: number; driveRoots?: string[] }): string[];
+  export function discoverNapCatInstallRootsDetailed(platform?: NodeJS.Platform, opts?: { maxRoots?: number; driveRoots?: string[] }): { roots: string[]; truncated: boolean };
+  //   ↑ 盘根枚举的详细版：**每个盘各自计数**上限（避免一盘挤掉另一盘），
+  //     盘内「名字像 NapCat 的优先」；truncated = 触顶信号（可能有安装被漏掉）。
+  //     `maxRoots: 0` = 禁用盘根发现。
+  export function collectNapCatRoots(homeDir: string, platform?: NodeJS.Platform, opts?: { env?; maxRoots?; scanDrives? }): string[];
   export function toInstallCandidates(installed: InstalledNapCat[]): DetectCandidate[];  // source:'install'
   export function installPathsOf(installed: InstalledNapCat[]): string[];
   ```
@@ -105,15 +111,18 @@
    - 全部平台：`<home>/.napcat`、`<home>/NapCat`、`<home>/.config/napcat`
    - Windows：`<APPDATA>/NapCat`、`<LOCALAPPDATA>/NapCat`、`<ProgramFiles>/NapCat`、`<ProgramFiles(x86)>/NapCat`、`<USERPROFILE>/AppData/Roaming/NapCatQQ`
    - macOS/Linux：`<home>/Library/Application Support/QQ/NapCat`（上游实际路径）、`<home>/Library/Application Support/NapCat`、`<home>/.local/share/NapCat`
-   - **盘根枚举**（`discoverNapCatInstallRoots`）：上游 `writePath` 在 Windows/Linux 上**就是安装目录本身**
+   - **盘根枚举**（`discoverNapCatInstallRoots` / `discoverNapCatInstallRootsDetailed`）：上游 `writePath` 在 Windows/Linux 上**就是安装目录本身**
      （用户可装在 `D:\NapCat`、`D:\QQChatExporter`…），默认根清单命中不了 →
      枚举存在的盘根（`A:\`…`Z:\`，只 stat 判断存在），取其**一级子目录**里名字像 `*NapCat*`/`*NapCatQQ*`
      或**其下有 `config` 目录**的，收为候选根。**不做全盘递归**。
-   - **调用方（Task 4）必须合并三类根**再传给 `findLocalNapCat`：`cfg.autoDetect.paths`（用户显式配置，优先级最高）
+     - 候选根上限**按盘各自计数**（一盘不能挤掉另一盘），盘内**名字像 NapCat 的优先**；
+     - 触顶有信号：详细版返回 `{ roots, truncated }`；
+     - `maxRoots: 0` = **禁用盘根发现**（可配，见 Task 3 的 `autoDetect.maxRoots`）。
+   - **调用方（Task 4）必须合并三类根**再传给 `findLocalNapCat`：`cfg.autoDetect.paths`（用户显式配置，**排在最前**、优先级最高）
      → `defaultNapCatRoots(...)` → `discoverNapCatInstallRoots(...)`。
 2. 在每个根目录下**最多两层**查找 `onebot11*.json`（NapCat 把每个账号的配置写成 `onebot11_<uin>.json`）与 `webui.json`；**不做**全盘递归。
 3. 从找到的 `onebot11*.json` 里读 `network.httpServers` / `network.websocketServers`，取 `enable:true` 的项 → 生成端点：`http://<host>:<port>` / `ws://<host>:<port>`；`host` 为 `0.0.0.0` 或 `::` 时**改写成回环**（`127.0.0.1` / `[::1]`），因为本机探测只连回环。
-4. 从 `webui.json` 读 `port`；`token` **只给「有没有」**（`tokenRequired`），**明文不进返回值**。
+4. 从 `webui.json` 读 `port`；`token` **只给「有没有」**（`hasToken` 布尔），**明文不进返回值**。
 5. 找不到任何 NapCat → 返回空数组，**不抛错**。
 6. 目录/文件不可读（权限、占用）→ 跳过，**不抛错**。
 
@@ -133,14 +142,17 @@
 - Test: `tests/config.test.ts`
 
 **Interfaces:**
-- Produces: `PluginConfig.autoDetect` 扩展为 `{ ports: number[]; endpoints: string[]; paths: string[]; probeTimeoutMs: number }`
-- 默认值：`ports: [3000, 3001, 6099]`、`endpoints: []`、`paths: []`、`probeTimeoutMs: 1200`
-- **向后兼容**：`loadConfig` 读旧配置文件（没有 `paths`/`probeTimeoutMs`）时用默认值补齐（现有深合并机制应已覆盖，验证即可）
+- Produces: `PluginConfig.autoDetect` 扩展为
+  `{ ports: number[]; endpoints: string[]; paths: string[]; probeTimeoutMs: number; scanDrives: boolean; maxRoots: number }`
+- 默认值：`ports: [3000, 3001, 6099]`、`endpoints: []`、`paths: []`、`probeTimeoutMs: 1200`、`scanDrives: true`、`maxRoots: 32`
+- **向后兼容**：`loadConfig` 读旧配置文件（没有 `paths`/`probeTimeoutMs`/`scanDrives`/`maxRoots`）时用默认值补齐（现有深合并机制应已覆盖，验证即可）
 
 **要求**
 - `paths` 只允许**绝对路径**；相对路径在 `loadConfig` 时被丢弃（避免相对当前工作目录的歧义）
 - `ports` 只接受 1–65535 的整数，越界丢弃
 - `probeTimeoutMs` 只接受 100–10000 的整数，越界回默认
+- `scanDrives` 只接受布尔值
+- `maxRoots` 只接受 0–512 的整数，越界回默认（`0` = 禁用盘根发现，合法）
 - 新增字段的 env 覆盖不需要（userConfig 只暴露两项）
 
 **测试要求**：旧配置文件能正常加载并补齐新字段；非法 `paths`/`ports`/`probeTimeoutMs` 被丢弃或回落默认值。

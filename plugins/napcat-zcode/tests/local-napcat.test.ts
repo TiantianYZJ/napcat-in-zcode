@@ -15,6 +15,7 @@ import {
   collectNapCatRoots,
   defaultNapCatRoots,
   discoverNapCatInstallRoots,
+  discoverNapCatInstallRootsDetailed,
   findLocalNapCat,
   installPathsOf,
   MAX_DISCOVERED_ROOTS,
@@ -171,7 +172,7 @@ describe('findLocalNapCat', () => {
     const found = findLocalNapCat([root]);
 
     expect(found[0].webui?.port).toBe(6099);
-    expect(found[0].webui?.tokenRequired).toBe(true);
+    expect(found[0].webui?.hasToken).toBe(true);
     // token 明文不进返回值
     expect(JSON.stringify(found[0])).not.toContain('webui-secret-token');
     // 类型里没有 token 字段 → 运行时也不能有（`webui.token` 必须是编译错误，不是 undefined）
@@ -501,6 +502,64 @@ describe('drive root discovery', () => {
 
     const capped = discoverNapCatInstallRoots('linux', { driveRoots: [drive], maxRoots: 2 });
     expect(capped).toHaveLength(2);
+  });
+
+  it('counts the cap per drive so one drive cannot crowd out another', () => {
+    const driveA = join(tmp, 'A');
+    const driveB = join(tmp, 'B');
+    for (let i = 0; i < 5; i++) mkdirSync(join(driveA, `NapCat${i}`, 'config'), { recursive: true });
+    // B 盘上只有一个真机安装，但它不能被 A 盘挤掉
+    const real = join(driveB, 'QQChatExporter');
+    mkdirSync(join(real, 'config'), { recursive: true });
+
+    const roots = discoverNapCatInstallRoots('linux', { driveRoots: [driveA, driveB], maxRoots: 2 });
+
+    expect(roots).toContain(real);
+  });
+
+  it('puts the napcat-named dirs before the config-rule ones', () => {
+    const drive = join(tmp, 'drive');
+    const byConfig = join(drive, 'ZZZExporter'); // 只有 config 规则能命中
+    mkdirSync(join(byConfig, 'config'), { recursive: true });
+    const byName = join(drive, 'NapCat'); // 名字规则命中
+    mkdirSync(byName, { recursive: true });
+
+    const candidates = napCatCandidateDirs(drive);
+
+    expect(candidates.indexOf(byName)).toBeLessThan(candidates.indexOf(byConfig));
+  });
+
+  it('reports truncation when a drive hits the cap', () => {
+    const drive = join(tmp, 'drive');
+    for (let i = 0; i < 5; i++) mkdirSync(join(drive, `NapCat${i}`, 'config'), { recursive: true });
+
+    const hit = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [drive], maxRoots: 2 });
+    expect(hit.roots).toHaveLength(2);
+    expect(hit.truncated).toBe(true);
+
+    const notHit = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [drive], maxRoots: 10 });
+    expect(notHit.roots).toHaveLength(5);
+    expect(notHit.truncated).toBe(false);
+  });
+
+  it('treats maxRoots 0 as disabling the drive discovery', () => {
+    const drive = join(tmp, 'drive');
+    mkdirSync(join(drive, 'NapCat', 'config'), { recursive: true });
+
+    const disabled = discoverNapCatInstallRootsDetailed('linux', { driveRoots: [drive], maxRoots: 0 });
+    expect(disabled.roots).toEqual([]);
+    expect(disabled.truncated).toBe(false);
+    expect(discoverNapCatInstallRoots('linux', { driveRoots: [drive], maxRoots: 0 })).toEqual([]);
+  });
+
+  it('keeps the string array shape of the thin wrapper', () => {
+    const drive = join(tmp, 'drive');
+    mkdirSync(join(drive, 'NapCat', 'config'), { recursive: true });
+
+    const roots = discoverNapCatInstallRoots('linux', { driveRoots: [drive] });
+
+    expect(Array.isArray(roots)).toBe(true);
+    expect(roots.every((r) => typeof r === 'string')).toBe(true);
   });
 });
 
