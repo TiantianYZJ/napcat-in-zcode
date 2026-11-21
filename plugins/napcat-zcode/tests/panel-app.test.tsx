@@ -150,13 +150,19 @@ describe('App 状态机', () => {
       error: '连接超时',
     });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('连接超时'));
+    // 状态条只留短词（错误详情悬停可见），完整人话在主区错误卡
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未连接'));
+    await waitFor(() => expect(screen.getByTestId('phase-error-detail').textContent).toContain('连接超时'));
   });
 
   it('握手失败 → 报错而不是白屏', async () => {
     mock.handshake.mockRejectedValue(new Error('host bridge initialize failed'));
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('host bridge initialize failed'));
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未连接'));
+    // 未知错误逐字保留（不编造原因），进主区错误卡
+    await waitFor(() =>
+      expect(screen.getByTestId('phase-error-detail').textContent).toContain('host bridge initialize failed'),
+    );
   });
 
   it('失败态可以展开「重新配置端点」表单（端点不预填，避免无声覆盖已有配置）', async () => {
@@ -253,7 +259,7 @@ describe('App 能力降级', () => {
       error: '连接超时',
     });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('连接超时'));
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未连接'));
     const reason = screen.getByTestId('act-export').getAttribute('data-reason') ?? '';
     expect(reason).toContain('连接失败');
     expect(reason).not.toContain('正在连接宿主');

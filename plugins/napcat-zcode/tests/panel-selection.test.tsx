@@ -24,9 +24,17 @@ describe('MessageList selection', () => {
   });
 
   it('renders media placeholder text', () => {
-    const msgs: Msg[] = [{ ...MSGS[0], segments: [{ kind: 'image', url: 'https://x/i.png' }], text: '[图片]' }];
+    // 无 url 的图片段：没有可拉的地址 → 保持 [图片] 占位（与 text 一致）
+    const msgs: Msg[] = [{ ...MSGS[0], segments: [{ kind: 'image' }], text: '[图片]' }];
     const { getByTestId } = render(<MessageList messages={msgs} selection={new Set()} onToggle={vi.fn()} onLoadOlder={vi.fn()} />);
     expect(getByTestId('msg-a').textContent).toContain('[图片]');
+  });
+
+  it('带 url 的图片段走代理加载通道（挂起时是加载占位，不是破图）', () => {
+    const msgs: Msg[] = [{ ...MSGS[0], segments: [{ kind: 'image', url: 'https://x/i.png' }], text: '[图片]' }];
+    const { getByTestId } = render(<MessageList messages={msgs} selection={new Set()} onToggle={vi.fn()} onLoadOlder={vi.fn()} />);
+    // 桥未握手 → readImage 挂起 → 加载占位；真实环境下成功出图、失败回退占位符
+    expect(getByTestId('msg-image-loading')).toBeTruthy();
   });
 
   it('shift 连选把 shift 模式与下标交给上层', () => {

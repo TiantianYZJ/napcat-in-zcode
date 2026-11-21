@@ -78,6 +78,10 @@ const dom = new JSDOM(html, {
           const fn = TOOL_RESULTS[msg.params.name];
           const data = typeof fn === 'function' ? fn(msg.params.arguments ?? {}) : fn;
           reply({ content: [{ type: 'text', text: JSON.stringify(data ?? {}) }] });
+        } else if (msg.method === 'resources/read') {
+          // 图片代理资源：回一张 1x1 PNG（base64），面板转成 data: URL 渲染
+          const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+          reply({ contents: [{ uri: msg.params?.uri ?? 'ui://napcat-zcode/image/x', mimeType: 'image/png', blob: PNG_1X1 }] });
         } else {
           reply({});
         }
@@ -111,9 +115,13 @@ try {
 
   // 会话项的 testid 带 kind（群与好友的 id 是两套编号空间，数值可以完全相同）
   click(q('[data-testid="chat-group-12345"]'));
-  await sleep(400);
-  const msgs = qa('[data-testid^="msg-"]');
+  await sleep(600);
+  // 图片段渲染出的 msg-image* 元素不是消息行，不计入条数
+  const isMsgImage = (el) => /^msg-image/.test(el.getAttribute('data-testid') ?? '');
+  const msgs = qa('[data-testid^="msg-"]').filter((el) => !isMsgImage(el));
   check('点击会话后消息流渲染出 3 条', msgs.length === 3, msgs.map((m) => m.getAttribute('data-testid')).join(','));
+  await sleep(400); // 图片走 readServerResource 的异步链，等它落定
+  check('图片消息渲染出真图（服务端代理 → data: URL）', qa('[data-testid="msg-image"]').length === 1, qa('[data-testid="msg-image"]').map((el) => (el.getAttribute('src') || '').slice(0, 30)).join(','));
   // ZCode 风格改版后发言人名渲染在 .msggroup 组头（连续同发言者归组），消息行本体是正文
   check('消息组含发言人名与正文',
     (msgs[0]?.closest('.msggroup')?.textContent || '').includes('Alice') && (msgs[0]?.textContent || '').includes('场地定了吗'),

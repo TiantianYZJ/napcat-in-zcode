@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { msgKey, type Msg } from '../api.js';
+import { msgKey, type Msg, type Seg } from '../api.js';
+import { ChatImage } from './ChatImage.js';
 
 /**
  * `HH:mm`（消息时间是 epoch 秒）。
@@ -10,6 +11,49 @@ import { msgKey, type Msg } from '../api.js';
 export function hm(t: number | undefined): string {
   const d = new Date((t ?? Number.NaN) * 1000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 非文本段的占位文案（与服务端 PLACEHOLDERS 口径一致）。 */
+function segPlaceholder(seg: Seg): string {
+  switch (seg.kind) {
+    case 'image':
+      return '[图片]';
+    case 'voice':
+      return '[语音]';
+    case 'video':
+      return '[视频]';
+    case 'file':
+      return seg.fileName ? `[文件 ${seg.fileName}]` : '[文件]';
+    case 'face':
+      return '[表情]';
+    case 'at':
+      return seg.name ? `@${seg.name}` : seg.qq ? `@${seg.qq}` : '@';
+    case 'json':
+      return '[卡片消息]';
+    case 'forward':
+      return '[合并转发]';
+    default:
+      return seg.text ?? '';
+  }
+}
+
+/**
+ * 消息体：图片段渲染真图（服务端代理资源 → data: URL），其余段用占位文本。
+ * 纯文本消息沿用 `m.text` 直渲染（避免多套一层 DOM）。
+ */
+function MessageBody({ m }: { m: Msg }) {
+  const segments = m.segments;
+  if (!segments || segments.every((s) => s.kind === 'text' || !s.url)) {
+    return <div className="body">{m.text}</div>;
+  }
+  return (
+    <div className="body">
+      {segments.map((seg, i) => {
+        if (seg.kind === 'image' && seg.url) return <ChatImage key={`${i}-img`} url={seg.url} />;
+        return <span key={`${i}-${seg.kind}`}>{segPlaceholder(seg)}</span>;
+      })}
+    </div>
+  );
 }
 
 /**
@@ -186,7 +230,7 @@ export function MessageList({
               }}
             >
               {m.replyTo && <div className="reply">↪ {m.replyTo.preview}</div>}
-              <div className="body">{m.text}</div>
+              <MessageBody m={m} />
             </div>
           ))}
         </div>

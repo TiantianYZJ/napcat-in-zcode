@@ -216,3 +216,23 @@ describe('msgKey 的退化形态', () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe('friendlyError 的错误转译', () => {
+  it('fetch failed → 连接排查人话（不再糊英文原文）', () => {
+    expect(mod.friendlyError('fetch failed')).toContain('连不上 NapCat');
+    expect(mod.friendlyError('Error: fetch failed')).toContain('重试');
+  });
+
+  it('连接拒绝 / 超时 → 指向运行状态与端口', () => {
+    expect(mod.friendlyError('connect ECONNREFUSED 127.0.0.1:3000')).toContain('OneBot 端口');
+    expect(mod.friendlyError('ETIMEDOUT')).toContain('连不上 NapCat');
+  });
+
+  it('token 拒绝 → 指向 token 核对', () => {
+    expect(mod.friendlyError('HTTP 401 Unauthorized')).toContain('token');
+  });
+
+  it('未知错误逐字保留（不编造原因）', () => {
+    expect(mod.friendlyError('OneBot 返回了奇怪的状态')).toBe('OneBot 返回了奇怪的状态');
+  });
+});

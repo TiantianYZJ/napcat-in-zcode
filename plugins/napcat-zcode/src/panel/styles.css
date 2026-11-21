@@ -191,6 +191,15 @@ body {
 
 /* ---------- 通用控件 ---------- */
 
+/* 胶囊按钮：与顶部气泡同一语言（半圆端点切线连续） */
+.btn.pill {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: var(--text-ui-sm);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -312,9 +321,9 @@ textarea {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 0 6px;
-  height: 18px;
-  border-radius: var(--radius-sm);
+  padding: 0 8px;
+  height: 20px;
+  border-radius: 999px; /* 状态胶囊：与顶部气泡同一语言 */
   background: var(--color-surface);
   color: var(--color-foreground-subtle);
   font-size: var(--text-ui-xs);
@@ -338,15 +347,30 @@ textarea {
 
 /* ---------- 标题栏（连接状态） ---------- */
 
-.statusbar {
+/* 顶部气泡：状态与设置各自成胶囊（半圆端点 = 切线连续曲率），
+   层次靠背景对比 + 边框，不加阴影（ZCode 的 restrained depth） */
+.topbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 8px 12px;
-  background: var(--color-header);
-  border-bottom: 1px solid var(--color-border);
+  padding: 8px 12px 4px;
+}
+
+.topbar-spacer {
+  flex: 1 1 auto;
+}
+
+.statusbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  font-size: var(--text-ui-sm);
 }
 
 .statusbar .dot {
@@ -591,6 +615,7 @@ textarea {
   font-size: var(--text-ui-xs);
   color: var(--color-foreground-subtlest);
   padding: 0 2px 2px;
+  font-variant-numeric: tabular-nums; /* 时间戳等宽排列，滚动时列不抖 */
 }
 
 .msg {
@@ -825,6 +850,53 @@ textarea {
   font-size: var(--text-ui-sm);
 }
 
+/* 连接失败的错误卡：标题 + 人话详情 + 动作行，比裸占位符可读 */
+.error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+  margin: 40px auto 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+}
+
+.error-card .error-title {
+  font-size: var(--text-ui-base);
+  font-weight: 600;
+  color: var(--color-destructive);
+}
+
+.error-card .error-detail {
+  margin: 0;
+  font-size: var(--text-ui-sm);
+  line-height: 1.5;
+  color: var(--color-foreground-subtle);
+  overflow-wrap: anywhere;
+}
+
+/* 聊天图片（服务端代理 → data: URL）与其占位框 */
+.msg-img {
+  display: block;
+  max-width: min(240px, 100%);
+  max-height: 240px;
+  border-radius: var(--radius-md);
+  cursor: zoom-in;
+}
+
+.msg-img-loading,
+.msg-img-fallback {
+  display: inline-block;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  overflow-wrap: anywhere;
+}
+
 .empty .title,
 .placeholder .title {
   font-size: var(--text-ui-base);
@@ -998,6 +1070,46 @@ textarea {
 .host-card .host-msg input {
   display: block;
   margin-top: 4px;
+}
+
+/* 事实网格：定宽弱标签列 + 值列（ZCode 的 definition grid 模式，
+   信息网格 `grid-cols-[8rem_minmax(0,1fr)]`）；端口/路径是技术内容 → mono */
+.host-summary {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 10px;
+  margin-bottom: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  font-variant-numeric: tabular-nums;
+}
+
+.host-card .host-grid {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: var(--text-ui-sm);
+}
+
+.host-card .host-grid .k {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  padding-top: 1px;
+}
+
+.host-card .host-grid .v {
+  color: var(--color-foreground-subtle);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.host-card .host-grid .mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-ui-xs);
 }
 
 .host-card .host-confirm {

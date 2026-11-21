@@ -4,14 +4,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerTools } from './tools.js';
 import { registerPanelResource } from './uiresource.js';
+import { registerImageResource, type ImageFetch } from './imageresource.js';
 import { appState, closeConnection } from './state.js';
 
 // 打包产物是 dist/server.mjs → here = dist/ → 面板在 dist/ui/panel.html
 const here = dirname(fileURLToPath(import.meta.url));
 
-const server = new McpServer({ name: 'napcat', version: '0.6.0' });
+const server = new McpServer({ name: 'napcat', version: '0.7.0' });
 registerTools(server, appState);
 registerPanelResource(server, join(here, 'ui', 'panel.html'));
+// 聊天图片的只读代理资源：面板 readServerResource 拉图（默认 CSP 拦外域 img，
+// 规范内通路是服务端取回后以 blob 给页面）
+const imageFetch: ImageFetch = (url, init) => fetch(url, init);
+registerImageResource(server, imageFetch);
 
 // stdio 传输：stdout 是协议通道，**不能**往 stdout 写任何日志（只能写 stderr）。
 await server.connect(new StdioServerTransport());

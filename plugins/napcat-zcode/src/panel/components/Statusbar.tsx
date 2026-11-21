@@ -1,4 +1,4 @@
-import type { StatusInfo } from '../api.js';
+import { friendlyError, type StatusInfo } from '../api.js';
 
 /**
  * 连接模式的中文标签。
@@ -89,8 +89,11 @@ export function Statusbar({
       : phase === 'unconfigured'
         ? '未配置 OneBot 端点'
         : phase === 'error'
-          ? (status?.error || notice || '未连接 OneBot')
+          ? '未连接'
           : '正在连接宿主…';
+  // 错误详情（人话）给 title：状态条只留短词，悬停能看完整原因
+  const errorDetail =
+    phase === 'error' ? friendlyError(status?.error || notice || '连接失败') : undefined;
   const detection = status?.detection;
   /**
    * 摘要行只在「结论有意义」时出现：
@@ -98,30 +101,38 @@ export function Statusbar({
    * 已连接时连接本身就是答案，不必再摆一句「尚未检测」。
    */
   const showSummary = phase === 'unconfigured' || phase === 'error' || !!detection;
+  // 顶部气泡化（对齐 ZCode 的胶囊语言）：状态是左胶囊、设置是右胶囊，
+  // 半圆端点的 border-radius 在切线处天然曲率连续（G3 观感）
   return (
-    <div
-      className={`statusbar ${phase}`}
-      data-testid="statusbar"
-      data-phase={phase}
-      data-mode={mode || undefined}
-    >
-      <span className="dot" aria-hidden="true" />
-      <span className="status-text" title={mode ? `连接模式：${modeLabel(mode)}` : undefined}>
-        {text}
-      </span>
-      {showSummary && (
-        <span className="detect-summary" data-testid="detect-summary" title={detectionSummary(detection, hadDetection)}>
-          {detectionSummary(detection, hadDetection)}
+    <div className="topbar" data-testid="topbar">
+      <div
+        className={`statusbar ${phase}`}
+        data-testid="statusbar"
+        data-phase={phase}
+        data-mode={mode || undefined}
+      >
+        <span className="dot" aria-hidden="true" />
+        <span
+          className="status-text"
+          title={errorDetail ?? (mode ? `连接模式：${modeLabel(mode)}` : undefined)}
+        >
+          {text}
         </span>
-      )}
-      {status?.warning && (
-        <span className="status-warning" data-testid="status-warning" title={status.warning}>
-          {status.warning}
-        </span>
-      )}
+        {showSummary && (
+          <span className="detect-summary" data-testid="detect-summary" title={detectionSummary(detection, hadDetection)}>
+            {detectionSummary(detection, hadDetection)}
+          </span>
+        )}
+        {status?.warning && (
+          <span className="status-warning" data-testid="status-warning" title={status.warning}>
+            {status.warning}
+          </span>
+        )}
+      </div>
+      <span className="topbar-spacer" aria-hidden="true" />
       {onSettings && (
         <button
-          className="btn ghost"
+          className="btn pill"
           data-testid="settings-btn"
           onClick={onSettings}
           title="查看插件配置（只读）"

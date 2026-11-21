@@ -450,6 +450,75 @@ export async function callToolJson<T>(name: string, args: object): Promise<T> {
 }
 
 /**
+ * 把宿主 / 网络层的常见错误转译成**人话**。
+ *
+ * 原文（如 undici 的 `fetch failed`）对用户没有任何信息量；
+ * 转译只针对已知模式，未知错误逐字保留（不编造原因）。
+ */
+export function friendlyError(text: string): string {
+  if (/fetch failed/i.test(text)) {
+    return '连不上 NapCat（网络错误）：请确认 NapCat 正在运行、端点地址与 token 正确，然后点「重试」。';
+  }
+  if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|socket hang up|ECONNRESET/i.test(text)) {
+    return '连不上 NapCat（连接被拒或超时）：请确认 NapCat 正在运行、OneBot 端口正确；若配置了 token 请核对。';
+  }
+  if (/401|unauthorized|invalid token|access token/i.test(text)) {
+    return 'NapCat 拒绝了访问（token 可能不对）：请核对 token 后重试；本机回环连接可以不设 token。';
+  }
+  return text;
+}
+
+/** base64url 编码（图片资源 URI 的模板变量里不能出现 / + =）。 */
+function b64url(text: string): string {
+  // 不用 TextEncoder：jsdom 的 window 里没有它；encodeURIComponent→latin1 字节串同样 unicode 安全
+  return btoa(unescape(encodeURIComponent(text)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/**
+ * 图片缓存（会话内）：同一 URL 只拉一次。
+ *
+ * 面板是单页应用，模块级 Map 随面板销毁；不落盘、不进模型上下文。
+ */
+const imageCache = new Map<string, string>();
+const imagePending = new Map<string, Promise<string>>();
+
+/**
+ * 拉一张聊天图片，返回 `data:` URL（CSP 的 `img-src data:` 放行）。
+ *
+ * 走 `readServerResource`（`resources/read`）：结果只给页面，**不进模型上下文**。
+ * 失败直接抛错（调用方回退成占位符）；同 URL 并发请求共享同一次拉取。
+ */
+export async function readImage(url: string): Promise<string> {
+  const cached = imageCache.get(url);
+  if (cached) return cached;
+  const pending = imagePending.get(url);
+  if (pending) return pending;
+  const job = (async (): Promise<string> => {
+    await handshake();
+    const uri = `ui://napcat-zcode/image/${b64url(url)}`;
+    const raw = (await bridge.readResource(uri)) as { contents?: unknown } | undefined;
+    const first = Array.isArray(raw?.contents) ? (raw.contents[0] as Record<string, unknown> | undefined) : undefined;
+    const blob = typeof first?.blob === 'string' ? first.blob : undefined;
+    const mimeType = typeof first?.mimeType === 'string' ? first.mimeType : undefined;
+    if (!blob || !mimeType || !mimeType.startsWith('image/')) {
+      throw new Error('图片资源返回为空或不是图片。');
+    }
+    const dataUrl = `data:${mimeType};base64,${blob}`;
+    imageCache.set(url, dataUrl);
+    return dataUrl;
+  })();
+  imagePending.set(url, job);
+  try {
+    return await job;
+  } finally {
+    imagePending.delete(url);
+  }
+}
+
+/**
  * 面板自证：`messages` 必须是数组，且每条都带有效的 `time`（epoch 秒）。
  *
  * 工具侧的 `messages` 入参**没有 schema 约束**（`z.any()`）→ 面板自己保证形状，

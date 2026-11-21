@@ -639,3 +639,14 @@
 - [x] 视口复验（同 15.5 方法，场景扩为 5 个：chat / install / stop / **uninstall** / **guide** × 深浅 × 320/480/800）：卸载确认区点名目录且提示不可恢复、先停后卸；引导卡（橙色标题、打开 WebUI 扫码 / 刷新状态、`webui.json` 掩码提示）三视口无溢出无重叠；主题改由假宿主 `hostContext.theme` 驱动，light/dark 均正确渲染
 - [x] 宿主令牌桥接：面板变量全部改为 `var(--color-background-primary, zai 回退)` 等官方映射（来源 zai-org/ZCode `packages/ui/src/plugin-ui/domain/pluginUiStyleVariables.ts` 与官方 documents 面板）；`data-theme` 由 `hostContext.theme` 设置并跟随 `ui/notifications/host-context-changed`（params 为部分上下文，做合并）
 - [x] deep 安全扫描（Mimosa）：0 发现项，305 个依赖无 advisory 命中（封印 `sha256:bde9c722…`，库来源 / 调用图证据维度按插件提示为部分证据）
+
+### 15.7 v0.7.0 增量验收记录（真实环境反馈：图片显示 + 错误态 + 布局修复 + 设计规范对齐）
+
+用户在真实 ZCode 侧栏里跑 0.6.0 的两张截图暴露的问题，逐项修复：
+
+- [x] **抽屉遮表单（截图 bug）**：`unconfigured` / `error` 相位下会话抽屉仍渲染且默认展开，盖住连接表单 → 抽屉只在 `ready && tab==='records'` 渲染；预览截图确认表单完整可见
+- [x] **错误态裸英文（截图 bug）**：`fetch failed` 原文糊在主区 → `friendlyError` 把已知模式（fetch failed / ECONNREFUSED / 401 等）转译成排查指引，未知错误逐字保留；状态条只显示「未连接」短词（详情悬停可见），主区改为错误卡（标题 + 人话详情 + 重试 / 重新配置端点）
+- [x] **聊天图片显示**：MCP Apps 默认 CSP `img-src 'self' data:` 拦外域（规范：宿主不得放行未声明域，图片 CDN 域不固定）→ 规范内通路：新增资源模板 `ui://napcat-zcode/image/{urlB64}`（服务端只读代理：仅 https 公网、逐跳重定向校验、拒绝内网/回环/保留地址含 IPv4-mapped 展开、凭据拒绝、`image/*` 校验、8 MB 上限、15 s 超时）；面板 `readServerResource` → `data:` URL 渲染，失败回退占位符；同 URL 会话内缓存；结果只给页面不进模型上下文
+- [x] **设计规范对齐**（zai-org/ZCode `DESIGN.md` / theme tokens / 官方面板模式）：宿主卡信息改为**事实网格**（定宽弱标签列 + 值列，端口/路径 mono、`tabular-nums`）；宿主页顶部摘要行（计数等宽）；消息组头时间 `tabular-nums`；错误卡 / 引导卡走边框分层而非阴影
+- [x] `npm run typecheck` / `npm test`（31 文件 / 726 通过 / 4 跳过，新增 imageresource 10、chat-image 3、friendlyError 4 等）/ `npm run build` / `npm run smoke`（stdio 19/19、panel **15/15**——新增「图片渲染真图」断言）
+- [x] 视口复验：error / unconfigured / install 三场景 × 深浅 × 320/480/800 无溢出无重叠；error 卡与事实网格在两主题下层次清晰

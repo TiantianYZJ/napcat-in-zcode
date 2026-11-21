@@ -182,6 +182,13 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
     <div className="detect" data-testid="host-panel">
       <div className="section-title">受管宿主（插件自己下载安装的 NapCat）</div>
 
+      {installs.length > 0 && (
+        <div className="host-summary" data-testid="host-summary">
+          {installs.length} 个受管安装 ·{' '}
+          {statuses.filter((s) => ['running', 'starting', 'degraded'].includes(s.state)).length} 个运行中
+        </div>
+      )}
+
       {installs.length === 0 && !job && (
         <div className="detect-notfound" data-testid="host-empty">
           还没装过 NapCat。装好之后就能在这里一键启动 / 停止，不用再手动敲命令。
@@ -201,13 +208,32 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                 {badge.text}
               </span>
             </div>
-            {s.install?.dir && <div className="host-dir">{s.install.dir}</div>}
+            {/* 事实网格（ZCode 的 definition grid：定宽弱标签列 + 值列），把散行收成可扫读的层次 */}
+            <div className="host-grid" data-testid="host-facts">
+              <span className="k">目录</span>
+              <span className="v mono">{s.install?.dir ?? '—'}</span>
+              <span className="k">WebUI</span>
+              <span className="v mono">
+                {s.webuiPort
+                  ? `127.0.0.1:${s.webuiPort}${s.webuiReachable ? ' · 已可达' : ' · 不可达'}`
+                  : '—'}
+              </span>
+              <span className="k">OneBot</span>
+              <span className="v mono">
+                {s.onebotPort
+                  ? `127.0.0.1:${s.onebotPort}${s.onebotPortReachable ? ' · 已监听' : ' · 未监听'}`
+                  : '—'}
+              </span>
+              {s.login && (
+                <>
+                  <span className="k">登录</span>
+                  <span className="v">
+                    {s.login.nickname}（<span className="mono">{s.login.user_id}</span>）
+                  </span>
+                </>
+              )}
+            </div>
             {s.message && <div className="host-msg">{s.message}</div>}
-            {s.login && (
-              <div className="host-msg">
-                已登录：{s.login.nickname}（{s.login.user_id}）
-              </div>
-            )}
             <div className="host-acts">
               {s.state === 'running' || s.state === 'starting' || s.state === 'degraded' ? (
                 <button
@@ -257,11 +283,6 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                 卸载
               </button>
             </div>
-            {s.onebotPort && (
-              <div className="host-msg" data-testid="host-onebot-endpoint">
-                OneBot：{s.onebotPortReachable ? '已监听' : '未监听'} · 127.0.0.1:{s.onebotPort}
-              </div>
-            )}
             {s.state === 'running' && !s.login && s.webuiPort && (
               <div className="host-login-guide" data-testid="host-login-guide">
                 <div className="guide-title">还没有登录 QQ</div>

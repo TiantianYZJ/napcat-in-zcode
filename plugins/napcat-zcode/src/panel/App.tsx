@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, bridge, handshake, msgKey, type Chat, type Msg, type StatusInfo } from './api.js';
+import { api, bridge, friendlyError, handshake, msgKey, type Chat, type Msg, type StatusInfo } from './api.js';
 import type { HostCaps } from './bridge.js';
 import { Statusbar } from './components/Statusbar.js';
 import { ChatList } from './components/ChatList.js';
@@ -227,7 +227,8 @@ export function App() {
       setNotice(null);
       setPhase('ready');
     } catch (e) {
-      showNotice(errText(e));
+      // 错误进状态条与主区：转译成人话（未知错误保留原文）
+      showNotice(friendlyError(errText(e)));
       setPhase('error');
     }
   }, []);
@@ -518,10 +519,14 @@ export function App() {
         {/*
           会话抽屉：窄侧栏里，消息流比会话列表更值钱 → 列表收成抽屉，
           选中会话后自动收起，工具栏的「会话」按钮再展开。
+          只在「已连接 + 记录页」渲染：未配置/错误态它是纯遮挡
+          （盖住连接表单），不存在需要列表的时刻。
         */}
-        <div className={`drawer ${drawerOpen ? 'open' : ''}`} data-testid="chat-drawer">
-          <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
-        </div>
+        {phase === 'ready' && tab === 'records' && (
+          <div className={`drawer ${drawerOpen ? 'open' : ''}`} data-testid="chat-drawer">
+            <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
+          </div>
+        )}
         <div className="right">
           {phase === 'ready' && (
             <div className="tabs" role="tablist" data-testid="tabs">
@@ -566,14 +571,19 @@ export function App() {
                 initialEndpoint=""
               />
             ) : (
-              <div className="placeholder" data-testid="phase-error">
-                <p>{notice?.text || status?.error || '连接失败'}</p>
-                <button className="btn primary" data-testid="retry-btn" onClick={() => void reload()}>
-                  重试
-                </button>
-                <button className="btn" data-testid="reconfigure-btn" onClick={() => setReconfiguring(true)}>
-                  重新配置端点
-                </button>
+              <div className="error-card" data-testid="phase-error">
+                <div className="error-title">连接 NapCat 失败</div>
+                <p className="error-detail" data-testid="phase-error-detail">
+                  {friendlyError(notice?.text || status?.error || '未知错误')}
+                </p>
+                <div className="host-acts">
+                  <button className="btn primary" data-testid="retry-btn" onClick={() => void reload()}>
+                    重试
+                  </button>
+                  <button className="btn" data-testid="reconfigure-btn" onClick={() => setReconfiguring(true)}>
+                    重新配置端点
+                  </button>
+                </div>
               </div>
             ))}
           {phase === 'ready' && tab === 'records' && (

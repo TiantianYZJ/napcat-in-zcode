@@ -20539,6 +20539,228 @@ var McpZodTypeKind;
   McpZodTypeKind2["Completable"] = "McpCompletable";
 })(McpZodTypeKind || (McpZodTypeKind = {}));
 
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/uriTemplate.js
+var MAX_TEMPLATE_LENGTH = 1e6;
+var MAX_VARIABLE_LENGTH = 1e6;
+var MAX_TEMPLATE_EXPRESSIONS = 1e4;
+var MAX_REGEX_LENGTH = 1e6;
+var UriTemplate = class _UriTemplate {
+  /**
+   * Returns true if the given string contains any URI template expressions.
+   * A template expression is a sequence of characters enclosed in curly braces,
+   * like {foo} or {?bar}.
+   */
+  static isTemplate(str) {
+    return /\{[^}\s]+\}/.test(str);
+  }
+  static validateLength(str, max, context) {
+    if (str.length > max) {
+      throw new Error(`${context} exceeds maximum length of ${max} characters (got ${str.length})`);
+    }
+  }
+  get variableNames() {
+    return this.parts.flatMap((part) => typeof part === "string" ? [] : part.names);
+  }
+  constructor(template) {
+    _UriTemplate.validateLength(template, MAX_TEMPLATE_LENGTH, "Template");
+    this.template = template;
+    this.parts = this.parse(template);
+  }
+  toString() {
+    return this.template;
+  }
+  parse(template) {
+    const parts = [];
+    let currentText = "";
+    let i = 0;
+    let expressionCount = 0;
+    while (i < template.length) {
+      if (template[i] === "{") {
+        if (currentText) {
+          parts.push(currentText);
+          currentText = "";
+        }
+        const end = template.indexOf("}", i);
+        if (end === -1)
+          throw new Error("Unclosed template expression");
+        expressionCount++;
+        if (expressionCount > MAX_TEMPLATE_EXPRESSIONS) {
+          throw new Error(`Template contains too many expressions (max ${MAX_TEMPLATE_EXPRESSIONS})`);
+        }
+        const expr = template.slice(i + 1, end);
+        const operator = this.getOperator(expr);
+        const exploded = expr.includes("*");
+        const names = this.getNames(expr);
+        const name = names[0];
+        for (const name2 of names) {
+          _UriTemplate.validateLength(name2, MAX_VARIABLE_LENGTH, "Variable name");
+        }
+        parts.push({ name, operator, names, exploded });
+        i = end + 1;
+      } else {
+        currentText += template[i];
+        i++;
+      }
+    }
+    if (currentText) {
+      parts.push(currentText);
+    }
+    return parts;
+  }
+  getOperator(expr) {
+    const operators = ["+", "#", ".", "/", "?", "&"];
+    return operators.find((op) => expr.startsWith(op)) || "";
+  }
+  getNames(expr) {
+    const operator = this.getOperator(expr);
+    return expr.slice(operator.length).split(",").map((name) => name.replace("*", "").trim()).filter((name) => name.length > 0);
+  }
+  encodeValue(value, operator) {
+    _UriTemplate.validateLength(value, MAX_VARIABLE_LENGTH, "Variable value");
+    if (operator === "+" || operator === "#") {
+      return encodeURI(value);
+    }
+    return encodeURIComponent(value);
+  }
+  expandPart(part, variables) {
+    if (part.operator === "?" || part.operator === "&") {
+      const pairs = part.names.map((name) => {
+        const value2 = variables[name];
+        if (value2 === void 0)
+          return "";
+        const encoded2 = Array.isArray(value2) ? value2.map((v) => this.encodeValue(v, part.operator)).join(",") : this.encodeValue(value2.toString(), part.operator);
+        return `${name}=${encoded2}`;
+      }).filter((pair) => pair.length > 0);
+      if (pairs.length === 0)
+        return "";
+      const separator = part.operator === "?" ? "?" : "&";
+      return separator + pairs.join("&");
+    }
+    if (part.names.length > 1) {
+      const values2 = part.names.map((name) => variables[name]).filter((v) => v !== void 0);
+      if (values2.length === 0)
+        return "";
+      return values2.map((v) => Array.isArray(v) ? v[0] : v).join(",");
+    }
+    const value = variables[part.name];
+    if (value === void 0)
+      return "";
+    const values = Array.isArray(value) ? value : [value];
+    const encoded = values.map((v) => this.encodeValue(v, part.operator));
+    switch (part.operator) {
+      case "":
+        return encoded.join(",");
+      case "+":
+        return encoded.join(",");
+      case "#":
+        return "#" + encoded.join(",");
+      case ".":
+        return "." + encoded.join(".");
+      case "/":
+        return "/" + encoded.join("/");
+      default:
+        return encoded.join(",");
+    }
+  }
+  expand(variables) {
+    let result = "";
+    let hasQueryParam = false;
+    for (const part of this.parts) {
+      if (typeof part === "string") {
+        result += part;
+        continue;
+      }
+      const expanded = this.expandPart(part, variables);
+      if (!expanded)
+        continue;
+      if ((part.operator === "?" || part.operator === "&") && hasQueryParam) {
+        result += expanded.replace("?", "&");
+      } else {
+        result += expanded;
+      }
+      if (part.operator === "?" || part.operator === "&") {
+        hasQueryParam = true;
+      }
+    }
+    return result;
+  }
+  escapeRegExp(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  partToRegExp(part) {
+    const patterns = [];
+    for (const name2 of part.names) {
+      _UriTemplate.validateLength(name2, MAX_VARIABLE_LENGTH, "Variable name");
+    }
+    if (part.operator === "?" || part.operator === "&") {
+      for (let i = 0; i < part.names.length; i++) {
+        const name2 = part.names[i];
+        const prefix = i === 0 ? "\\" + part.operator : "&";
+        patterns.push({
+          pattern: prefix + this.escapeRegExp(name2) + "=([^&]+)",
+          name: name2
+        });
+      }
+      return patterns;
+    }
+    let pattern;
+    const name = part.name;
+    switch (part.operator) {
+      case "":
+        pattern = part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)";
+        break;
+      case "+":
+      case "#":
+        pattern = "(.+)";
+        break;
+      case ".":
+        pattern = "\\.([^/,]+)";
+        break;
+      case "/":
+        pattern = "/" + (part.exploded ? "([^/,]+(?:,[^/,]+)*)" : "([^/,]+)");
+        break;
+      default:
+        pattern = "([^/]+)";
+    }
+    patterns.push({ pattern, name });
+    return patterns;
+  }
+  match(uri) {
+    _UriTemplate.validateLength(uri, MAX_TEMPLATE_LENGTH, "URI");
+    let pattern = "^";
+    const names = [];
+    for (const part of this.parts) {
+      if (typeof part === "string") {
+        pattern += this.escapeRegExp(part);
+      } else {
+        const patterns = this.partToRegExp(part);
+        for (const { pattern: partPattern, name } of patterns) {
+          pattern += partPattern;
+          names.push({ name, exploded: part.exploded });
+        }
+      }
+    }
+    pattern += "$";
+    _UriTemplate.validateLength(pattern, MAX_REGEX_LENGTH, "Generated regex pattern");
+    const regex = new RegExp(pattern);
+    const match = uri.match(regex);
+    if (!match)
+      return null;
+    const result = {};
+    for (let i = 0; i < names.length; i++) {
+      const { name, exploded } = names[i];
+      const value = match[i + 1];
+      const cleanName = name.replace("*", "");
+      if (exploded && value.includes(",")) {
+        result[cleanName] = value.split(",");
+      } else {
+        result[cleanName] = value;
+      }
+    }
+    return result;
+  }
+};
+
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/toolNameValidation.js
 var TOOL_NAME_REGEX = /^[A-Za-z0-9._-]{1,128}$/;
 function validateToolName(name) {
@@ -21375,6 +21597,30 @@ var McpServer = class {
     if (this.isConnected()) {
       this.server.sendPromptListChanged();
     }
+  }
+};
+var ResourceTemplate = class {
+  constructor(uriTemplate, _callbacks) {
+    this._callbacks = _callbacks;
+    this._uriTemplate = typeof uriTemplate === "string" ? new UriTemplate(uriTemplate) : uriTemplate;
+  }
+  /**
+   * Gets the URI template pattern.
+   */
+  get uriTemplate() {
+    return this._uriTemplate;
+  }
+  /**
+   * Gets the list callback, if one was provided.
+   */
+  get listCallback() {
+    return this._callbacks.list;
+  }
+  /**
+   * Gets the callback for completing a specific URI template variable, if one was provided.
+   */
+  completeCallback(variable) {
+    return this._callbacks.complete?.[variable];
   }
 };
 var EMPTY_OBJECT_JSON_SCHEMA = {
@@ -27193,11 +27439,104 @@ function registerPanelResource(server2, htmlPath) {
   });
 }
 
+// src/server/imageresource.ts
+var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+var MAX_IMAGE_REDIRECTS = 3;
+var IMAGE_TIMEOUT_MS = 15e3;
+var IMAGE_URI_PREFIX = "ui://napcat-zcode/image/";
+function decodeImageUrl(raw) {
+  try {
+    const text = Buffer.from(raw, "base64url").toString("utf-8");
+    return text && /^https?:\/\//i.test(text) ? text : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function assertImageHopAllowed(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("\u56FE\u7247\u5730\u5740\u65E0\u6CD5\u89E3\u6790\u3002");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("\u56FE\u7247\u5730\u5740\u5FC5\u987B\u662F https\u3002");
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new Error("\u56FE\u7247\u5730\u5740\u4E0D\u5141\u8BB8\u643A\u5E26\u51ED\u636E\u3002");
+  }
+  if (classifyHost(url.hostname) !== "public") {
+    throw new Error("\u56FE\u7247\u5730\u5740\u4E0D\u662F\u516C\u7F51\u5730\u5740\uFF0C\u5DF2\u62D2\u7EDD\u8BBF\u95EE\u3002");
+  }
+}
+async function fetchImage(rawUrl, fetcher) {
+  let current = rawUrl;
+  for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop++) {
+    assertImageHopAllowed(current);
+    const res = await fetcher(current, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS)
+    });
+    const status = res.status;
+    if (status >= 300 && status < 400) {
+      const location = res.headers.get("location");
+      if (!location || hop === MAX_IMAGE_REDIRECTS) {
+        throw new Error("\u56FE\u7247\u5730\u5740\u91CD\u5B9A\u5411\u8FC7\u591A\u6216\u7F3A\u5C11\u76EE\u6807\u3002");
+      }
+      current = new URL(location, current).toString();
+      continue;
+    }
+    if (!res.ok) {
+      throw new Error(`\u56FE\u7247\u4E0B\u8F7D\u5931\u8D25\uFF08HTTP ${status}\uFF09\u3002`);
+    }
+    const mimeType = (res.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
+    if (!mimeType.startsWith("image/")) {
+      throw new Error("\u76EE\u6807\u4E0D\u662F\u56FE\u7247\uFF08content-type \u4E0D\u662F image/*\uFF09\u3002");
+    }
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > MAX_IMAGE_BYTES) {
+      throw new Error("\u56FE\u7247\u8D85\u8FC7 8 MB\uFF0C\u4E0D\u4E88\u52A0\u8F7D\u3002");
+    }
+    return { mimeType, base64: Buffer.from(buf).toString("base64") };
+  }
+  throw new Error("\u56FE\u7247\u5730\u5740\u91CD\u5B9A\u5411\u8FC7\u591A\u3002");
+}
+function extractEncoded(href) {
+  const prefix = IMAGE_URI_PREFIX;
+  if (!href.startsWith(prefix)) return void 0;
+  const rest = href.slice(prefix.length);
+  return rest.split("?")[0]?.split("/")[0] || void 0;
+}
+function registerImageResource(server2, fetcher) {
+  const template = new ResourceTemplate("ui://napcat-zcode/image/{urlB64}", {
+    list: void 0
+    // 图片按需读取，没有可枚举的静态清单
+  });
+  server2.registerResource(
+    "chat-image",
+    template,
+    { description: "\u6309\u9700\u62C9\u53D6\u804A\u5929\u56FE\u7247\uFF08\u4EC5 https \u516C\u7F51\u5730\u5740\uFF0C\u7ED3\u679C\u53EA\u7ED9\u9762\u677F\uFF09" },
+    async (uri) => {
+      const encoded = extractEncoded(uri.href);
+      const url = encoded ? decodeImageUrl(encoded) : void 0;
+      if (!url) {
+        throw new Error("\u56FE\u7247\u8D44\u6E90 URI \u65E0\u6548\uFF08\u65E0\u6CD5\u8FD8\u539F\u56FE\u7247\u5730\u5740\uFF09\u3002");
+      }
+      const image = await fetchImage(url, fetcher);
+      return {
+        contents: [{ uri: uri.href, mimeType: image.mimeType, blob: image.base64 }]
+      };
+    }
+  );
+}
+
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.6.0" });
+var server = new McpServer({ name: "napcat", version: "0.7.0" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
+var imageFetch = (url, init) => fetch(url, init);
+registerImageResource(server, imageFetch);
 await server.connect(new StdioServerTransport());
 server.server.onclose = () => {
   void closeConnection(appState);
