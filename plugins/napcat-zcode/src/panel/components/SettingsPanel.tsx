@@ -3,23 +3,37 @@ import { api, type ConfigInfo } from '../api.js';
 import { modeLabel } from './Statusbar.js';
 
 /**
- * 设置面板（**只读**）。
+ * 设置面板。
  *
+ * 绝大部分是**只读展示**：
  * 读 `napcat_get_config`：端点已脱敏、token 已被服务端换成 `'***'`。
  * 面板**只展示、不回写**：
  * - token 连 `'***'` 都不打印（面板上只说「已设置」）；
  * - 端点/token 要改只能走「未配置 / 连接失败」态的表单（那里手输，绝不拿脱敏值回填）。
+ *
+ * **唯一可写的一项**是「本机 NapCat 扫描路径」（`autoDetect.paths`）：
+ * 此前只能手改 `config.json`，用户没有入口。
+ * 保存时调 `napcat_configure`（带 `paths`）——**端点留空**表示「只更新扫描路径、
+ * 不动已有连接」（用户还没配端点时也要能改路径）。
  */
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [cfg, setCfg] = useState<ConfigInfo | null>(null);
   const [err, setErr] = useState('');
+  /** 扫描路径输入框的内容（每行一个路径）。 */
+  const [pathsText, setPathsText] = useState('');
+  const [pathsSaving, setPathsSaving] = useState(false);
+  const [pathsMsg, setPathsMsg] = useState('');
+  const [pathsErr, setPathsErr] = useState('');
 
   useEffect(() => {
     let alive = true;
     api
       .getConfig()
       .then((c) => {
-        if (alive) setCfg(c);
+        if (!alive) return;
+        setCfg(c);
+        const auto = c.autoDetect as { paths?: string[] } | undefined;
+        setPathsText((auto?.paths ?? []).join('\n'));
       })
       .catch((e: unknown) => {
         if (alive) setErr(e instanceof Error ? e.message : String(e));
@@ -34,10 +48,32 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const exp = cfg?.export as { dir?: string; includeImages?: boolean } | undefined;
   const inj = cfg?.inject as { maxInjectChars?: number } | undefined;
 
+  /** 保存扫描路径（每行一个路径）。 */
+  const savePaths = async (): Promise<void> => {
+    const paths = pathsText
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+    setPathsSaving(true);
+    setPathsErr('');
+    setPathsMsg('');
+    try {
+      // 端点留空 = 只更新扫描路径，不动已有连接（服务端语义）。
+      // token 传空串 = 保留已保存的 token（服务端语义，面板不碰凭据）。
+      const r = await api.configure('', '', undefined, paths);
+      const saved = r.paths ?? paths;
+      setPathsMsg(`已保存 ${saved.length} 条扫描路径（下次检测生效）`);
+    } catch (e) {
+      setPathsErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPathsSaving(false);
+    }
+  };
+
   return (
     <div className="settings-panel" data-testid="settings-panel">
       <div className="settings-head">
-        <strong>插件配置（只读）</strong>
+        <strong>插件配置</strong>
         <button data-testid="settings-close" onClick={onClose}>
           关闭
         </button>
@@ -68,8 +104,33 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       ) : (
         !err && <div className="empty">读取配置中…</div>
       )}
+      <div className="settings-paths">
+        <label htmlFor="paths-input">本机 NapCat 扫描路径（每行一个绝对路径）</label>
+        <textarea
+          id="paths-input"
+          data-testid="paths-input"
+          rows={3}
+          value={pathsText}
+          placeholder={'D:\\NapCat\nD:\\QQChatExporter'}
+          onChange={(e) => setPathsText(e.target.value)}
+        />
+        <button data-testid="paths-save" disabled={pathsSaving} onClick={() => void savePaths()}>
+          {pathsSaving ? '保存中…' : '保存扫描路径'}
+        </button>
+        {pathsMsg && (
+          <div className="ok" data-testid="paths-msg">
+            {pathsMsg}
+          </div>
+        )}
+        {pathsErr && (
+          <div className="err" data-testid="paths-error">
+            {pathsErr}
+          </div>
+        )}
+      </div>
       <p className="hint">
-        M1 只读展示：端点与 token 请在「未配置 / 连接失败」时的表单里修改；token 明文不会出现在面板上。
+        端点与 token 请在「未配置 / 连接失败」时的表单里修改；token 明文不会出现在面板上。
+        扫描路径必须是绝对路径（相对路径会随工作目录变化）。
       </p>
     </div>
   );

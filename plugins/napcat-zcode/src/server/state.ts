@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { createClient, safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import { getLoginInfo } from './onebot/actions.js';
 import type { OB11LoginInfo } from './onebot/types.js';
@@ -361,6 +362,39 @@ export class AppState {
     const conn = isPlainObject(raw.connection) ? raw.connection : {};
     const patched: Record<string, unknown> = { ...raw, connection: { ...conn, endpoint, token } };
     saveConfig(dir, patched as unknown as PluginConfig);
+  }
+
+  /**
+   * 保存 `autoDetect.paths`（本机 NapCat 扫描根）。
+   *
+   * **patch 式**：以文件原始内容为基底，只改 `autoDetect.paths`——
+   * 全量写会把 env 兜底值固化进文件，也会凭空写出别的段（见 `saveConnection` 的同款理由）。
+   *
+   * 只收**绝对路径**（与 `config.ts` 的 `pickPaths` 同一口径）：相对路径会随宿主的工作目录
+   * 变化，语义含糊且不可复现。重复路径去重、空串丢弃。
+   *
+   * **落盘即失效**：路径变了 = 探测范围变了 → 之前那次探测的结论不再适用 → 清缓存
+   * （与 `setConnection` 同一口径：配置一变，旧结论就对不上了）。
+   */
+  setAutoDetectPaths(paths: string[]): string[] {
+    const dir = dataDir();
+    const { raw } = loadConfigWithRaw(dir);
+    const auto = isPlainObject(raw.autoDetect) ? raw.autoDetect : {};
+    const cleaned: string[] = [];
+    for (const p of paths) {
+      if (typeof p !== 'string') continue;
+      const t = p.trim();
+      if (t === '') continue;
+      if (!isAbsolute(t)) continue; // 相对路径 → 丢弃（工具层会先报错，不该走到这里）
+      if (cleaned.includes(t)) continue;
+      cleaned.push(t);
+    }
+    const patched: Record<string, unknown> = { ...raw, autoDetect: { ...auto, paths: cleaned } };
+    saveConfig(dir, patched as unknown as PluginConfig);
+    this.config.autoDetect = { ...this.config.autoDetect, paths: [...cleaned] };
+    this.clearDetection();
+    this.loadedFingerprint = configFingerprint(this.config);
+    return [...cleaned];
   }
 
   /**

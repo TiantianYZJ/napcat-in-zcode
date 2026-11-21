@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isAbsolute } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { fetchHistoryPage, fetchMessagesBetween, getFriendList, getGroupList } from './onebot/actions.js';
 import { normalizeMessage } from './model/message.js';
@@ -403,10 +404,57 @@ export function registerTools(server: McpServer, state: AppState): void {
           .boolean()
           .optional()
           .describe('true = 清除已保存的 token（默认 false，即留空 token 不动已存值）'),
+        paths: z
+          .array(z.string())
+          .optional()
+          .describe(
+            '本机 NapCat 扫描根目录（**绝对路径**，每行一个）；不传 = 不改。' +
+              '相对路径会被拒绝（会随工作目录变化）。endpoint 留空时只更新扫描路径、不动连接。',
+          ),
       },
     },
-    async ({ endpoint, token, clearToken }) => {
+    async ({ endpoint, token, clearToken, paths }) => {
       try {
+        /**
+         * `paths` 是**加法式**的可选参数：不传 = 行为与从前逐字一致（既有调用不受影响）。
+         *
+         * 相对路径**报错**而不是静默丢弃：用户以为配上了、实际上没配 → 探测范围不对 →
+         * 「未检测到本机 NapCat」就成了假阴性。宁可报错让人改。
+         */
+        const wantPaths = Array.isArray(paths) ? paths : undefined;
+        let cleanPaths: string[] | undefined;
+        if (wantPaths !== undefined) {
+          cleanPaths = wantPaths
+            .filter((p): p is string => typeof p === 'string')
+            .map((p) => p.trim())
+            .filter((p) => p !== '');
+          const bad = cleanPaths.filter((p) => !isAbsolute(p));
+          if (bad.length > 0) {
+            throw new Error(
+              `扫描路径必须是绝对路径（相对路径会随工作目录变化，已拒绝本次保存）：${bad.join('、')}`,
+            );
+          }
+        }
+
+        // 端点留空 = 只更新扫描路径（用户还没配端点时也要能改路径）
+        if (typeof endpoint !== 'string' || endpoint.trim() === '') {
+          if (cleanPaths === undefined) {
+            throw new Error('端点不能为空：请填写 OneBot 端点，或只传 paths 更新扫描路径');
+          }
+          const saved = state.setAutoDetectPaths(cleanPaths);
+          return ok({
+            configured: state.configured,
+            connected: state.client !== null,
+            pathsSaved: true,
+            paths: saved,
+          });
+        }
+
+        /**
+         * 扫描路径**先落盘**：它是与连接无关的独立配置，
+         * 不该因为「端点连不上」这种另一件事而丢掉用户的输入。
+         */
+        const saved = cleanPaths === undefined ? undefined : state.setAutoDetectPaths(cleanPaths);
         /**
          * `setConnection` 内部在**落盘之后**就清掉了探测结论缓存：
          * 配置一旦落盘，之前那次探测的结论就对不上了——**哪怕这次连不上**
@@ -419,7 +467,13 @@ export function registerTools(server: McpServer, state: AppState): void {
           state.config.connection.endpoint,
           state.config.connection.token ?? '',
         );
-        return ok({ configured: true, connected: true, login, ...(warning ? { warning } : {}) });
+        return ok({
+          configured: true,
+          connected: true,
+          login,
+          ...(warning ? { warning } : {}),
+          ...(saved ? { pathsSaved: true, paths: saved } : {}),
+        });
       } catch (e) {
         return fail(state, e);
       }

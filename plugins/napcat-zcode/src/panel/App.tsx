@@ -113,6 +113,18 @@ export function App() {
   /** 设置面板（只读配置）是否展开。 */
   const [showSettings, setShowSettings] = useState(false);
   /**
+   * 本次会话里**见过**探测结论。
+   *
+   * 用途：区分状态条上的「尚未检测」与「结论已过期，请重新检测」——
+   * 探测结论是服务端的**缓存**，配置一变就会被清掉（`detection` 键消失）。
+   * 「键消失」有两种含义：从来没探过 / 探过但结论过期了。
+   * 把两者混成「未检测到本机 NapCat」就是把「不知道」说成「没有」（假阴性）。
+   *
+   * 注意：只要**曾经拿到过**结论就置位（哪怕是面板刚打开时服务端就有缓存），
+   * 否则「结论在两次轮询之间消失」会被误报成「尚未检测」。
+   */
+  const [hadDetection, setHadDetection] = useState(false);
+  /**
    * 配置里的导出目的地（跟随 `export.dir`）。
    *
    * **只影响文案**：目的地由服务端按配置决定（面板不传 `dir`），
@@ -148,6 +160,8 @@ export function App() {
     try {
       const st = await api.status();
       setStatus(st);
+      // 见过结论就记一笔：之后结论消失（配置变了 → 服务端清了缓存）要说「结论已过期」
+      if (st.detection) setHadDetection(true);
       if (!st.configured) {
         setNotice(null);
         setPhase('unconfigured');
@@ -416,6 +430,7 @@ export function App() {
         phase={phase}
         notice={notice?.text ?? ''}
         onSettings={() => setShowSettings(true)}
+        hadDetection={hadDetection}
       />
       <div className="main">
         <ChatList chats={chats} active={active} onOpen={(c) => void openChat(c)} />
@@ -425,7 +440,15 @@ export function App() {
               正在连接宿主…（首次握手最坏约 46 秒）
             </div>
           )}
-          {phase === 'unconfigured' && <UnconfiguredForm onDone={() => void reload()} />}
+          {phase === 'unconfigured' && (
+            <UnconfiguredForm
+              onDone={() => void reload()}
+              onDetected={() => {
+                // 探测结论缓存在服务端 → 重拉一次状态，状态条才拿得到那份摘要
+                void reload();
+              }}
+            />
+          )}
           {phase === 'error' &&
             (reconfiguring ? (
               // 端点填错了/换机器了 → 让用户直接改（不预填，免得无声覆盖已有配置）

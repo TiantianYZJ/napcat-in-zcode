@@ -134,7 +134,21 @@ describe('MF-2：空 token 不擦除已保存的凭据', () => {
     const schema = list.tools.find((t) => t.name === 'napcat_configure')?.inputSchema as {
       properties?: Record<string, unknown>;
     };
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['clearToken', 'endpoint', 'token']);
+    /**
+     * M2 Task 5：`napcat_configure` **加法式**增加了可选参数 `paths`
+     * （本机 NapCat 扫描根，绝对路径；不传 = 不改）。
+     *
+     * 这条断言锁的是「schema 的**全部**入参名」——加一个可选参数必然让它多一项，
+     * 所以这里同步加 `paths`（断言的严格性不变：仍是**精确集合**比对，
+     * 不是 `arrayContaining` 那种放宽）。
+     * 既有参数一个没少、一个没改名。
+     */
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual([
+      'clearToken',
+      'endpoint',
+      'paths',
+      'token',
+    ]);
   });
 });
 

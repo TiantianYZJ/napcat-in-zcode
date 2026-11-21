@@ -131,6 +131,16 @@ try {
 
   check('动作条按钮齐全', ['act-message', 'act-context', 'act-attach', 'act-export'].every((id) => q(`[data-testid="${id}"]`)));
 
+  // 设置面板：M2 Task 5 加了「本机 NapCat 扫描路径」编辑区（B8）
+  click(q('[data-testid="settings-btn"]'));
+  await sleep(200);
+  check('设置面板里有扫描路径输入区与保存按钮',
+    !!q('[data-testid="paths-input"]') && !!q('[data-testid="paths-save"]'),
+    q('[data-testid="paths-input"]') ? 'paths-input ok' : 'paths-input missing');
+  click(q('[data-testid="settings-close"]'));
+  await sleep(100);
+  check('设置面板能关闭', !q('[data-testid="settings-panel"]'));
+
   const toolCalls = calls.filter((c) => c.method === 'tools/call').map((c) => c.params.name);
   check('面板通过 tools/call 取数', toolCalls.includes('napcat_status') && toolCalls.includes('napcat_get_history'), [...new Set(toolCalls)].join(','));
 

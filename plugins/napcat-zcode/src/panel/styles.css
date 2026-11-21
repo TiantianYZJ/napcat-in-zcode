@@ -95,6 +95,18 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 探测结论摘要：单独一行（结论比连接状态更需要解释空间） */
+.statusbar .detect-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .statusbar.ready {
   color: var(--accent);
 }
@@ -388,6 +400,100 @@ button[disabled] {
   color: var(--fg-dim);
   font-size: 12px;
   margin: 0;
+}
+
+/* ---------- 本机探测区块 ---------- */
+
+.detect {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detect .detect-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.detect .detect-candidate,
+.detect .detect-fail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+}
+
+.detect .ep {
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.detect .nick {
+  color: var(--accent);
+}
+
+.detect .detail {
+  flex: 1 1 100%;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+
+/* 「可能需要 access token」的角标：只是提示，不是断言 */
+.detect .badge {
+  padding: 0 6px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--warn);
+}
+
+.detect .label {
+  color: var(--fg-dim);
+}
+
+.detect .detect-budget {
+  color: var(--warn);
+}
+
+.detect .detect-nowebui,
+.detect .detect-notfound {
+  color: var(--fg-dim);
+}
+
+.detect .detect-notes,
+.detect .detect-installs,
+.detect .detect-dropped {
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+
+/* ---------- 设置面板里的路径编辑 ---------- */
+
+.settings-panel .settings-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.settings-panel .settings-paths label {
+  color: var(--fg-dim);
+}
+
+.settings-panel .settings-paths textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.settings-panel .settings-paths .ok {
+  color: var(--accent);
+  word-break: break-word;
 }
 
 /* ---------- 浮层提示 ---------- */

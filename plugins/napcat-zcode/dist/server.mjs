@@ -21564,6 +21564,9 @@ var StdioServerTransport = class {
 import { dirname, join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// src/server/tools.ts
+import { isAbsolute as isAbsolute3 } from "node:path";
+
 // src/server/onebot/errors.ts
 var OneBotError = class extends Error {
   constructor(retcode, message) {
@@ -22620,6 +22623,7 @@ function createClient(cfg) {
 }
 
 // src/server/state.ts
+import { isAbsolute as isAbsolute2 } from "node:path";
 function endpointOf(cfg) {
   return cfg.connection?.endpoint ?? "";
 }
@@ -22847,6 +22851,38 @@ var AppState = class {
     const conn = isPlainObject3(raw.connection) ? raw.connection : {};
     const patched = { ...raw, connection: { ...conn, endpoint, token } };
     saveConfig(dir, patched);
+  }
+  /**
+   * 保存 `autoDetect.paths`（本机 NapCat 扫描根）。
+   *
+   * **patch 式**：以文件原始内容为基底，只改 `autoDetect.paths`——
+   * 全量写会把 env 兜底值固化进文件，也会凭空写出别的段（见 `saveConnection` 的同款理由）。
+   *
+   * 只收**绝对路径**（与 `config.ts` 的 `pickPaths` 同一口径）：相对路径会随宿主的工作目录
+   * 变化，语义含糊且不可复现。重复路径去重、空串丢弃。
+   *
+   * **落盘即失效**：路径变了 = 探测范围变了 → 之前那次探测的结论不再适用 → 清缓存
+   * （与 `setConnection` 同一口径：配置一变，旧结论就对不上了）。
+   */
+  setAutoDetectPaths(paths) {
+    const dir = dataDir();
+    const { raw } = loadConfigWithRaw(dir);
+    const auto = isPlainObject3(raw.autoDetect) ? raw.autoDetect : {};
+    const cleaned = [];
+    for (const p of paths) {
+      if (typeof p !== "string") continue;
+      const t = p.trim();
+      if (t === "") continue;
+      if (!isAbsolute2(t)) continue;
+      if (cleaned.includes(t)) continue;
+      cleaned.push(t);
+    }
+    const patched = { ...raw, autoDetect: { ...auto, paths: cleaned } };
+    saveConfig(dir, patched);
+    this.config.autoDetect = { ...this.config.autoDetect, paths: [...cleaned] };
+    this.clearDetection();
+    this.loadedFingerprint = configFingerprint(this.config);
+    return [...cleaned];
   }
   /**
    * 保存端点/令牌并重连，返回登录信息。
@@ -24054,17 +24090,50 @@ function registerTools(server2, state) {
       inputSchema: {
         endpoint: external_exports.string().describe("OneBot 11 \u7AEF\u70B9\uFF0C\u5982 http://127.0.0.1:3000 \u6216 ws://127.0.0.1:3001"),
         token: external_exports.string().optional().describe("access token\uFF1B\u7559\u7A7A = \u4FDD\u7559\u5DF2\u4FDD\u5B58\u7684 token"),
-        clearToken: external_exports.boolean().optional().describe("true = \u6E05\u9664\u5DF2\u4FDD\u5B58\u7684 token\uFF08\u9ED8\u8BA4 false\uFF0C\u5373\u7559\u7A7A token \u4E0D\u52A8\u5DF2\u5B58\u503C\uFF09")
+        clearToken: external_exports.boolean().optional().describe("true = \u6E05\u9664\u5DF2\u4FDD\u5B58\u7684 token\uFF08\u9ED8\u8BA4 false\uFF0C\u5373\u7559\u7A7A token \u4E0D\u52A8\u5DF2\u5B58\u503C\uFF09"),
+        paths: external_exports.array(external_exports.string()).optional().describe(
+          "\u672C\u673A NapCat \u626B\u63CF\u6839\u76EE\u5F55\uFF08**\u7EDD\u5BF9\u8DEF\u5F84**\uFF0C\u6BCF\u884C\u4E00\u4E2A\uFF09\uFF1B\u4E0D\u4F20 = \u4E0D\u6539\u3002\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u88AB\u62D2\u7EDD\uFF08\u4F1A\u968F\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF09\u3002endpoint \u7559\u7A7A\u65F6\u53EA\u66F4\u65B0\u626B\u63CF\u8DEF\u5F84\u3001\u4E0D\u52A8\u8FDE\u63A5\u3002"
+        )
       }
     },
-    async ({ endpoint, token, clearToken }) => {
+    async ({ endpoint, token, clearToken, paths }) => {
       try {
+        const wantPaths = Array.isArray(paths) ? paths : void 0;
+        let cleanPaths;
+        if (wantPaths !== void 0) {
+          cleanPaths = wantPaths.filter((p) => typeof p === "string").map((p) => p.trim()).filter((p) => p !== "");
+          const bad = cleanPaths.filter((p) => !isAbsolute3(p));
+          if (bad.length > 0) {
+            throw new Error(
+              `\u626B\u63CF\u8DEF\u5F84\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF08\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u968F\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF0C\u5DF2\u62D2\u7EDD\u672C\u6B21\u4FDD\u5B58\uFF09\uFF1A${bad.join("\u3001")}`
+            );
+          }
+        }
+        if (typeof endpoint !== "string" || endpoint.trim() === "") {
+          if (cleanPaths === void 0) {
+            throw new Error("\u7AEF\u70B9\u4E0D\u80FD\u4E3A\u7A7A\uFF1A\u8BF7\u586B\u5199 OneBot \u7AEF\u70B9\uFF0C\u6216\u53EA\u4F20 paths \u66F4\u65B0\u626B\u63CF\u8DEF\u5F84");
+          }
+          const saved2 = state.setAutoDetectPaths(cleanPaths);
+          return ok({
+            configured: state.configured,
+            connected: state.client !== null,
+            pathsSaved: true,
+            paths: saved2
+          });
+        }
+        const saved = cleanPaths === void 0 ? void 0 : state.setAutoDetectPaths(cleanPaths);
         const login = await state.setConnection(endpoint, token ?? "", { clearToken: clearToken === true });
         const warning = endpointSecurityWarning(
           state.config.connection.endpoint,
           state.config.connection.token ?? ""
         );
-        return ok({ configured: true, connected: true, login, ...warning ? { warning } : {} });
+        return ok({
+          configured: true,
+          connected: true,
+          login,
+          ...warning ? { warning } : {},
+          ...saved ? { pathsSaved: true, paths: saved } : {}
+        });
       } catch (e) {
         return fail(state, e);
       }

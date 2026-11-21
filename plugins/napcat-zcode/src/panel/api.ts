@@ -161,6 +161,85 @@ export interface ConfigInfo {
 }
 
 /**
+ * 探测候选端点（`napcat_detect_local` 的返回）。
+ *
+ * 与服务端 `onebot/detect.ts` 的 `DetectCandidate` 同构。
+ */
+export interface DetectCandidate {
+  /** 规范化后的端点（不含凭据与 query）。 */
+  endpoint: string;
+  transport: 'http' | 'ws';
+  /** 候选来源：用户显式配置 / 本机安装发现 / 端口扫描。 */
+  source: 'config' | 'install' | 'port';
+  /** 来源说明（如配置文件路径、端口号）。 */
+  detail?: string;
+}
+
+/**
+ * 带结论的探测条目（`live` / `failed` / `tokenRequired` 共用同一形状）。
+ */
+export interface DetectEntry extends DetectCandidate {
+  /** 探测成功时的登录信息。 */
+  login?: { user_id: string; nickname: string };
+  /** 失败原因（服务端给的人话串，已脱敏）。 */
+  error?: string;
+  /** 该端点疑似需要 access token。 */
+  needsToken?: boolean;
+  /**
+   * 失败原因是**超时/无响应**（区别于「连不上」）。
+   *
+   * 超时 ≠ 连不上：前者说明目标在那儿但不答话，后者说明端口上根本没服务。
+   * 面板要把两者分开说，不能合并成一句。
+   */
+  unresponsive?: boolean;
+}
+
+/**
+ * `napcat_detect_local` 的返回（**服务端已脱敏**）。
+ *
+ * 面板直接用它渲染，**不要自己重算数量**：
+ * `candidates` / `scanned.ports` 被截到 20 条，`failed` / `tokenRequired` 每来源 5 条，
+ * 裁剪计数与预算耗尽等说明都在 `notes` 里 → 一律原样渲染 `notes`。
+ */
+export interface DetectResult {
+  /** 是否找到可用的 OneBot 端点（= `live.length > 0`）。 */
+  found: boolean;
+  candidates: DetectCandidate[];
+  /** 探测成功的端点。 */
+  live: DetectEntry[];
+  /** 探测失败的端点（带失败原因）。 */
+  failed: DetectEntry[];
+  /** 探测失败但疑似需要 token 的端点（`failed` 的子集）。 */
+  tokenRequired: DetectEntry[];
+  /** NapCat WebUI 有响应 → NapCat 在跑（哪怕没开 OneBot Server）。 */
+  napcatRunning: boolean;
+  /** 探测到的 WebUI 端口（NapCat 在跑时才有）。 */
+  webuiPort?: number;
+  /**
+   * 扫描预算耗尽 → **没扫完**。
+   *
+   * `true` 时**绝不可**说「未检测到本机 NapCat」（那是假阴性）。
+   */
+  budgetExhausted?: boolean;
+  scanned: { ports: number[]; paths: string[]; extraEndpoints: number };
+  /** 人类可读说明（裁剪计数、预算耗尽、被丢弃的端点、多个 WebUI 端口…）。 */
+  notes: string[];
+  /** 本机安装发现的摘要（`configDir` 是本机绝对路径，只给用户看）。 */
+  installs: {
+    configDir: string;
+    endpoints: number;
+    webuiPort?: number;
+    webuiDisabled?: boolean;
+    webuiHasToken?: boolean;
+    nonLoopbackEndpoints: number;
+    truncated?: boolean;
+    notes?: string[];
+  }[];
+  /** 被回环闸门丢弃的端点。 */
+  droppedEndpoints: { endpoint: string; reason: string; detail?: string }[];
+}
+
+/**
  * 工具调用失败（面板侧统一错误类型）。
  *
  * 保留原始信息：`code` 是 JSON-RPC 错误码（如 -32602），
@@ -315,18 +394,38 @@ export const api = {
    *
    * `token` 留空 = **保留已保存的 token**（服务端语义）；要清除已存的 token
    * 显式传 `clearToken: true`。
+   *
+   * `paths` 是**加法式**的可选参数：本机 NapCat 扫描根（**绝对路径**）。
+   * 不传 = 不改（既有调用逐字不变）。
+   * `endpoint` 传空串 = **只更新扫描路径**，不动已有连接
+   * （用户还没配端点时也要能改路径；服务端据此走「只存 paths」的分支）。
    */
-  configure: (endpoint: string, token: string, clearToken?: boolean) =>
+  configure: (endpoint: string, token: string, clearToken?: boolean, paths?: string[]) =>
     callToolJson<{
       configured: boolean;
       connected: boolean;
       login?: StatusInfo['login'];
       warning?: string;
+      /** 本次调用带了 `paths` 且已落盘。 */
+      pathsSaved?: boolean;
+      /** 实际保存的扫描路径（去重后的绝对路径）。 */
+      paths?: string[];
     }>('napcat_configure', {
       endpoint,
       token,
       ...(clearToken === true ? { clearToken: true } : {}),
+      ...(paths !== undefined ? { paths } : {}),
     }),
+
+  /**
+   * 本机 NapCat 探测（**无参**）。
+   *
+   * 只探测回环地址与用户显式配置的端点，不扫描网络。
+   * 探测**不带 token**（多数本机实例没设 token）。
+   *
+   * 结论会被服务端缓存，`napcat_status` 会顺带带出摘要。
+   */
+  detectLocal: () => callToolJson<DetectResult>('napcat_detect_local', {}),
 
   /** 列群或好友。 */
   listChats: (kind: 'group' | 'friend') => callToolJson<{ chats: Chat[] }>('napcat_list_chats', { kind }),

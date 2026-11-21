@@ -21,6 +21,32 @@ export function modeLabel(mode: string): string {
 }
 
 /**
+ * 探测结论的摘要文案。
+ *
+ * 三态 + 两种「**下不了结论**」的情况（两者都**不是**「未检测到」）：
+ * - `detection` **不存在**、本次会话从没探过 → 「尚未检测」（压根没探过）；
+ * - 探过、但结论在两次轮询之间消失（配置变了 → 服务端清了缓存）→
+ *   「结论已过期，请重新检测」（把「不知道」说成「没有」是假阴性）；
+ * - 探过、`found` → 「检测到本机 NapCat（端点）」；
+ * - 探过、NapCat 在跑但没开 OneBot Server → 「检测到 NapCat（未开启 OneBot Server）」；
+ * - 探过、什么都没找到 → 「未检测到本机 NapCat」；
+ * - 预算耗尽 → 「探测未完成（扫描预算耗尽）…不能据此判断本机没有 NapCat」
+ *   （**绝不可**写成「未检测到本机 NapCat」：那轮扫描根本没扫完）。
+ */
+export function detectionSummary(
+  detection: StatusInfo['detection'],
+  hadDetection: boolean,
+): string {
+  if (!detection) return hadDetection ? '结论已过期，请重新检测' : '尚未检测';
+  if (detection.budgetExhausted === true) {
+    return '探测未完成（扫描预算耗尽），结果可能不全 —— 不能据此判断本机没有 NapCat';
+  }
+  if (detection.found) return `检测到本机 NapCat（${detection.endpoint ?? '未知端点'}）`;
+  if (detection.napcatRunning) return '检测到 NapCat（未开启 OneBot Server）';
+  return '未检测到本机 NapCat';
+}
+
+/**
  * 顶部状态条：连接状态（未配置 / 未连接 / 已连接+昵称+连接模式 / 连接中）+「设置」入口。
  *
  * `phase === 'init'` 是「正在连接宿主…」的中间态 —— 首次握手最坏要 3×15s+2×500ms ≈ 46s，
@@ -34,12 +60,15 @@ export function Statusbar({
   phase,
   notice,
   onSettings,
+  hadDetection = false,
 }: {
   status: StatusInfo | null;
   phase: string;
   notice: string;
   /** 「设置」入口（打开只读配置面板）。 */
   onSettings?: () => void;
+  /** 本次会话里**见过**探测结论（用于区分「尚未检测」与「结论已过期」）。 */
+  hadDetection?: boolean;
 }) {
   const mode = status?.mode ?? '';
   const text =
@@ -50,6 +79,13 @@ export function Statusbar({
         : phase === 'error'
           ? `✕ ${status?.error || notice || '未连接 OneBot'}`
           : '… 正在连接宿主…';
+  const detection = status?.detection;
+  /**
+   * 摘要行只在「结论有意义」时出现：
+   * 未配置 / 连接失败（用户正需要它），或者已经有探测结论。
+   * 已连接时连接本身就是答案，不必再摆一句「尚未检测」。
+   */
+  const showSummary = phase === 'unconfigured' || phase === 'error' || !!detection;
   return (
     <div
       className={`statusbar ${phase}`}
@@ -60,6 +96,11 @@ export function Statusbar({
       <span className="status-text" title={mode ? `连接模式：${mode}` : undefined}>
         {text}
       </span>
+      {showSummary && (
+        <span className="detect-summary" data-testid="detect-summary">
+          {detectionSummary(detection, hadDetection)}
+        </span>
+      )}
       {status?.warning && (
         <span className="status-warning" data-testid="status-warning" title={status.warning}>
           ⚠ {status.warning}
