@@ -10,6 +10,9 @@
  *   不是 0、也不是 100。
  * - **不留半成品**：先写 `destFile + '.part'`，校验通过才改名成 `destFile`；
  *   任何失败（超时 / 校验失败 / 地址被拒 / HTTP 错误）都会删掉临时文件。
+ * - **超时必须覆盖连接阶段**：TCP 连接 / CONNECT 握手 / TLS 握手都在超时范围内——
+ *   本机直连 GitHub 被墙、**必须**走代理，而代理「连上了但不回 CONNECT」这种半死状态
+ *   会让后台安装作业永远挂着（面板永远转圈、用户还没有取消入口）。
  *
  * 实现说明：
  * - 直连走 `node:http` / `node:https`；
@@ -91,11 +94,35 @@ const USER_AGENT = 'NapCat-ZCode';
 
 /** 内部错误：消息已经是给用户看的中文说明。 */
 class DownloadError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'DownloadError';
   }
 }
+
+/**
+ * 网络错误码 → 中文说明。
+ *
+ * 不做这层映射的话，用户会看到「下载失败：aborted」这种英文技术词——
+ * 既看不懂也不知道下一步该干什么。
+ */
+const NETWORK_ERROR_TEXT: Record<string, string> = {
+  ECONNRESET: '连接在传输过程中被断开（连接被重置）',
+  ECONNABORTED: '连接在传输过程中被断开',
+  EPIPE: '连接在传输过程中被断开（管道被关闭）',
+  ERR_STREAM_PREMATURE_CLOSE: '连接在传输过程中被断开（数据没传完就断了）',
+  ECONNREFUSED: '连接被拒绝（对方没有监听这个端口）',
+  ETIMEDOUT: '连接超时（对方长时间没有回应）',
+  EHOSTUNREACH: '主机不可达',
+  ENETUNREACH: '网络不可达',
+  ENOTFOUND: '域名解析失败（解析不到该地址）',
+  EAI_AGAIN: '域名解析失败（DNS 暂时不可用）',
+  ABORT_ERR: '操作被中止',
+  ERR_TLS_CERT_ALTNAME_INVALID: '对方证书与域名不匹配',
+  DEPTH_ZERO_SELF_SIGNED_CERT: '对方用的是自签证书（本机不信任）',
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: '无法验证对方证书的签名',
+  CERT_HAS_EXPIRED: '对方证书已过期',
+};
 
 // ── host 分类 ──────────────────────────────────────────────────────
 
@@ -139,19 +166,80 @@ function classifyIPv4(host: string): HostKind {
   return 'public';
 }
 
+/**
+ * 把 IPv6 展开成 8 个 16 位组。
+ *
+ * `::` 会被补齐；末尾的 IPv4 写法（`::ffff:127.0.0.1`）会被折成 2 组。
+ * 展开不了（不是 IPv6）→ undefined。
+ */
+function expandIPv6(host: string): number[] | undefined {
+  let text = host.toLowerCase();
+  if (!text.includes(':')) return undefined;
+  const zone = text.indexOf('%');
+  if (zone >= 0) text = text.slice(0, zone); // 去掉 zone id（fe80::1%eth0）
+  const halves = text.split('::');
+  if (halves.length > 2) return undefined;
+
+  const parseSide = (side: string): number[] | undefined => {
+    if (side === '') return [];
+    const out: number[] = [];
+    const items = side.split(':');
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] ?? '';
+      if (item === '') return undefined;
+      if (item.includes('.')) {
+        if (i !== items.length - 1) return undefined; // IPv4 只允许出现在最后
+        const v4 = parseIPv4(item);
+        if (!v4) return undefined;
+        out.push(((v4[0] ?? 0) << 8) | (v4[1] ?? 0));
+        out.push(((v4[2] ?? 0) << 8) | (v4[3] ?? 0));
+        continue;
+      }
+      if (!/^[0-9a-f]{1,4}$/.test(item)) return undefined;
+      out.push(parseInt(item, 16));
+    }
+    return out;
+  };
+
+  const head = parseSide(halves[0] ?? '');
+  const tail = parseSide(halves.length === 2 ? (halves[1] ?? '') : '');
+  if (!head || !tail) return undefined;
+
+  const groups: number[] = [...head];
+  if (halves.length === 2) {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return undefined;
+    for (let i = 0; i < fill; i++) groups.push(0);
+    groups.push(...tail);
+  } else if (head.length !== 8) {
+    return undefined;
+  }
+  return groups.length === 8 ? groups : undefined;
+}
+
+/**
+ * IPv6 分类。
+ *
+ * ⚠️ 必须**展开成 8 组**再判：手写「首组是不是 fc/fd/fe80」的写法会漏掉
+ * **IPv4-mapped** 写法（`::ffff:127.0.0.1`）——那正是回环地址，
+ * 漏判 = SSRF 闸门被绕过（URL 解析器还会把 `::ffff:127.0.0.1` 规范化成 `::ffff:7f00:1`，
+ * 字符串匹配更是不可能认出来）。
+ */
 function classifyIPv6(host: string): HostKind {
-  const h = host.toLowerCase();
-  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return 'loopback';
-  if (h === '::' || h === '0:0:0:0:0:0:0:0') return 'reserved';
-  // IPv4 映射写法（::ffff:127.0.0.1）按内嵌的 IPv4 判定
-  const mapped = /^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
-  if (mapped) return classifyIPv4(mapped[1]);
-  const head = h.split(':')[0] ?? '';
-  if (!/^[0-9a-f]{1,4}$/.test(head)) return 'public';
-  const value = parseInt(head, 16);
-  if ((value & 0xfe00) === 0xfc00) return 'private'; // fc00::/7（ULA）
-  if ((value & 0xffc0) === 0xfe80) return 'private'; // fe80::/10（链路本地）
-  if ((value & 0xff00) === 0xff00) return 'reserved'; // ff00::/8（组播）
+  const groups = expandIPv6(host);
+  if (!groups) return 'public';
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (groups.every((v) => v === 0)) return 'reserved'; // ::
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) {
+    return 'loopback'; // ::1
+  }
+  // IPv4 映射（::ffff:a.b.c.d）/ 兼容（::a.b.c.d）：前 5 组为 0，第 6 组是 0xffff 或 0
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 0xffff || g5 === 0)) {
+    return classifyIPv4(`${(g6 ?? 0) >> 8}.${(g6 ?? 0) & 0xff}.${(g7 ?? 0) >> 8}.${(g7 ?? 0) & 0xff}`);
+  }
+  if ((g0 & 0xfe00) === 0xfc00) return 'private'; // fc00::/7（ULA）
+  if ((g0 & 0xffc0) === 0xfe80) return 'private'; // fe80::/10（链路本地）
+  if ((g0 & 0xff00) === 0xff00) return 'reserved'; // ff00::/8（组播）
   return 'public';
 }
 
@@ -197,6 +285,7 @@ type ResourcePolicy =
  * 校验资源地址（出网红线的核心）。
  *
  * - scheme 必须是 `http`/`https`；
+ * - **不允许**在地址里带账号密码（`user:pass@`）；
  * - host **不得**是回环 / 内网 / 保留地址；
  * - host 必须在允许清单内（大小写不敏感）。
  */
@@ -212,23 +301,28 @@ function assertResourceUrl(raw: string, allowedHosts: string[], policy: Resource
       `下载被拒绝：只支持 http/https 下载地址，当前是「${url.protocol}」。请改用 http(s) 链接。`,
     );
   }
+  if (url.username || url.password) {
+    throw new DownloadError(
+      '下载被拒绝：下载地址里不允许带账号密码（user:pass@…）。请改用不含凭据的下载链接。',
+    );
+  }
   const host = url.hostname.toLowerCase();
   const kind = classifyHost(host);
-  if (policy === 'public') {
-    if (kind === 'loopback') {
-      throw new DownloadError(
-        `下载被拒绝：「${host}」是本机回环地址，插件不允许从本机发起这类下载。请检查下载源配置。`,
-      );
-    }
-    if (kind === 'private') {
-      throw new DownloadError(
-        `下载被拒绝：「${host}」属于内网地址，插件不允许下载内网资源。请检查下载源配置。`,
-      );
-    }
-    if (kind === 'reserved') {
-      throw new DownloadError(`下载被拒绝：「${host}」是保留地址，不能作为下载源。请检查下载源配置。`);
-    }
-  } else if (kind !== 'loopback') {
+  if (kind === 'loopback' && policy === 'public') {
+    throw new DownloadError(
+      `下载被拒绝：「${host}」是本机回环地址，插件不允许从本机发起这类下载。请检查下载源配置。`,
+    );
+  }
+  if (kind === 'private') {
+    throw new DownloadError(
+      `下载被拒绝：「${host}」属于内网地址，插件不允许下载内网资源。请检查下载源配置。`,
+    );
+  }
+  if (kind === 'reserved') {
+    throw new DownloadError(`下载被拒绝：「${host}」是保留地址，不能作为下载源。请检查下载源配置。`);
+  }
+  if (policy !== 'public' && kind !== 'loopback') {
+    // 仅测试入口：只允许回环地址（放宽方向与产品路径相反）
     throw new DownloadError(`下载被拒绝：测试下载入口只允许本机回环地址，当前是「${host}」。`);
   }
   const allowed = new Set(
@@ -277,6 +371,9 @@ export function assertProxyUrlAllowed(proxy: string): URL {
     throw new DownloadError(
       `代理被拒绝：只支持 http/https 代理，当前是「${url.protocol}」。请改用 http(s) 代理地址。`,
     );
+  }
+  if (url.username || url.password) {
+    throw new DownloadError('代理被拒绝：代理地址里不允许带账号密码。请改用不含凭据的代理地址。');
   }
   const host = url.hostname.toLowerCase();
   if (classifyHost(host) !== 'loopback') {
@@ -331,6 +428,34 @@ function createReporter(onProgress?: (p: DownloadProgress) => void): Reporter {
 
 // ── 传输层 ─────────────────────────────────────────────────────────
 
+/**
+ * 中止上下文：连接 / 握手阶段的超时与取消都靠它。
+ *
+ * `timedOut` 由外层的定时器置位——这样每一层都能说出「到底是超时了还是用户取消了」。
+ */
+interface AbortContext {
+  signal: AbortSignal;
+  /** 是否因为超时而中止。 */
+  timedOut: boolean;
+  /** 超时时长（文案要用）。 */
+  timeoutMs: number;
+}
+
+function timeoutError(timeoutMs: number): DownloadError {
+  return new DownloadError(
+    `下载超时：超过 ${humanDuration(timeoutMs)} 仍未完成（连接下载源或代理阶段超时），已中止并清理临时文件。请检查网络连接或代理设置后重试。`,
+  );
+}
+
+function cancelledError(): DownloadError {
+  return new DownloadError('下载已取消：已中止并清理临时文件。');
+}
+
+/** 按上下文给出「超时」或「已取消」的错误。 */
+function abortError(ctx: AbortContext): DownloadError {
+  return ctx.timedOut ? timeoutError(ctx.timeoutMs) : cancelledError();
+}
+
 /** 去掉 IPv6 的方括号（Node 的 socket 连接要裸地址）。 */
 function bareHost(url: URL): string {
   return url.hostname.replace(/^\[/, '').replace(/\]$/, '');
@@ -341,23 +466,44 @@ function absoluteForm(url: URL): string {
   return `${url.protocol}//${url.host}${url.pathname}${url.search}`;
 }
 
-function connectTcp(host: string, port: number): Promise<Socket> {
+function connectTcp(host: string, port: number, ctx: AbortContext): Promise<Socket> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const socket = tcpConnect({ host, port });
-    const onError = (err: Error): void => {
-      socket.destroy();
-      reject(new DownloadError(`连接失败：无法连到 ${host}:${port}（${err.message}）。请检查网络或代理设置。`));
+    const cleanup = (): void => {
+      ctx.signal.removeEventListener('abort', onAbort);
     };
-    socket.once('error', onError);
-    socket.once('connect', () => {
-      socket.off('error', onError);
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(err);
+    };
+    // ⚠️ 用 `on` 而不是 `once`：settled 之后连接上再报错也必须有人接住
+    // （没人接 = 未处理的 'error' 事件 = 整个进程崩掉）。
+    const onError = (err: Error): void => {
+      fail(new DownloadError(`连接失败：无法连到 ${host}:${port}（${err.message}）。请检查网络或代理设置。`));
+    };
+    const onConnect = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       resolve(socket);
-    });
+    };
+    const onAbort = (): void => fail(abortError(ctx));
+    socket.on('error', onError);
+    socket.once('connect', onConnect);
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
 /** 在已有 socket 上套一层 TLS（隧道内的 https 资源 / https 代理）。 */
-function wrapTls(socket: Socket, host: string): Promise<Socket> {
+function wrapTls(socket: Socket, host: string, ctx: AbortContext): Promise<Socket> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const tlsSocket = tlsConnect({
@@ -366,89 +512,122 @@ function wrapTls(socket: Socket, host: string): Promise<Socket> {
       servername: isIP(host) ? undefined : host,
       ALPNProtocols: ['http/1.1'],
     });
-    tlsSocket.on('error', (err: Error) => {
-      tlsSocket.destroy();
+    const fail = (err: Error): void => {
       if (settled) return;
       settled = true;
-      reject(new DownloadError(`TLS 握手失败：${err.message}。请检查代理设置与网络环境。`));
-    });
+      ctx.signal.removeEventListener('abort', onAbort);
+      tlsSocket.destroy();
+      reject(err);
+    };
+    const onError = (err: Error): void => {
+      fail(new DownloadError(`TLS 握手失败：${err.message}。请检查代理设置与网络环境。`));
+    };
+    const onAbort = (): void => fail(abortError(ctx));
+    tlsSocket.on('error', onError);
     tlsSocket.once('secureConnect', () => {
       if (settled) return;
       settled = true;
+      ctx.signal.removeEventListener('abort', onAbort);
+      tlsSocket.setTimeout(0); // 握手完了就不再用 socket 空闲超时（下载阶段由整体超时管）
       resolve(tlsSocket);
     });
+    // 兜底：TLS 握手卡住（对端不回）也要能被超时打断
+    tlsSocket.setTimeout(ctx.timeoutMs, () => fail(timeoutError(ctx.timeoutMs)));
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
 /** 读一段 HTTP 响应头（到 `\r\n\r\n` 为止），多余字节放回 socket。 */
-function readHead(socket: Socket): Promise<string> {
+function readHead(socket: Socket, ctx: AbortContext): Promise<string> {
   return new Promise((resolve, reject) => {
     let buf = Buffer.alloc(0);
+    let settled = false;
     const cleanup = (): void => {
       socket.off('data', onData);
       socket.off('end', onEnd);
       socket.off('error', onError);
-      // 暂停读取：没有 'data' 监听者时数据会被直接丢掉
-      socket.pause();
+      socket.setTimeout(0);
+      socket.pause(); // 没有 'data' 监听者时数据会被直接丢掉
+      ctx.signal.removeEventListener('abort', onAbort);
+    };
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
     };
     const onData = (chunk: Buffer): void => {
       buf = Buffer.concat([buf, chunk]);
       const idx = buf.indexOf('\r\n\r\n');
       if (idx < 0) return;
-      cleanup();
       const leftover = buf.subarray(idx + 4);
+      settled = true;
+      cleanup();
       if (leftover.length > 0) socket.unshift(leftover);
       resolve(buf.subarray(0, idx).toString('latin1'));
     };
     const onEnd = (): void => {
-      cleanup();
-      reject(new DownloadError('代理连接失败：代理没有返回 CONNECT 响应就断开了连接。请确认代理软件已启动。'));
+      fail(new DownloadError('代理连接失败：代理没有返回 CONNECT 响应就断开了连接。请确认代理软件已启动。'));
     };
-    const onError = (err: Error): void => {
-      cleanup();
-      reject(err);
-    };
+    const onError = (err: Error): void => fail(err);
+    const onAbort = (): void => fail(abortError(ctx));
     socket.on('data', onData);
     socket.once('end', onEnd);
-    socket.once('error', onError);
+    socket.on('error', onError);
+    // 兜底：代理连上了但不回 CONNECT（半死代理）——socket 空闲超时把它打断
+    socket.setTimeout(ctx.timeoutMs, () => fail(timeoutError(ctx.timeoutMs)));
+    if (ctx.signal.aborted) {
+      onAbort();
+      return;
+    }
+    ctx.signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
 /** 建立到目标地址的 CONNECT 隧道（返回可用的 socket）。 */
-async function openTunnel(url: URL, proxyUrl: URL): Promise<Socket> {
+async function openTunnel(url: URL, proxyUrl: URL, ctx: AbortContext): Promise<Socket> {
   const targetHost = bareHost(url);
   const targetPort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
   const proxyHost = bareHost(proxyUrl);
   const proxyPort = Number(proxyUrl.port || (proxyUrl.protocol === 'https:' ? 443 : 80));
 
-  let socket = await connectTcp(proxyHost, proxyPort);
-  if (proxyUrl.protocol === 'https:') {
-    socket = await wrapTls(socket, proxyHost);
-  }
+  let socket = await connectTcp(proxyHost, proxyPort, ctx);
+  try {
+    if (proxyUrl.protocol === 'https:') {
+      socket = await wrapTls(socket, proxyHost, ctx);
+    }
 
-  const handshake =
-    `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` +
-    `Host: ${targetHost}:${targetPort}\r\n` +
-    'Proxy-Connection: keep-alive\r\n' +
-    `User-Agent: ${USER_AGENT}\r\n\r\n`;
-  socket.write(handshake);
+    const handshake =
+      `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` +
+      `Host: ${targetHost}:${targetPort}\r\n` +
+      'Proxy-Connection: keep-alive\r\n' +
+      `User-Agent: ${USER_AGENT}\r\n\r\n`;
+    socket.write(handshake);
 
-  const head = await readHead(socket);
-  const statusLine = head.split('\r\n')[0] ?? '';
-  const m = /^HTTP\/1\.[01]\s+(\d{3})/.exec(statusLine);
-  if (!m || Number(m[1]) !== 200) {
+    const head = await readHead(socket, ctx);
+    const statusLine = head.split('\r\n')[0] ?? '';
+    const m = /^HTTP\/1\.[01]\s+(\d{3})/.exec(statusLine);
+    if (!m || Number(m[1]) !== 200) {
+      socket.destroy();
+      throw new DownloadError(
+        `代理连接失败：代理返回「${statusLine || '空响应'}」，没能建立到 ${targetHost}:${targetPort} 的隧道。` +
+          '请确认代理软件已启动、代理地址与端口填写正确。',
+      );
+    }
+
+    // https 资源：隧道里再套一层 TLS
+    if (url.protocol === 'https:') {
+      return await wrapTls(socket, targetHost, ctx);
+    }
+    return socket;
+  } catch (err) {
     socket.destroy();
-    throw new DownloadError(
-      `代理连接失败：代理返回「${statusLine || '空响应'}」，没能建立到 ${targetHost}:${targetPort} 的隧道。` +
-        '请确认代理软件已启动、代理地址与端口填写正确。',
-    );
+    throw err;
   }
-
-  // https 资源：隧道里再套一层 TLS
-  if (url.protocol === 'https:') {
-    return wrapTls(socket, targetHost);
-  }
-  return socket;
 }
 
 /** 发一次请求（直连或穿过已有隧道）。 */
@@ -537,7 +716,7 @@ function removeQuietly(path: string): void {
  * - 代理走 `assertProxyUrlAllowed`：只允许本机回环的 http/https 代理；
  * - 跟随重定向最多 5 跳，**每跳重新校验**；
  * - 边下边算 sha256，校验不过 → 删除临时文件并抛错；
- * - 超时（默认 10 分钟）→ 中止并清理临时文件。
+ * - 超时（默认 10 分钟，覆盖 **TCP 连接 / CONNECT 握手 / TLS 握手 / 传输** 全程）→ 中止并清理临时文件。
  */
 export async function downloadVerified(opts: DownloadOptions): Promise<DownloadResult> {
   return runDownload(opts, 'public');
@@ -550,9 +729,18 @@ export async function downloadVerified(opts: DownloadOptions): Promise<DownloadR
  *
  * 为什么需要它：出网红线要求产品路径拒绝回环地址，而单测的假服务器只能跑在回环上——
  * 两者直接冲突。这个入口把放宽的方向**反过来**（只允许回环），
- * 所以它**永远不可能**被用来从公网拉东西；产品代码（Task 2/4）**不得**调用它。
+ * 所以它**永远不可能**被用来从公网拉东西。
+ *
+ * ⚠️ **运行时闸门**：非测试环境直接抛错（fail closed）。
+ * 这个入口住在产品必引用的模块里，后续任务只要 import 一下就能把「本地文件服务器」
+ * 变成下载源——所以必须靠环境变量把它焊死在测试环境里。
  */
 export async function downloadVerifiedForTest(opts: DownloadOptions): Promise<DownloadResult> {
+  if (!process.env.VITEST) {
+    throw new DownloadError(
+      '内部错误：测试专用下载入口在非测试环境不可用，产品路径必须调用 downloadVerified。',
+    );
+  }
   return runDownload(opts, 'loopback-only');
 }
 
@@ -582,9 +770,9 @@ async function runDownload(opts: DownloadOptions, policy: ResourcePolicy): Promi
   });
 
   const controller = new AbortController();
-  let timedOut = false;
+  const ctx: AbortContext = { signal: controller.signal, timedOut: false, timeoutMs };
   const timer = setTimeout(() => {
-    timedOut = true;
+    ctx.timedOut = true;
     controller.abort();
   }, timeoutMs);
   const onUserAbort = (): void => controller.abort();
@@ -599,7 +787,7 @@ async function runDownload(opts: DownloadOptions, policy: ResourcePolicy): Promi
     let current = url;
     let response: IncomingMessage | undefined;
     for (let hop = 0; ; hop++) {
-      const tunnel = proxyUrl ? await openTunnel(current, proxyUrl) : undefined;
+      const tunnel = proxyUrl ? await openTunnel(current, proxyUrl, ctx) : undefined;
       response = await requestOnce(current, tunnel, controller.signal);
       const status = response.statusCode ?? 0;
       const location = response.headers.location;
@@ -653,7 +841,7 @@ async function runDownload(opts: DownloadOptions, policy: ResourcePolicy): Promi
 
     if (totalBytes !== undefined && bytesReceived !== totalBytes) {
       throw new DownloadError(
-        `下载失败：实际收到 ${bytesReceived} 字节，与服务器声明的 ${totalBytes} 字节不一致（连接可能中途断开）。请重试。`,
+        `下载失败：实际收到 ${bytesReceived} 字节，与服务器声明的 ${totalBytes} 字节不一致（连接在传输过程中被断开）。请检查网络连接或代理设置后重试。`,
       );
     }
 
@@ -686,27 +874,42 @@ async function runDownload(opts: DownloadOptions, policy: ResourcePolicy): Promi
     return { path: destFile, bytes: bytesReceived, sha256: digest };
   } catch (err) {
     removeQuietly(partFile);
-    const message = describeError(err, { timedOut, timeoutMs, aborted: opts.signal?.aborted === true });
+    const message = describeError(err, { timedOut: ctx.timedOut, timeoutMs, aborted: opts.signal?.aborted === true });
     report.emit({ bytesReceived, phase: 'failed', message });
-    throw new DownloadError(message);
+    throw new DownloadError(message, { cause: err });
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener('abort', onUserAbort);
   }
 }
 
-/** 把内部错误翻译成给用户看的中文说明。 */
+/** 取错误码（`ECONNRESET` 之类）。 */
+function errorCodeOf(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return '';
+}
+
+/**
+ * 把内部错误翻译成给用户看的中文说明。
+ *
+ * ⚠️ 不能把 Node 的原始英文报错（「aborted」「socket hang up」）直接抛给用户：
+ * 既看不懂也不知道下一步该干什么。
+ */
 function describeError(
   err: unknown,
   ctx: { timedOut: boolean; timeoutMs: number; aborted: boolean },
 ): string {
-  if (ctx.timedOut) {
-    return `下载超时：超过 ${humanDuration(ctx.timeoutMs)} 仍未完成，已中止并清理临时文件。请检查网络连接或代理设置后重试。`;
-  }
-  if (ctx.aborted) {
-    return '下载已取消：已中止并清理临时文件。';
-  }
   if (err instanceof DownloadError) return err.message;
+  if (ctx.timedOut) return timeoutError(ctx.timeoutMs).message;
+  if (ctx.aborted) return cancelledError().message;
   const raw = err instanceof Error ? err.message : String(err);
-  return `下载失败：${raw}。请检查网络连接或代理设置后重试。`;
+  const code = errorCodeOf(err);
+  const hint =
+    NETWORK_ERROR_TEXT[code] ?? (/aborted|socket hang up|premature close/i.test(raw) ? NETWORK_ERROR_TEXT.ECONNRESET : '');
+  return hint
+    ? `下载失败：${hint}。请检查网络连接或代理设置后重试。`
+    : `下载失败：${raw}。请检查网络连接或代理设置后重试。`;
 }

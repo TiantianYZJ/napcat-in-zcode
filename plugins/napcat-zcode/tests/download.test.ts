@@ -4,10 +4,12 @@
  * **全程不联网**：假源站 / 假代理都用 `node:http` / `node:net` 在 127.0.0.1 上现起，
  * 端口取 0（随机），避免与本机真实 NapCat（3000/6099）或真实代理（7897）撞车。
  *
- * 覆盖三层：
- * ① **出网红线**：`assertDownloadUrlAllowed` / `assertProxyUrlAllowed` 的准入判定；
- * ② **下载链路**：直连 / 代理 CONNECT 隧道 / 重定向 / 进度 / 超时 / sha256 校验；
- * ③ **失败清理**：校验不过、超时、地址被拒时都不能留下半成品文件。
+ * 覆盖五层：
+ * ① **出网红线**：资源地址 / 代理地址的准入判定（含各种 IP 字面量写法、userinfo、unicode 主机名）；
+ * ② **下载链路**：直连 / 代理 CONNECT 隧道 / 重定向（含跳数上限）/ 进度 / 超时 / sha256 校验；
+ * ③ **失败清理**：校验不过、超时、被中止、长度不符时都不能留下半成品文件；
+ * ④ **连接阶段也要能超时**：代理连上了却不回 CONNECT —— 不许把后台作业挂死；
+ * ⑤ **测试入口的闸门**：运行时（非 VITEST 直接失败）+ 静态（`src/` 里不许出现）。
  *
  * 关于 `downloadVerifiedForTest`：
  * 产品路径 `downloadVerified` **必须**拒绝回环/内网资源地址（出网红线），
@@ -17,12 +19,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { connect as tcpConnect, createServer as createTcpServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertDownloadUrlAllowed,
@@ -185,6 +188,49 @@ async function startConnectProxy(): Promise<FakeProxy> {
   };
 }
 
+/** 假代理：接受 TCP 连接但**永远不回应 CONNECT**（半死代理）。 */
+async function startSilentProxy(): Promise<FakeProxy> {
+  const connects: string[] = [];
+  const sockets = new Set<Socket>();
+  const server = createTcpServer((sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.on('error', () => {
+      /* 客户端断开 */
+    });
+    sock.on('data', (chunk: Buffer) => {
+      connects.push(chunk.toString('latin1').split('\r\n')[0] ?? '');
+      // 什么都不回：连接挂着但不回应
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  return {
+    port,
+    connects,
+    close: () =>
+      new Promise<void>((r) => {
+        for (const s of sockets) s.destroy();
+        server.close(() => r());
+      }),
+  };
+}
+
+/** 递归列出目录下的 .ts 文件。 */
+function collectTsFiles(dir: string, out: string[] = []): string[] {
+  for (const item of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, item.name);
+    if (item.isDirectory()) collectTsFiles(full, out);
+    else if (item.name.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
+
+/** 去掉注释（只保留真正的代码）——用来判断「有没有真的用到某个符号」。 */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
 // ── 用例 ────────────────────────────────────────────────────────────
 
 const PAYLOAD = Buffer.from('NapCat artifact payload — 制品字节流 '.repeat(64));
@@ -244,6 +290,49 @@ describe('M3 Task 1：下载器', () => {
       expect(() => assertDownloadUrlAllowed('http://[::1]/x.zip', ['::1'])).toThrow(/回环/);
     });
 
+    it('拒绝 IPv4-mapped IPv6 回环（::ffff:127.0.0.1）', () => {
+      // URL 解析器会把 ::ffff:127.0.0.1 规范化成 ::ffff:7f00:1
+      // → 字符串匹配认不出来，必须展开成 8 组再判
+      expect(() => assertDownloadUrlAllowed('http://[::ffff:127.0.0.1]/x.zip', ['::ffff:127.0.0.1'])).toThrow(
+        /回环/,
+      );
+      expect(classifyHost('::ffff:7f00:1')).toBe('loopback');
+      expect(classifyHost('::ffff:127.0.0.1')).toBe('loopback');
+    });
+
+    it('拒绝 IPv4-mapped IPv6 内网（::ffff:10.0.0.1）', () => {
+      expect(() => assertDownloadUrlAllowed('http://[::ffff:10.0.0.1]/x.zip', ['::ffff:10.0.0.1'])).toThrow(
+        /内网/,
+      );
+      expect(classifyHost('::ffff:a00:1')).toBe('private');
+    });
+
+    it('拒绝各种 IP 字面量写法（十进制 / 十六进制 / 八进制 / 省略写法）', () => {
+      // WHATWG URL 解析器会把这些都规范化成 127.0.0.1
+      expect(() => assertDownloadUrlAllowed('http://2130706433/x.zip', ['2130706433'])).toThrow(/回环/);
+      expect(() => assertDownloadUrlAllowed('http://0x7f000001/x.zip', ['0x7f000001'])).toThrow(/回环/);
+      expect(() => assertDownloadUrlAllowed('http://0177.0.0.1/x.zip', ['0177.0.0.1'])).toThrow(/回环/);
+      expect(() => assertDownloadUrlAllowed('http://127.1/x.zip', ['127.1'])).toThrow(/回环/);
+    });
+
+    it('拒绝地址里带账号密码（userinfo）', () => {
+      expect(() => assertDownloadUrlAllowed('http://user:pass@github.com/x.zip', ['github.com'])).toThrow(
+        /账号密码/,
+      );
+      // 「evil.com@127.0.0.1」看起来像 evil.com，实际主机是 127.0.0.1
+      expect(() => assertDownloadUrlAllowed('http://evil.com@127.0.0.1/x.zip', ['127.0.0.1'])).toThrow(
+        /回环|账号密码/,
+      );
+    });
+
+    it('unicode 主机名转 punycode 后不在清单内 → 拒绝', () => {
+      expect(() => assertDownloadUrlAllowed('http://例え.テスト/x.zip', ['github.com'])).toThrow(/不在允许/);
+      // 清单里写 punycode 形式则可以匹配（清单是代码侧写死的公网域名）
+      expect(assertDownloadUrlAllowed('http://例え.テスト/x.zip', ['xn--r8jz45g.xn--zckzah']).hostname).toBe(
+        'xn--r8jz45g.xn--zckzah',
+      );
+    });
+
     it('拒绝内网地址', () => {
       expect(() => assertDownloadUrlAllowed('http://10.0.0.1/x.zip', ['10.0.0.1'])).toThrow(/内网/);
       expect(() => assertDownloadUrlAllowed('http://172.16.0.1/x.zip', ['172.16.0.1'])).toThrow(/内网/);
@@ -290,6 +379,7 @@ describe('M3 Task 1：下载器', () => {
       expect(classifyHost('fe80::1')).toBe('private');
       expect(classifyHost('0.0.0.0')).toBe('reserved');
       expect(classifyHost('224.0.0.1')).toBe('reserved');
+      expect(classifyHost('::')).toBe('reserved');
     });
   });
 
@@ -314,7 +404,41 @@ describe('M3 Task 1：下载器', () => {
     });
   });
 
-  // ── ④ 产品路径的准入 ────────────────────────────────────────────
+  // ── ④ 测试入口的闸门 ────────────────────────────────────────────
+
+  describe('测试专用入口的闸门', () => {
+    it('运行时闸门：非测试环境直接失败（fail closed）', async () => {
+      expect(process.env.VITEST).toBeTruthy();
+      const saved = process.env.VITEST;
+      delete process.env.VITEST;
+      try {
+        await expect(
+          downloadVerifiedForTest({
+            url: 'http://127.0.0.1:1/x.zip',
+            destFile: join(workDir, 'x.zip'),
+            sha256: PAYLOAD_SHA,
+            allowedHosts: ['127.0.0.1'],
+          }),
+        ).rejects.toThrow(/非测试环境/);
+      } finally {
+        process.env.VITEST = saved;
+      }
+    });
+
+    it('静态闸门：src/ 里除 download.ts 自身外不许「使用」downloadVerifiedForTest', () => {
+      const srcRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+      const offenders = collectTsFiles(srcRoot).filter(
+        (file) => !file.endsWith('host\\download.ts') && !file.endsWith('host/download.ts'),
+      );
+      // ⚠️ 只查**真实使用**（import / 调用），不查注释里的提及：
+      // 文档里写「产品代码不得用 downloadVerifiedForTest」是**正确用法**，
+      // 按字符串一刀切会逼着别人把警告注释也删掉。
+      const hits = offenders.filter((file) => stripComments(readFileSync(file, 'utf8')).includes('downloadVerifiedForTest'));
+      expect(hits).toEqual([]);
+    });
+  });
+
+  // ── ⑤ 产品路径的准入 ────────────────────────────────────────────
 
   describe('产品路径准入', () => {
     it('产品下载入口拒绝回环资源地址', async () => {
@@ -352,7 +476,7 @@ describe('M3 Task 1：下载器', () => {
     });
   });
 
-  // ── ⑤ 直连下载 ──────────────────────────────────────────────────
+  // ── ⑥ 直连下载 ──────────────────────────────────────────────────
 
   describe('直连下载', () => {
     it('校验通过后落盘，且不留 .part 临时文件', async () => {
@@ -376,6 +500,27 @@ describe('M3 Task 1：下载器', () => {
       expect(result.sha256).toBe(PAYLOAD_SHA);
       expect(readFileSync(dest)).toEqual(PAYLOAD);
       expect(existsSync(`${dest}.part`)).toBe(false);
+    });
+
+    it('下载前会清掉上一次残留的 .part 半成品', async () => {
+      const server = await track(
+        await startFakeServer('http', (_req, res) => {
+          res.writeHead(200, { 'content-length': String(PAYLOAD.length) });
+          res.end(PAYLOAD);
+        }),
+      );
+      const dest = join(workDir, 'artifact.zip');
+      writeFileSync(`${dest}.part`, '上一次没下完的半成品');
+
+      await downloadVerifiedForTest({
+        url: `http://127.0.0.1:${server.port}/artifact.zip`,
+        destFile: dest,
+        sha256: PAYLOAD_SHA,
+        allowedHosts: ['127.0.0.1'],
+      });
+
+      expect(existsSync(`${dest}.part`)).toBe(false);
+      expect(readFileSync(dest)).toEqual(PAYLOAD);
     });
 
     it('sha256 不匹配：报错说清「校验失败 / 已丢弃」，且临时文件被删', async () => {
@@ -477,6 +622,26 @@ describe('M3 Task 1：下载器', () => {
       expect(server.requests).toContain('/final/artifact.zip');
     });
 
+    it('重定向跳数超过上限 → 明确报错', async () => {
+      const server = await track(
+        await startFakeServer('http', (req, res) => {
+          const current = Number((req.url ?? '/0').replace(/[^0-9]/g, '')) || 0;
+          res.writeHead(302, { location: `/hop${current + 1}` });
+          res.end();
+        }),
+      );
+
+      await expect(
+        downloadVerifiedForTest({
+          url: `http://127.0.0.1:${server.port}/hop0`,
+          destFile: join(workDir, 'artifact.zip'),
+          sha256: PAYLOAD_SHA,
+          allowedHosts: ['127.0.0.1'],
+        }),
+      ).rejects.toThrow(/重定向/);
+      expect(existsSync(join(workDir, 'artifact.zip.part'))).toBe(false);
+    });
+
     it('重定向到内网地址 → 拒绝下载', async () => {
       const server = await track(
         await startFakeServer('http', (_req, res) => {
@@ -516,6 +681,54 @@ describe('M3 Task 1：下载器', () => {
       expect(existsSync(dest)).toBe(false);
     });
 
+    it('外部 signal 中止 → 报「下载已取消」并清理临时文件', async () => {
+      const server = await track(
+        await startFakeServer('http', (_req, res) => {
+          res.writeHead(200);
+          res.write(PAYLOAD.subarray(0, 100));
+          // 故意不结束：等测试来中止
+        }),
+      );
+      const dest = join(workDir, 'artifact.zip');
+      const controller = new AbortController();
+
+      const promise = downloadVerifiedForTest({
+        url: `http://127.0.0.1:${server.port}/artifact.zip`,
+        destFile: dest,
+        sha256: PAYLOAD_SHA,
+        allowedHosts: ['127.0.0.1'],
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 120);
+
+      await expect(promise).rejects.toThrow(/下载已取消/);
+      expect(existsSync(`${dest}.part`)).toBe(false);
+      expect(existsSync(dest)).toBe(false);
+    });
+
+    it('Content-Length 与实际长度不符 → 中文报错并清理临时文件', async () => {
+      const server = await track(
+        await startFakeServer('http', (_req, res) => {
+          // 声明 999999 字节，实际只发一小段就断
+          res.writeHead(200, { 'content-length': '999999' });
+          res.write(PAYLOAD.subarray(0, 1000));
+          res.end();
+        }),
+      );
+      const dest = join(workDir, 'artifact.zip');
+
+      await expect(
+        downloadVerifiedForTest({
+          url: `http://127.0.0.1:${server.port}/artifact.zip`,
+          destFile: dest,
+          sha256: PAYLOAD_SHA,
+          allowedHosts: ['127.0.0.1'],
+        }),
+      ).rejects.toThrow(/连接在传输过程中被断开|不一致/);
+      expect(existsSync(`${dest}.part`)).toBe(false);
+      expect(existsSync(dest)).toBe(false);
+    });
+
     it('HTTP 错误状态 → 明确报错', async () => {
       const server = await track(
         await startFakeServer('http', (_req, res) => {
@@ -535,7 +748,7 @@ describe('M3 Task 1：下载器', () => {
     });
   });
 
-  // ── ⑥ 代理 CONNECT 隧道 ─────────────────────────────────────────
+  // ── ⑦ 代理 CONNECT 隧道 ─────────────────────────────────────────
 
   describe('代理 CONNECT 隧道', () => {
     it('经本机代理隧道下载：CONNECT 握手 + 隧道内传输', async () => {
@@ -560,6 +773,40 @@ describe('M3 Task 1：下载器', () => {
       expect(readFileSync(dest)).toEqual(PAYLOAD);
       expect(proxy.connects.length).toBe(1);
       expect(proxy.connects[0]).toMatch(/^CONNECT 127\.0\.0\.1:\d+ HTTP\/1\.[01]$/);
+    });
+
+    it('经代理时资源地址仍要走允许清单与内网拒绝（一次连接都不能发）', async () => {
+      const proxy = await trackProxy(await startConnectProxy());
+
+      await expect(
+        downloadVerifiedForTest({
+          url: 'http://10.0.0.1/evil.zip',
+          destFile: join(workDir, 'artifact.zip'),
+          sha256: PAYLOAD_SHA,
+          proxy: `http://127.0.0.1:${proxy.port}`,
+          allowedHosts: ['10.0.0.1'],
+        }),
+      ).rejects.toThrow(/内网/);
+      expect(proxy.connects.length).toBe(0);
+    });
+
+    it('代理连上了却不回应 CONNECT → 必须在 timeoutMs 内返回（不许挂死）', async () => {
+      const proxy = await trackProxy(await startSilentProxy());
+      const dest = join(workDir, 'artifact.zip');
+      const started = Date.now();
+
+      await expect(
+        downloadVerifiedForTest({
+          url: 'http://127.0.0.1:1/artifact.zip',
+          destFile: dest,
+          sha256: PAYLOAD_SHA,
+          proxy: `http://127.0.0.1:${proxy.port}`,
+          allowedHosts: ['127.0.0.1'],
+          timeoutMs: 800,
+        }),
+      ).rejects.toThrow(/超时/);
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(existsSync(`${dest}.part`)).toBe(false);
     });
 
     it('https 资源经代理隧道：CONNECT 之后在隧道内再套 TLS', async () => {
@@ -615,24 +862,28 @@ describe('M3 Task 1：下载器', () => {
   });
 });
 
-describe('M3 Task 1：下载器（TLS 自签证书豁免）', () => {
-  it('https 直连（自签证书）也能下载并校验通过', async () => {
+describe('M3 Task 1：下载器（TLS 证书校验）', () => {
+  it('https 直连（自签证书，校验开启）必须连接失败', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'napcat-download-tls-'));
     const origin = await startFakeServer('https', (_req, res) => {
       res.writeHead(200, { 'content-length': String(PAYLOAD.length) });
       res.end(PAYLOAD);
     });
+    // 关键：这里**恢复证书校验**（文件级默认关掉了）
+    const saved = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     try {
-      const dest = join(workDir, 'artifact.zip');
-      const result = await downloadVerifiedForTest({
-        url: `https://127.0.0.1:${origin.port}/artifact.zip`,
-        destFile: dest,
-        sha256: PAYLOAD_SHA,
-        allowedHosts: ['127.0.0.1'],
-      });
-      expect(result.sha256).toBe(PAYLOAD_SHA);
-      expect(readFileSync(dest)).toEqual(PAYLOAD);
+      await expect(
+        downloadVerifiedForTest({
+          url: `https://127.0.0.1:${origin.port}/artifact.zip`,
+          destFile: join(workDir, 'artifact.zip'),
+          sha256: PAYLOAD_SHA,
+          allowedHosts: ['127.0.0.1'],
+        }),
+      ).rejects.toThrow(/自签证书|TLS 握手失败/);
+      expect(existsSync(join(workDir, 'artifact.zip.part'))).toBe(false);
     } finally {
+      if (saved !== undefined) process.env.NODE_TLS_REJECT_UNAUTHORIZED = saved;
       await origin.close();
       rmSync(workDir, { recursive: true, force: true });
     }

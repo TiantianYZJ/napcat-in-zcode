@@ -9,18 +9,23 @@
  * - 解析 **EOCD**（含注释情形）、**中央目录**、**本地文件头**；支持 ZIP64 兜底。
  * - 支持 **stored(0)** 与 **deflate(8)** 两种压缩方法；其它方法给出明确中文错误。
  * - **Zip Slip 防护**：条目名含 `..` / 绝对路径 / 盘符 → 直接拒绝。
- * - **符号链接条目拒绝**：Unix 创建的 zip 用外部属性高 16 位存 Unix 模式，
- *   `S_IFLNK`（0xA000）即符号链接 → 拒绝（符号链接能把安装目录里的文件指到别处）。
+ * - **符号链接条目拒绝**：外部属性高 16 位是 Unix 模式位，`S_IFLNK`（0xA000）即符号链接 → 拒绝
+ *   （符号链接能把安装目录里的文件指到别处）。
  * - 解压目标做**越界校验**：`path.resolve` 后必须仍在 `destDir` 之内。
+ * - **zip 炸弹**防护：单条解压有 `maxOutputLength` 上限，全局有总字节预算。
  *
- * 两条硬约束（安全相关，改动前先读）：
- * 1. **先全量校验、后写盘**：任何一条条目有问题就整批拒绝，**一个字节都不写**——
- *    否则「前几条正常、后一条越界」会留下半个安装目录（用户根本不知道装了一半）。
- * 2. **不信任调用方给的 `entries`**：解包时会用中央目录里的权威元数据复核
- *    （外部属性/CRC/大小），因为 `ZipEntry` 这个公开形状里放不下这些字段。
+ * 三条硬约束（安全相关，改动前先读）：
+ * 1. **两阶段**：① 校验阶段（名字 / 符号链接 / 压缩方法 / 本地头 / 解压 / 大小 / CRC / 体积预算
+ *    **全部过一遍，数据丢弃不写盘**）→ ② 写盘阶段（只可能因 I/O 失败）。
+ *    只在写盘前查名字是不够的：内容坏掉（CRC 不符 / 方法不支持）同样会留下半个安装目录，
+ *    而用户根本不知道装了一半（计划 Task 2 要求「失败不留半成品目录」）。
+ * 2. **不信任调用方给的 `entries`**：解包时用中央目录里的权威元数据复核
+ *    （外部属性 / CRC / 大小），因为 `ZipEntry` 这个公开形状里放不下这些字段。
+ * 3. **不覆盖已有的符号链接**：词法越界检查挡不住「目标位置本来就是个软链」，
+ *    写盘前必须 `lstat` 一次。
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 
@@ -44,8 +49,6 @@ interface CentralRecord extends ZipEntry {
   crc: number;
   /** 外部属性（含 Unix 模式位）。 */
   externalAttrs: number;
-  /** versionMadeBy：高字节是创建系统（3 = Unix）。 */
-  versionMadeBy: number;
 }
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -64,8 +67,14 @@ const MAX_COMMENT_SIZE = 0xffff;
 /** Unix 模式里的文件类型位。 */
 const UNIX_S_IFMT = 0xf000;
 const UNIX_S_IFLNK = 0xa000;
-/** Unix 主机系统编号（versionMadeBy 的高字节）。 */
-const HOST_SYSTEM_UNIX = 3;
+
+/**
+ * 解压总字节预算上限（默认 2 GiB）——**zip 炸弹**防护。
+ *
+ * 压缩包可以声明「解压后 4GB」而实际只有几 KB；没有预算的话，
+ * 一个恶意压缩包就能把用户磁盘塞满。
+ */
+export const DEFAULT_MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** 压缩方法 → 中文名（报错时要说清「这是个什么方法」）。 */
 const METHOD_NAMES: Record<number, string> = {
@@ -137,18 +146,30 @@ function readZip64Eocd(buf: Buffer, eocdPos: number): { total: number; size: num
   if (buf.readUInt32LE(z64Offset) !== ZIP64_EOCD_SIGNATURE) {
     throw new Error('解压失败：压缩包的 ZIP64 中央目录记录已损坏。');
   }
-  return {
-    total: Number(buf.readBigUInt64LE(z64Offset + 32)),
-    size: Number(buf.readBigUInt64LE(z64Offset + 40)),
-    offset: Number(buf.readBigUInt64LE(z64Offset + 48)),
-  };
+  const total = Number(buf.readBigUInt64LE(z64Offset + 32));
+  const size = Number(buf.readBigUInt64LE(z64Offset + 40));
+  const offset = Number(buf.readBigUInt64LE(z64Offset + 48));
+  if (!Number.isSafeInteger(total) || !Number.isSafeInteger(size) || !Number.isSafeInteger(offset)) {
+    throw new Error('解压失败：压缩包的 ZIP64 中央目录数值超出可处理范围。');
+  }
+  return { total, size, offset };
 }
 
-/** 从 extra 字段里读 ZIP64 扩展信息（只补 0xffffffff 的那几项）。 */
+/**
+ * 从 extra 字段里读 ZIP64 扩展信息（只补 0xffffffff 的那几项）。
+ *
+ * ⚠️ 找不到 / 读不全时**必须抛错**：静默返回 0xffffffff 哨兵会让后面按那个天文数字
+ * 去切片，结果是「解压了半个空文件」或「越界读」——比直接报错难查得多。
+ */
 function readZip64Extra(
   extra: Buffer,
   current: { size: number; compressedSize: number; offset: number },
 ): { size: number; compressedSize: number; offset: number } {
+  const needSize = current.size === 0xffffffff;
+  const needCompressed = current.compressedSize === 0xffffffff;
+  const needOffset = current.offset === 0xffffffff;
+  if (!needSize && !needCompressed && !needOffset) return current;
+
   let pos = 0;
   while (pos + 4 <= extra.length) {
     const id = extra.readUInt16LE(pos);
@@ -158,9 +179,6 @@ function readZip64Extra(
     if (dataEnd > extra.length) break;
     if (id === 0x0001) {
       let cursor = dataStart;
-      const needSize = current.size === 0xffffffff;
-      const needCompressed = current.compressedSize === 0xffffffff;
-      const needOffset = current.offset === 0xffffffff;
       let uncompressedSize = current.size;
       let compressedSize = current.compressedSize;
       let localOffset = current.offset;
@@ -181,11 +199,14 @@ function readZip64Extra(
         localOffset = Number(extra.readBigUInt64LE(cursor));
         cursor += 8;
       }
+      if (!Number.isSafeInteger(uncompressedSize) || !Number.isSafeInteger(compressedSize) || !Number.isSafeInteger(localOffset)) {
+        throw new Error('解压失败：压缩包的 ZIP64 扩展数值超出可处理范围。');
+      }
       return { size: uncompressedSize, compressedSize, offset: localOffset };
     }
     pos = dataEnd;
   }
-  return current;
+  throw new Error('解压失败：压缩包的 ZIP64 扩展信息不完整（文件可能被截断）。');
 }
 
 /** 解析中央目录（权威元数据）。 */
@@ -208,7 +229,6 @@ function parseCentralDirectory(buf: Buffer): CentralRecord[] {
     if (pos + CENTRAL_SIZE > buf.length || buf.readUInt32LE(pos) !== CENTRAL_SIGNATURE) {
       throw new Error(`解压失败：压缩包中央目录已损坏（读到第 ${i + 1} 个条目时中断）。`);
     }
-    const versionMadeBy = buf.readUInt16LE(pos + 4);
     const method = buf.readUInt16LE(pos + 10);
     const crc = buf.readUInt32LE(pos + 16);
     let compressedSize = buf.readUInt32LE(pos + 20);
@@ -230,7 +250,7 @@ function parseCentralDirectory(buf: Buffer): CentralRecord[] {
       compressedSize = z64.compressedSize;
       offset = z64.offset;
     }
-    records.push({ name, size, compressedSize, method, offset, crc, externalAttrs, versionMadeBy });
+    records.push({ name, size, compressedSize, method, offset, crc, externalAttrs });
     pos = nameStart + nameLen + extraLen + commentLen;
   }
   return records;
@@ -265,10 +285,14 @@ function assertSafeEntryName(name: string): void {
   }
 }
 
-/** 条目是不是符号链接（Unix 创建的 zip 用外部属性高 16 位存模式位）。 */
+/**
+ * 条目是不是符号链接。
+ *
+ * 只看**外部属性高 16 位的 Unix 模式位**（`S_IFLNK` = 0xA000）：
+ * 不绑 `versionMadeBy` 的主机系统字节——有些工具用 DOS 来源标记却仍写入 Unix 模式位，
+ * 绑死主机系统会漏判（漏判 = 符号链接被写进安装目录）。
+ */
 function isSymlinkEntry(rec: CentralRecord): boolean {
-  const hostSystem = rec.versionMadeBy >> 8;
-  if (hostSystem !== HOST_SYSTEM_UNIX) return false;
   const mode = (rec.externalAttrs >>> 16) & 0xffff;
   return (mode & UNIX_S_IFMT) === UNIX_S_IFLNK;
 }
@@ -281,6 +305,16 @@ function assertNotSymlink(rec: CentralRecord): void {
   }
 }
 
+/** 压缩方法必须是 0（stored）或 8（deflate）。 */
+function assertSupportedMethod(rec: CentralRecord): void {
+  if (rec.method === 0 || rec.method === 8) return;
+  const label = METHOD_NAMES[rec.method];
+  throw new Error(
+    `解压失败：条目「${rec.name}」使用了不支持的压缩方法 ${rec.method}${label ? `（${label}）` : ''}。` +
+      '本插件只支持 0（不压缩）与 8（deflate）两种方法。',
+  );
+}
+
 /** 解压目标路径：必须在 `root` 之内。 */
 function resolveTarget(root: string, name: string): string {
   const rel = name.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -290,6 +324,33 @@ function resolveTarget(root: string, name: string): string {
     throw new Error(`解压被拒绝：条目「${name}」的目标路径越出了目标目录，已中止（没有写出任何文件）。`);
   }
   return target;
+}
+
+/**
+ * 写盘前检查目标位置是不是已有的符号链接。
+ *
+ * 词法越界检查（`resolve` 后仍在 destDir 内）挡不住这种情况：
+ * destDir 里本来就有个 `config` → 指向别处的软链，
+ * 往里写文件实际是写到了 destDir 之外。
+ */
+function assertTargetNotSymlink(target: string, name: string): void {
+  let isSymlink = false;
+  try {
+    isSymlink = lstatSync(target).isSymbolicLink();
+  } catch {
+    return; // 不存在 → 正常（写的时候才创建）
+  }
+  if (isSymlink) {
+    throw new Error(
+      `解压被拒绝：目标位置「${name}」已经是一个符号链接，不允许覆盖（否则会写到目标目录之外），已中止。`,
+    );
+  }
+}
+
+/** 写文件时保留可执行位（Unix 来源的压缩包带模式位）。 */
+function writeMode(rec: CentralRecord): { mode: number } | undefined {
+  const mode = (rec.externalAttrs >>> 16) & 0o777;
+  return mode ? { mode } : undefined;
 }
 
 // ── 公开接口 ───────────────────────────────────────────────────────
@@ -324,8 +385,9 @@ export function listZipEntries(buf: Buffer): ZipEntry[] {
   return out;
 }
 
-/** 读出并解压单个条目的内容。 */
+/** 读出并解压单个条目的内容（含大小 / CRC 校验）。 */
 function readEntryData(buf: Buffer, rec: CentralRecord): Buffer {
+  assertSupportedMethod(rec);
   const lfh = rec.offset;
   if (!Number.isSafeInteger(lfh) || lfh < 0 || lfh + LOCAL_SIZE > buf.length) {
     throw new Error(`解压失败：条目「${rec.name}」的本地文件头位置无效（文件可能被截断）。`);
@@ -345,18 +407,21 @@ function readEntryData(buf: Buffer, rec: CentralRecord): Buffer {
   let out: Buffer;
   if (rec.method === 0) {
     out = Buffer.from(raw);
-  } else if (rec.method === 8) {
+  } else {
     try {
-      out = inflateRawSync(raw);
-    } catch {
+      out = inflateRawSync(raw, {
+        // 单条上限：声明多大就只能解出多大（解压炸弹防护）
+        maxOutputLength: Math.max(rec.size, 1),
+      });
+    } catch (err) {
+      const code = (err as { code?: string } | undefined)?.code ?? '';
+      if (code === 'ERR_BUFFER_TOO_LARGE') {
+        throw new Error(
+          `解压被拒绝：条目「${rec.name}」解压后的体积超过了压缩包声明的大小（疑似压缩炸弹或数据已损坏），已中止（没有写出任何文件）。`,
+        );
+      }
       throw new Error(`解压失败：条目「${rec.name}」无法用 deflate 解开（数据可能已损坏）。`);
     }
-  } else {
-    const label = METHOD_NAMES[rec.method];
-    throw new Error(
-      `解压失败：条目「${rec.name}」使用了不支持的压缩方法 ${rec.method}${label ? `（${label}）` : ''}。` +
-        '本插件只支持 0（不压缩）与 8（deflate）两种方法。',
-    );
   }
 
   if (out.length !== rec.size) {
@@ -379,14 +444,26 @@ export interface ExtractZipOptions {
    * 例如只解 `napcat/` 与顶层运行文件：`e => e.name.startsWith('napcat/') || !e.name.includes('/')`。
    */
   filter?: (e: ZipEntry) => boolean;
+  /**
+   * 解压总字节预算（zip 炸弹防护）。默认 2 GiB（`DEFAULT_MAX_EXTRACTED_BYTES`）。
+   */
+  maxTotalBytes?: number;
+}
+
+function normalizeBudget(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return DEFAULT_MAX_EXTRACTED_BYTES;
+  return Math.floor(value);
 }
 
 /**
  * 把压缩包解到 `destDir`。
  *
- * - **先全量校验、后写盘**：任何一条条目有问题就整批拒绝（不写任何文件）。
- * - 只解 `entries` 里列出的条目（调用方可以先 `listZipEntries` 再自行挑选）。
- * - 用中央目录里的**权威元数据**复核（符号链接、CRC、大小），不信任调用方给的形状。
+ * **两阶段**（硬约束）：
+ * 1. 校验阶段：名字 / 符号链接 / 压缩方法 / 本地头 / 解压 / 大小 / CRC / 体积预算
+ *    **全部过一遍**，数据只用于校验、**不写盘**；
+ * 2. 写盘阶段：此时内容已经全部验证过，只可能因 I/O 失败。
+ *
+ * 代价是解压两次（124MB 制品多几秒 CPU），换来的是「失败不留半成品目录」。
  *
  * @returns 解出的文件数与总字节数（只统计文件，不含目录条目）。
  */
@@ -403,9 +480,11 @@ export function extractZip(
   const records = parseCentralDirectory(buf);
   const byName = new Map<string, CentralRecord>();
   for (const rec of records) byName.set(rec.name, rec);
+  const maxTotalBytes = normalizeBudget(opts?.maxTotalBytes);
 
-  // ① 先把要解的条目全部校验一遍（此时还一个字节都没写）
+  // ── 阶段 ①：全量校验（一个字节都不写盘） ──
   const plan: { rec: CentralRecord; target: string; dir: boolean }[] = [];
+  let declaredTotal = 0;
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry || typeof entry.name !== 'string') {
       throw new Error('解压失败：条目信息无效（缺少条目名）。');
@@ -417,12 +496,32 @@ export function extractZip(
       throw new Error(`解压失败：压缩包里找不到条目「${entry.name}」（清单与压缩包内容不一致）。`);
     }
     assertNotSymlink(rec);
+    assertSupportedMethod(rec);
     const target = resolveTarget(root, rec.name);
     const isDir = rec.name.endsWith('/') || rec.name.endsWith('\\');
+    declaredTotal += rec.size;
+    if (declaredTotal > maxTotalBytes) {
+      throw new Error(
+        `解压被拒绝：压缩包声明的解压总大小超过上限（${maxTotalBytes} 字节），疑似压缩炸弹，已中止（没有写出任何文件）。`,
+      );
+    }
     plan.push({ rec, target, dir: isDir });
   }
 
-  // ② 校验全过了才开始写盘
+  // 逐条解压校验（数据丢弃）：内容坏了必须在这里暴露，不能等到写盘时才发现
+  let actualTotal = 0;
+  for (const item of plan) {
+    if (item.dir) continue;
+    const data = readEntryData(buf, item.rec);
+    actualTotal += data.length;
+    if (actualTotal > maxTotalBytes) {
+      throw new Error(
+        `解压被拒绝：实际解压出的总大小超过上限（${maxTotalBytes} 字节），疑似压缩炸弹，已中止（没有写出任何文件）。`,
+      );
+    }
+  }
+
+  // ── 阶段 ②：写盘（内容已全部验证过） ──
   mkdirSync(root, { recursive: true });
   let files = 0;
   let bytes = 0;
@@ -431,9 +530,10 @@ export function extractZip(
       mkdirSync(item.target, { recursive: true });
       continue;
     }
+    assertTargetNotSymlink(item.target, item.rec.name);
     const data = readEntryData(buf, item.rec);
     mkdirSync(dirname(item.target), { recursive: true });
-    writeFileSync(item.target, data);
+    writeFileSync(item.target, data, writeMode(item.rec));
     files += 1;
     bytes += data.length;
   }
