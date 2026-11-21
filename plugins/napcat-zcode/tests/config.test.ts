@@ -309,7 +309,12 @@ describe('config hardening', () => {
       ports: [3000, 8080],
       endpoints: ['ws://127.0.0.1:3001'],
     };
-    cfg.managed = { napcatVersion: '4.18.43', downloadMirror: 'https://example.test/nc.zip' };
+    cfg.managed = {
+      napcatVersion: '4.18.43',
+      downloadMirror: 'https://example.test/nc.zip',
+      downloadProxy: 'http://127.0.0.1:7897',
+      desktopQqPath: 'D:\\QQ\\QQ.exe',
+    };
     cfg.export = { dir: 'workspace', includeImages: true };
     cfg.inject = { maxInjectChars: 1234 };
     saveConfig(tmp, cfg);

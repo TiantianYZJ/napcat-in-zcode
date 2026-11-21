@@ -562,9 +562,15 @@ describe('mcp tool registration (T10)', () => {
       'napcat_format_selection',
       'napcat_get_config',
       'napcat_get_history',
+      'napcat_host_status',
+      'napcat_install',
+      'napcat_install_status',
       'napcat_list_chats',
+      'napcat_open_panel',
       'napcat_search_messages',
+      'napcat_start',
       'napcat_status',
+      'napcat_stop',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
     const props = (name: string) =>

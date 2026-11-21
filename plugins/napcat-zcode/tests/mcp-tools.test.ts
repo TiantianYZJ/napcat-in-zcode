@@ -151,7 +151,8 @@ describe('mcp tool registration', () => {
   it('registers the four T9 tools with their descriptions', async () => {
     const c = await makeClient();
     const list = await c.listTools();
-    // T10 追加了 search / format_selection / export / get_config 四个工具（见 tests/mcp-tools-extra.test.ts）
+    // T10 追加了 search / format_selection / export / get_config 四个工具（见 tests/mcp-tools-extra.test.ts）；
+    // M3 又追加了受管宿主的一组：host_status / install / install_status / start / stop / open_panel
     expect(list.tools.map((t) => t.name).sort()).toEqual([
       'napcat_configure',
       'napcat_detect_local',
@@ -159,9 +160,15 @@ describe('mcp tool registration', () => {
       'napcat_format_selection',
       'napcat_get_config',
       'napcat_get_history',
+      'napcat_host_status',
+      'napcat_install',
+      'napcat_install_status',
       'napcat_list_chats',
+      'napcat_open_panel',
       'napcat_search_messages',
+      'napcat_start',
       'napcat_status',
+      'napcat_stop',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
     // description 里写明「连接失败返回 {connected:false, error} 且 isError 为 false」，避免下游当工具错误处理

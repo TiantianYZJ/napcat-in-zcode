@@ -808,4 +808,68 @@ describe('M3 Task 2：受管安装台账 + 安装作业', () => {
       expect(view.webuiTokenMasked).toBeUndefined();
     });
   });
+
+  // ── 审查修复项：脱敏兜底 / 僵死作业 / 孤儿凭据 ──────────────────────
+
+  describe('审查修复', () => {
+    it('脱敏器抛异常时不会把原文放出去（宁可丢内容）', () => {
+      const host = newHost({
+        redact: () => {
+          throw new Error('脱敏器坏了');
+        },
+      });
+      const out = host.redactText('这里有不该出现的原文');
+      expect(out).not.toContain('不该出现的原文');
+      expect(out).toContain('已省略');
+    });
+
+    it('上次停在 running 的作业：重开时判为失败（面板不会永远转圈）', () => {
+      const jobsPath = join(dataDir, 'managed-install-jobs.json');
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(
+        jobsPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          jobs: [
+            {
+              id: 'job-stuck',
+              startedAt: new Date().toISOString(),
+              state: 'running',
+              phase: 'downloading',
+              bytesReceived: 10,
+              request: {
+                dir: join(workDir, 'napcat-4.18.42'),
+                version: '4.18.42',
+                mode: 'standalone',
+                url: 'http://127.0.0.1:1/a.zip',
+                sha256: 'd'.repeat(64),
+                allowedHosts: ['127.0.0.1'],
+              },
+            },
+          ],
+        }),
+      );
+      const host = newHost();
+      const job = host.getJob('job-stuck');
+      expect(job?.state).toBe('failed');
+      expect(job?.error).toContain('中断');
+    });
+
+    it('安装失败后不留孤儿 token（凭据文件里没有这个目录）', async () => {
+      const zip = buildArtifactZip();
+      const server = await track(await startServer(zip));
+      const host = newHost();
+      const target = join(workDir, 'install', 'napcat-4.18.42');
+      const job = await runInstall(host, {
+        dir: target,
+        version: '4.18.42',
+        mode: 'standalone',
+        url: `http://127.0.0.1:${server.port}/artifact.zip`,
+        sha256: 'e'.repeat(64), // 故意不匹配 → 安装失败
+        allowedHosts: ['127.0.0.1'],
+      });
+      expect(job.state).toBe('failed');
+      expect(host.maskWebuiToken(target)).toBeUndefined();
+    });
+  });
 });

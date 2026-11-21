@@ -23,7 +23,16 @@ export interface PluginConfig {
     /** 盘根发现的候选根上限（**每个盘各自计数**；`0` = 禁用盘根发现）。 */
     maxRoots: number;
   };
-  managed: { napcatVersion: string; downloadMirror: 'auto' | string };
+  managed: {
+    /** 要装的 NapCat 版本。 */
+    napcatVersion: string;
+    /** 下载镜像（'auto' = 用内置的归档镜像）。 */
+    downloadMirror: 'auto' | string;
+    /** 下载代理（如 http://127.0.0.1:7897）；空 = 直连。 */
+    downloadProxy: string;
+    /** 桌面 QQ 可执行文件路径（注入模式用；空 = 注入模式不可用）。 */
+    desktopQqPath: string;
+  };
   export: { dir: 'user' | 'workspace'; includeImages: boolean };
   inject: { maxInjectChars: number };
 }
@@ -40,7 +49,7 @@ export function defaultConfig(): PluginConfig {
       scanDrives: true,
       maxRoots: 32,
     },
-    managed: { napcatVersion: '4.18.42', downloadMirror: 'auto' },
+    managed: { napcatVersion: '4.18.42', downloadMirror: 'auto', downloadProxy: '', desktopQqPath: '' },
     export: { dir: 'user', includeImages: false },
     inject: { maxInjectChars: 40_000 },
   };
@@ -170,6 +179,10 @@ function sanitize(m: Record<string, unknown>): PluginConfig {
         typeof man.downloadMirror === 'string' && man.downloadMirror.trim() !== ''
           ? man.downloadMirror
           : d.managed.downloadMirror,
+      downloadProxy:
+        typeof man.downloadProxy === 'string' ? man.downloadProxy.trim() : d.managed.downloadProxy,
+      desktopQqPath:
+        typeof man.desktopQqPath === 'string' ? man.desktopQqPath.trim() : d.managed.desktopQqPath,
     },
     export: {
       dir: exp.dir === 'workspace' ? 'workspace' : 'user',
@@ -258,6 +271,10 @@ export function applyEnvOverrides(cfg: PluginConfig, env: NodeJS.ProcessEnv = pr
   if (dir === 'user' || dir === 'workspace') cfg.export.dir = dir;
   const imgs = parseBoolEnv(env.NAPCAT_INCLUDE_IMAGES);
   if (imgs !== undefined) cfg.export.includeImages = imgs;
+  const proxy = env.NAPCAT_DOWNLOAD_PROXY;
+  if (typeof proxy === 'string' && proxy.trim() !== '') cfg.managed.downloadProxy = proxy.trim();
+  const qqPath = env.NAPCAT_DESKTOP_QQ_PATH;
+  if (typeof qqPath === 'string' && qqPath.trim() !== '') cfg.managed.desktopQqPath = qqPath.trim();
   return cfg;
 }
 

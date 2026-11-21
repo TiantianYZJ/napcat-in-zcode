@@ -11,6 +11,8 @@ import { safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import type { AppState } from './state.js';
 import { endpointSecurityWarning } from './state.js';
 import { detectLocalOnce } from './host/detect-local.js';
+import { registerHostTools } from './host/host-tools.js';
+import { fail, ok } from './tool-results.js';
 
 /** 单次 `napcat_get_history` 最多翻多少页（防死循环）。 */
 const MAX_PAGES = 40;
@@ -27,24 +29,6 @@ const SEARCH_DEFAULT_MAX_PAGES = 20;
 const SEARCH_MAX_PAGES = 100;
 /** 搜索命中上限：超出即停止扫描（工具返回要紧凑，spec §5.5）。 */
 const SEARCH_MAX_HITS = 20;
-
-/** 成功返回：统一是「一段 JSON 文本」。 */
-function ok(data: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
-}
-
-/**
- * 失败返回：`isError: true` + `{error: string}`。
- *
- * 工具层不向外抛异常——错误信息经 `state.redact` 脱敏（token 不许出现在返回值里）。
- */
-function fail(state: AppState, e: unknown) {
-  const message = state.redact(e instanceof Error ? e.message : String(e));
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-    isError: true,
-  };
-}
 
 /**
  * 翻页终止原因。
@@ -803,4 +787,7 @@ export function registerTools(server: McpServer, state: AppState): void {
       }
     },
   );
+
+  // 受管宿主（下载 / 启停 NapCat）——单独一个模块，注册在同一台 server 上。
+  registerHostTools(server, state);
 }

@@ -605,18 +605,25 @@ class DirectorySwap {
     if (this.backup) removeQuietly(this.backup);
   }
 
-  /** 失败：撤掉新目录，把旧目录换回来。 */
-  rollback(): void {
+  /**
+   * 失败：撤掉新目录，把旧目录换回来。
+   *
+   * @returns 换不回来时的说明（成功则 undefined）。旧目录会留在
+   *          `<target>.napcat-old-<jobId>`，**必须**告诉用户 ——
+   *          否则他的安装目录「凭空消失」而他毫不知情。
+   */
+  rollback(): string | undefined {
     if (!this.backup) {
       removeQuietly(this.target);
-      return;
+      return undefined;
     }
-    if (!existsSync(this.backup)) return;
+    if (!existsSync(this.backup)) return undefined;
     removeQuietly(this.target);
     try {
       renameSync(this.backup, this.target);
+      return undefined;
     } catch {
-      /* 换不回来也不能盖住原始错误 */
+      return `旧目录没能换回原位，它保留在 ${this.backup}，请手动改名回去。`;
     }
   }
 }
@@ -922,8 +929,8 @@ export class ManagedHost {
       try {
         out = external(out);
       } catch {
-        /* 脱敏器抛异常不能把原文放出去 */
-        out = text;
+        /* 脱敏器抛异常也不能把原文放出去 —— 宁可丢内容，也不能泄凭据 */
+        out = '[内容已省略]';
       }
     }
     for (const token of this.knownTokens) {
@@ -1157,7 +1164,16 @@ export class ManagedHost {
       swap = undefined;
     } catch (err) {
       // 失败不留半成品：换位过就回滚（把旧目录换回来），暂存目录整个删掉
-      if (swap) swap.rollback();
+      if (swap) {
+        const leftover = swap.rollback();
+        if (leftover) {
+          // 回滚失败必须让用户看见：他的旧安装目录可能已经不在原位了
+          this.note(job, `注意：${leftover}`);
+        }
+      }
+      // 安装没成 → 这次生成的 WebUI token 也不能留在凭据文件里（否则面板会给
+      // 一个「根本不存在的安装」显示 token）
+      this.forgetSecret(req.dir);
       job.state = 'failed';
       job.phase = 'failed';
       job.error = this.describeError(err);
@@ -1246,7 +1262,15 @@ export class ManagedHost {
     const list = Array.isArray(raw.jobs) ? raw.jobs : [];
     for (const item of list) {
       const job = sanitizeJob(item);
-      if (job) this.jobs.set(job.id, job);
+      if (!job) continue;
+      if (job.state === 'running') {
+        // 上个进程被杀掉时作业还停在 running —— 恢复成 running 会让面板永远转圈
+        job.state = 'failed';
+        job.phase = 'failed';
+        job.error = '上次安装在插件退出时被中断，未能完成。';
+        job.finishedAt = job.finishedAt ?? new Date().toISOString();
+      }
+      this.jobs.set(job.id, job);
     }
   }
 
