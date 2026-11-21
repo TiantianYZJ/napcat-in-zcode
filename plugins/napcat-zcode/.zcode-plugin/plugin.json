@@ -1,6 +1,6 @@
 {
   "name": "napcat-zcode",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Inject selected QQ chat records into ZCode context and save them as attachments via NapCat (OneBot 11).",
   "description_i18n": {
     "zh-CN": "把选定的 QQ 聊天记录注入 ZCode 上下文，或保存为输入框附件，基于 NapCat（OneBot 11）。"

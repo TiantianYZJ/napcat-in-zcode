@@ -14,7 +14,7 @@
  * 4. **动作名与结果名一致**：点了「启动」就说「已启动」，不玩文字游戏。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -22,7 +22,14 @@ import { dataDir } from '../config.js';
 import { fail, ok } from '../tool-results.js';
 import type { AppState } from '../state.js';
 import { availableVersions, resolveArtifact } from './artifacts.js';
-import { assertInstallTargetSafe, ManagedHost, newJobId, type InstallJob, type ManagedInstall } from './manager.js';
+import {
+  assertInstallTargetSafe,
+  deriveInstallId,
+  ManagedHost,
+  newJobId,
+  type InstallJob,
+  type ManagedInstall,
+} from './manager.js';
 import { probeManagedHost, startManagedHost, stopManagedHost, type HostStatus } from './supervise.js';
 
 /** 面板资源 URI（必须与清单 `ui.surfaces[0].resourceUri` 一致）。 */
@@ -34,10 +41,10 @@ const SURFACE_ID = 'napcat-zcode';
 const DEFAULT_WEBUI_PORT = 6099;
 const DEFAULT_ONEBOT_PORT = 3000;
 
-/** 一个受管安装的端口（从它自己的配置里读，读不到用默认）。 */
+/** 一个受管安装的端口（接管时探测记录的优先，其次它自己的配置，读不到用默认）。 */
 function portsOf(install: ManagedInstall): { webuiPort: number; onebotPort: number } {
-  let webuiPort = DEFAULT_WEBUI_PORT;
-  let onebotPort = DEFAULT_ONEBOT_PORT;
+  let webuiPort = install.webuiPort ?? DEFAULT_WEBUI_PORT;
+  let onebotPort = install.onebotPort ?? DEFAULT_ONEBOT_PORT;
   const configDir = join(install.dir, 'napcat', 'config');
   try {
     const webui = JSON.parse(readFileSync(join(configDir, 'webui.json'), 'utf8')) as { port?: number };
@@ -332,9 +339,99 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           id: r.id,
           dir: r.dir,
           alreadyGone: r.alreadyGone,
-          message: r.alreadyGone
-            ? `目录已不存在，已从台账清理：${r.dir}`
-            : `已删除安装目录并清理台账：${r.dir}`,
+          kept: r.kept,
+          message: r.kept
+            ? `已从台账移除（保留你的安装目录）：${r.dir}`
+            : r.alreadyGone
+              ? `目录已不存在，已从台账清理：${r.dir}`
+              : `已删除安装目录并清理台账：${r.dir}`,
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    },
+  );
+
+  // ── 接管检测到的本机安装（0.8.0） ──────────────────────────────────
+  server.registerTool(
+    'napcat_adopt',
+    {
+      description:
+        '把检测到的本机 NapCat 安装**接管**进受管台账（不重新下载、不改你的配置文件）。' +
+        '接管后可用 napcat_start / napcat_stop / napcat_host_status 管理它，' +
+        '卸载（napcat_uninstall）只销号、**不删你的目录**。' +
+        'configDir 来自 napcat_detect_local 的 installs[].configDir；' +
+        '仅支持「NapCat 目录里有 NapCatWinBootMain.exe、同级目录有 QQ.exe」的独立布局（注入式启动）。' +
+        '注入模式会触碰桌面 QQ：QQ 9.9.36+ 可能因完整性检查报「文件已损坏」。',
+      inputSchema: {
+        configDir: z.string().describe('NapCat 的 config 目录（绝对路径，来自 napcat_detect_local）'),
+        webuiPort: z.number().int().optional().describe('探测到的 WebUI 端口（记录进台账，供端口推断）'),
+      },
+    },
+    async ({ configDir, webuiPort }) => {
+      try {
+        const h = getHost();
+        if (!isAbsolute(configDir)) {
+          throw new Error('接管失败：configDir 必须是绝对路径。');
+        }
+        const napcatDir = dirname(configDir);
+        const bootExe = join(napcatDir, 'NapCatWinBootMain.exe');
+        if (!existsSync(bootExe)) {
+          throw new Error(
+            `接管失败：${napcatDir} 里找不到 NapCatWinBootMain.exe —— 只支持带启动器的 NapCat 独立布局。`,
+          );
+        }
+        const rootDir = dirname(napcatDir);
+        const qqExe = join(rootDir, 'QQ.exe');
+        const hasQq = existsSync(qqExe);
+        // 版本从 NapCat 的 package.json 读（读不到记 unknown，不影响台账）
+        let version = 'unknown';
+        try {
+          const pkg = JSON.parse(readFileSync(join(napcatDir, 'package.json'), 'utf8')) as { version?: unknown };
+          if (typeof pkg.version === 'string' && pkg.version.trim() !== '') version = pkg.version.trim();
+        } catch {
+          /* 没有 package.json 就记 unknown */
+        }
+        // QQ 路径记录（QCE 惯例文件）：只在缺失时写，绝不覆盖用户已有记录
+        if (hasQq) {
+          const qp = join(configDir, 'qq_path.txt');
+          if (!existsSync(qp)) {
+            try {
+              writeFileSync(qp, qqExe, 'utf-8');
+            } catch (err) {
+              throw new Error(`接管失败：无法写 ${qp}（${err instanceof Error ? err.message : String(err)}）。`);
+            }
+          }
+        }
+        const existing = h.findByDir(rootDir);
+        if (existing) {
+          return ok({
+            adopted: true,
+            id: existing.id,
+            dir: rootDir,
+            message: '这个目录已经在受管台账里，无需重复接管。',
+          });
+        }
+        const install: ManagedInstall = {
+          id: deriveInstallId(version, rootDir),
+          dir: rootDir,
+          version,
+          mode: 'inject',
+          installedAt: new Date().toISOString(),
+          artifactSha256: '',
+          adopted: true,
+          ...(typeof webuiPort === 'number' && webuiPort > 0 ? { webuiPort } : {}),
+        };
+        h.add(install);
+        return ok({
+          adopted: true,
+          id: install.id,
+          dir: rootDir,
+          mode: 'inject',
+          qqPathFound: hasQq,
+          message: hasQq
+            ? `已接管（注入模式，QQ 本体：${qqExe}）。napcat_start 即可启动。`
+            : `已接管（注入模式），但没找到 QQ.exe —— 启动前请在插件设置里配置「桌面 QQ 路径」。`,
         });
       } catch (e) {
         return fail(state, e);

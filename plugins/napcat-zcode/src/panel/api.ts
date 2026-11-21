@@ -277,6 +277,11 @@ export interface ManagedInstallView {
   pid?: number;
   /** WebUI token 的掩码（永远不是明文）。 */
   webuiTokenMasked?: string;
+  /** 接管的安装（用户自己装的；卸载只销号不删目录）。 */
+  adopted?: boolean;
+  /** 接管时记录的端口（探测所得）。 */
+  webuiPort?: number;
+  onebotPort?: number;
 }
 
 /** 受管实例的运行状态。 */
@@ -662,6 +667,7 @@ export const api = {
    * 卸载一个受管安装：删除安装目录（不可恢复）并清理台账与凭据。
    *
    * 运行中的实例服务端会拒绝 —— 面板负责「先停止再卸载」的组合动作。
+   * 接管的安装（`kept: true`）只销号，服务端不会删用户自己的目录。
    */
   uninstallHost: (id?: string) =>
     callToolJson<{
@@ -669,6 +675,23 @@ export const api = {
       id: string;
       dir: string;
       alreadyGone: boolean;
+      kept: boolean;
       message: string;
     }>('napcat_uninstall', id === undefined ? {} : { id }),
+
+  /**
+   * 接管检测到的本机 NapCat 安装（`napcat_adopt`）：登记进受管台账，
+   * 之后 `startHost` / `stopHost` / `uninstallHost` 都可用。
+   *
+   * `webuiPort` 传探测所得端口（记录进台账，供端口推断）。
+   */
+  adoptHost: (configDir: string, webuiPort?: number) =>
+    callToolJson<{
+      adopted: boolean;
+      id: string;
+      dir: string;
+      mode?: string;
+      qqPathFound?: boolean;
+      message: string;
+    }>('napcat_adopt', { configDir, ...(typeof webuiPort === 'number' ? { webuiPort } : {}) }),
 };

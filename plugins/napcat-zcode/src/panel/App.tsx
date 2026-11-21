@@ -528,7 +528,8 @@ export function App() {
           </div>
         )}
         <div className="right">
-          {phase === 'ready' && (
+          {/* 页签在握手完成后始终可见：未配置/错误相位也要能去「宿主」页安装 / 接管 */}
+          {phase !== 'init' && (
             <div className="tabs" role="tablist" data-testid="tabs">
               <button
                 role="tab"
@@ -560,7 +561,11 @@ export function App() {
             </div>
           )}
           {phase === 'unconfigured' && (
-            <UnconfiguredForm onDone={() => void reload()} onDetected={() => void refreshStatus()} />
+            <UnconfiguredForm
+              onDone={() => void reload()}
+              onDetected={() => void refreshStatus()}
+              onGoHost={() => setTab('host')}
+            />
           )}
           {phase === 'error' &&
             (reconfiguring ? (
@@ -569,6 +574,7 @@ export function App() {
                 onDone={() => void reload()}
                 onDetected={() => void refreshStatus()}
                 initialEndpoint=""
+                onGoHost={() => setTab('host')}
               />
             ) : (
               <div className="error-card" data-testid="phase-error">
@@ -619,14 +625,16 @@ export function App() {
               />
             </>
           )}
-          {phase === 'ready' && tab === 'host' && (
+          {/* 宿主页签在任何「握手已完成」的相位都可用：
+              未配置/错误相位正是需要安装、接管与启动的时刻 */}
+          {phase !== 'init' && tab === 'host' && (
             <div className="pane">
               <HostPanel onChanged={() => void refreshStatus()} />
             </div>
           )}
         </div>
       </div>
-      {!(phase === 'ready' && tab === 'host') && (
+      {!(phase !== 'init' && tab === 'host') && (
         <ActionBar
           selected={selected}
           chat={active}

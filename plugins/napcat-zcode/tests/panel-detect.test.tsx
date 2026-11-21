@@ -322,6 +322,8 @@ describe('B6：文案规则', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     await waitFor(() => expect(screen.getByTestId('detect-failed')).toBeTruthy());
+    // 默认折叠（一行摘要），展开后逐条详情仍遵守「超时与其它失败分开说」
+    fireEvent.click(screen.getByTestId('detect-failed-toggle'));
     const text = screen.getByTestId('detect-failed').textContent ?? '';
     expect(text).toContain('目标无响应（超时）');
     expect(text).toContain('连不上');
@@ -661,6 +663,7 @@ describe('N5：非超时失败的措辞要覆盖「连不上」与「被拒绝�
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     await waitFor(() => expect(screen.getByTestId('detect-failed')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('detect-failed-toggle')); // 展开折叠的失败详情
     const text = screen.getByTestId('detect-failed').textContent ?? '';
     expect(text).toContain('被拒绝');
     expect(text).not.toContain('目标无响应'); // 非超时不许被说成超时

@@ -24427,7 +24427,7 @@ function detectLocalOnce(state, opts = {}) {
 }
 
 // src/server/host/host-tools.ts
-import { readdirSync as readdirSync3, readFileSync as readFileSync6 } from "node:fs";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute4, join as join6 } from "node:path";
 
 // src/server/tool-results.ts
@@ -25866,6 +25866,10 @@ var ManagedHost = class {
     if (this.pidOf(id) !== void 0) {
       throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u8FD9\u4E2A NapCat \u8FD8\u5728\u8FD0\u884C\uFF0C\u8BF7\u5148\u505C\u6B62\uFF08napcat_stop\uFF09\u518D\u5378\u8F7D\u3002");
     }
+    if (install.adopted === true) {
+      this.remove(id);
+      return { id, dir: install.dir, alreadyGone: false, kept: true };
+    }
     const dirKey = normalizeDirKey(install.dir, this.platform);
     const busy = this.listJobs().some(
       (job) => job.state === "running" && job.request?.dir !== void 0 && normalizeDirKey(job.request.dir, this.platform) === dirKey
@@ -25881,7 +25885,7 @@ var ManagedHost = class {
         throw new Error(`\u5378\u8F7D\u5931\u8D25\uFF1A\u65E0\u6CD5\u8BFB\u53D6\u5B89\u88C5\u76EE\u5F55\u72B6\u6001\uFF1A${errText3(err)}`);
       }
       this.remove(id);
-      return { id, dir: install.dir, alreadyGone: true };
+      return { id, dir: install.dir, alreadyGone: true, kept: false };
     }
     if (stat.isSymbolicLink()) {
       throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u5B89\u88C5\u76EE\u5F55\u73B0\u5728\u662F\u7B26\u53F7\u94FE\u63A5\u3002\u4E3A\u907F\u514D\u8BEF\u5220\u94FE\u63A5\u76EE\u6807\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5\u540E\u518D\u5904\u7406\u3002");
@@ -25892,7 +25896,7 @@ var ManagedHost = class {
       throw new Error(`\u5378\u8F7D\u5931\u8D25\uFF1A\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u65F6\u51FA\u9519\uFF08\u53EF\u80FD\u6709\u6587\u4EF6\u88AB\u5360\u7528\uFF09\uFF1A${errText3(err)}`);
     }
     this.remove(id);
-    return { id, dir: install.dir, alreadyGone: false };
+    return { id, dir: install.dir, alreadyGone: false, kept: false };
   }
   /**
    * 记录 / 清除**插件自己拉起的**进程 pid（Task 3 用）。
@@ -26004,6 +26008,9 @@ var ManagedHost = class {
     };
     if (install.pid !== void 0) out.pid = install.pid;
     if (masked !== void 0) out.webuiTokenMasked = masked;
+    if (install.adopted === true) out.adopted = true;
+    if (install.webuiPort !== void 0) out.webuiPort = install.webuiPort;
+    if (install.onebotPort !== void 0) out.onebotPort = install.onebotPort;
     return out;
   }
   /** 全部安装的视图。 */
@@ -26110,6 +26117,13 @@ var ManagedHost = class {
       out.pid = install.pid;
     }
     if (typeof install.pidRecordedAt === "string") out.pidRecordedAt = install.pidRecordedAt;
+    if (install.adopted === true) out.adopted = true;
+    if (typeof install.webuiPort === "number" && Number.isInteger(install.webuiPort)) {
+      out.webuiPort = install.webuiPort;
+    }
+    if (typeof install.onebotPort === "number" && Number.isInteger(install.onebotPort)) {
+      out.onebotPort = install.onebotPort;
+    }
     return out;
   }
   /** 暂存目录：与目标目录**同父** → 换位是同文件系统内的 rename（原子）。 */
@@ -26706,8 +26720,8 @@ var SURFACE_ID = "napcat-zcode";
 var DEFAULT_WEBUI_PORT2 = 6099;
 var DEFAULT_ONEBOT_PORT2 = 3e3;
 function portsOf(install) {
-  let webuiPort = DEFAULT_WEBUI_PORT2;
-  let onebotPort = DEFAULT_ONEBOT_PORT2;
+  let webuiPort = install.webuiPort ?? DEFAULT_WEBUI_PORT2;
+  let onebotPort = install.onebotPort ?? DEFAULT_ONEBOT_PORT2;
   const configDir = join6(install.dir, "napcat", "config");
   try {
     const webui = JSON.parse(readFileSync6(join6(configDir, "webui.json"), "utf8"));
@@ -26957,7 +26971,82 @@ function registerHostTools(server2, state) {
           id: r.id,
           dir: r.dir,
           alreadyGone: r.alreadyGone,
-          message: r.alreadyGone ? `\u76EE\u5F55\u5DF2\u4E0D\u5B58\u5728\uFF0C\u5DF2\u4ECE\u53F0\u8D26\u6E05\u7406\uFF1A${r.dir}` : `\u5DF2\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u5E76\u6E05\u7406\u53F0\u8D26\uFF1A${r.dir}`
+          kept: r.kept,
+          message: r.kept ? `\u5DF2\u4ECE\u53F0\u8D26\u79FB\u9664\uFF08\u4FDD\u7559\u4F60\u7684\u5B89\u88C5\u76EE\u5F55\uFF09\uFF1A${r.dir}` : r.alreadyGone ? `\u76EE\u5F55\u5DF2\u4E0D\u5B58\u5728\uFF0C\u5DF2\u4ECE\u53F0\u8D26\u6E05\u7406\uFF1A${r.dir}` : `\u5DF2\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u5E76\u6E05\u7406\u53F0\u8D26\uFF1A${r.dir}`
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_adopt",
+    {
+      description: "\u628A\u68C0\u6D4B\u5230\u7684\u672C\u673A NapCat \u5B89\u88C5**\u63A5\u7BA1**\u8FDB\u53D7\u7BA1\u53F0\u8D26\uFF08\u4E0D\u91CD\u65B0\u4E0B\u8F7D\u3001\u4E0D\u6539\u4F60\u7684\u914D\u7F6E\u6587\u4EF6\uFF09\u3002\u63A5\u7BA1\u540E\u53EF\u7528 napcat_start / napcat_stop / napcat_host_status \u7BA1\u7406\u5B83\uFF0C\u5378\u8F7D\uFF08napcat_uninstall\uFF09\u53EA\u9500\u53F7\u3001**\u4E0D\u5220\u4F60\u7684\u76EE\u5F55**\u3002configDir \u6765\u81EA napcat_detect_local \u7684 installs[].configDir\uFF1B\u4EC5\u652F\u6301\u300CNapCat \u76EE\u5F55\u91CC\u6709 NapCatWinBootMain.exe\u3001\u540C\u7EA7\u76EE\u5F55\u6709 QQ.exe\u300D\u7684\u72EC\u7ACB\u5E03\u5C40\uFF08\u6CE8\u5165\u5F0F\u542F\u52A8\uFF09\u3002\u6CE8\u5165\u6A21\u5F0F\u4F1A\u89E6\u78B0\u684C\u9762 QQ\uFF1AQQ 9.9.36+ \u53EF\u80FD\u56E0\u5B8C\u6574\u6027\u68C0\u67E5\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\u300D\u3002",
+      inputSchema: {
+        configDir: external_exports.string().describe("NapCat \u7684 config \u76EE\u5F55\uFF08\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u6765\u81EA napcat_detect_local\uFF09"),
+        webuiPort: external_exports.number().int().optional().describe("\u63A2\u6D4B\u5230\u7684 WebUI \u7AEF\u53E3\uFF08\u8BB0\u5F55\u8FDB\u53F0\u8D26\uFF0C\u4F9B\u7AEF\u53E3\u63A8\u65AD\uFF09")
+      }
+    },
+    async ({ configDir, webuiPort }) => {
+      try {
+        const h = getHost();
+        if (!isAbsolute4(configDir)) {
+          throw new Error("\u63A5\u7BA1\u5931\u8D25\uFF1AconfigDir \u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\u3002");
+        }
+        const napcatDir = dirname4(configDir);
+        const bootExe = join6(napcatDir, "NapCatWinBootMain.exe");
+        if (!existsSync4(bootExe)) {
+          throw new Error(
+            `\u63A5\u7BA1\u5931\u8D25\uFF1A${napcatDir} \u91CC\u627E\u4E0D\u5230 NapCatWinBootMain.exe \u2014\u2014 \u53EA\u652F\u6301\u5E26\u542F\u52A8\u5668\u7684 NapCat \u72EC\u7ACB\u5E03\u5C40\u3002`
+          );
+        }
+        const rootDir = dirname4(napcatDir);
+        const qqExe = join6(rootDir, "QQ.exe");
+        const hasQq = existsSync4(qqExe);
+        let version2 = "unknown";
+        try {
+          const pkg = JSON.parse(readFileSync6(join6(napcatDir, "package.json"), "utf8"));
+          if (typeof pkg.version === "string" && pkg.version.trim() !== "") version2 = pkg.version.trim();
+        } catch {
+        }
+        if (hasQq) {
+          const qp = join6(configDir, "qq_path.txt");
+          if (!existsSync4(qp)) {
+            try {
+              writeFileSync5(qp, qqExe, "utf-8");
+            } catch (err) {
+              throw new Error(`\u63A5\u7BA1\u5931\u8D25\uFF1A\u65E0\u6CD5\u5199 ${qp}\uFF08${err instanceof Error ? err.message : String(err)}\uFF09\u3002`);
+            }
+          }
+        }
+        const existing = h.findByDir(rootDir);
+        if (existing) {
+          return ok({
+            adopted: true,
+            id: existing.id,
+            dir: rootDir,
+            message: "\u8FD9\u4E2A\u76EE\u5F55\u5DF2\u7ECF\u5728\u53D7\u7BA1\u53F0\u8D26\u91CC\uFF0C\u65E0\u9700\u91CD\u590D\u63A5\u7BA1\u3002"
+          });
+        }
+        const install = {
+          id: deriveInstallId(version2, rootDir),
+          dir: rootDir,
+          version: version2,
+          mode: "inject",
+          installedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          artifactSha256: "",
+          adopted: true,
+          ...typeof webuiPort === "number" && webuiPort > 0 ? { webuiPort } : {}
+        };
+        h.add(install);
+        return ok({
+          adopted: true,
+          id: install.id,
+          dir: rootDir,
+          mode: "inject",
+          qqPathFound: hasQq,
+          message: hasQq ? `\u5DF2\u63A5\u7BA1\uFF08\u6CE8\u5165\u6A21\u5F0F\uFF0CQQ \u672C\u4F53\uFF1A${qqExe}\uFF09\u3002napcat_start \u5373\u53EF\u542F\u52A8\u3002` : `\u5DF2\u63A5\u7BA1\uFF08\u6CE8\u5165\u6A21\u5F0F\uFF09\uFF0C\u4F46\u6CA1\u627E\u5230 QQ.exe \u2014\u2014 \u542F\u52A8\u524D\u8BF7\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u914D\u7F6E\u300C\u684C\u9762 QQ \u8DEF\u5F84\u300D\u3002`
         });
       } catch (e) {
         return fail(state, e);
@@ -27532,7 +27621,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.7.0" });
+var server = new McpServer({ name: "napcat", version: "0.8.0" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

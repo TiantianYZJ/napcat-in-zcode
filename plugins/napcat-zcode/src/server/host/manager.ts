@@ -98,6 +98,15 @@ export interface ManagedInstall {
   pid?: number;
   /** pid 的记录时间（ISO 8601）。 */
   pidRecordedAt?: string;
+  /**
+   * **接管**的安装（0.8.0）：来自 `napcat_adopt`——检测到的**用户自己装**的 NapCat，
+   * 不是插件下载的。卸载时**只销号、不删目录**（那是用户的文件）。
+   */
+  adopted?: boolean;
+  /** 接管时记录的 WebUI 端口（探测所得；`portsOf` 优先读它）。 */
+  webuiPort?: number;
+  /** 接管时记录的 OneBot 端口（探测所得；缺省用默认 3000）。 */
+  onebotPort?: number;
 }
 
 /** 一次安装作业的请求（作业的输入）。 */
@@ -167,6 +176,11 @@ export interface ManagedInstallView {
   pid?: number;
   /** WebUI token 的**掩码**（永远不是明文）。 */
   webuiTokenMasked?: string;
+  /** 接管的安装（用户自己装的；卸载只销号不删目录）。 */
+  adopted?: boolean;
+  /** 接管时记录的端口（探测所得）。 */
+  webuiPort?: number;
+  onebotPort?: number;
 }
 
 /** 对外暴露的作业视图。 */
@@ -784,13 +798,18 @@ export class ManagedHost {
    *
    * @returns 卸载结果（`alreadyGone` 说明目录本来就不在了，台账已清理）。
    */
-  uninstall(id: string): { id: string; dir: string; alreadyGone: boolean } {
+  uninstall(id: string): { id: string; dir: string; alreadyGone: boolean; kept: boolean } {
     const install = this.get(id);
     if (!install) {
       throw new Error('卸载失败：台账里没有这个安装 id（napcat_host_status 可看当前台账）。');
     }
     if (this.pidOf(id) !== undefined) {
       throw new Error('卸载失败：这个 NapCat 还在运行，请先停止（napcat_stop）再卸载。');
+    }
+    // 接管的安装（用户自己装的）：只销号，**绝不删用户的文件**
+    if (install.adopted === true) {
+      this.remove(id);
+      return { id, dir: install.dir, alreadyGone: false, kept: true };
     }
     const dirKey = normalizeDirKey(install.dir, this.platform);
     const busy = this.listJobs().some(
@@ -811,7 +830,7 @@ export class ManagedHost {
       }
       // 目录已经不在（用户手动删过）→ 幂等：照常销号清凭据
       this.remove(id);
-      return { id, dir: install.dir, alreadyGone: true };
+      return { id, dir: install.dir, alreadyGone: true, kept: false };
     }
     if (stat.isSymbolicLink()) {
       throw new Error('卸载失败：安装目录现在是符号链接。为避免误删链接目标，请人工检查后再处理。');
@@ -822,7 +841,7 @@ export class ManagedHost {
       throw new Error(`卸载失败：删除安装目录时出错（可能有文件被占用）：${errText(err)}`);
     }
     this.remove(id);
-    return { id, dir: install.dir, alreadyGone: false };
+    return { id, dir: install.dir, alreadyGone: false, kept: false };
   }
 
   /**
@@ -947,6 +966,9 @@ export class ManagedHost {
     };
     if (install.pid !== undefined) out.pid = install.pid;
     if (masked !== undefined) out.webuiTokenMasked = masked;
+    if (install.adopted === true) out.adopted = true;
+    if (install.webuiPort !== undefined) out.webuiPort = install.webuiPort;
+    if (install.onebotPort !== undefined) out.onebotPort = install.onebotPort;
     return out;
   }
 
@@ -1067,6 +1089,13 @@ export class ManagedHost {
       out.pid = install.pid;
     }
     if (typeof install.pidRecordedAt === 'string') out.pidRecordedAt = install.pidRecordedAt;
+    if (install.adopted === true) out.adopted = true;
+    if (typeof install.webuiPort === 'number' && Number.isInteger(install.webuiPort)) {
+      out.webuiPort = install.webuiPort;
+    }
+    if (typeof install.onebotPort === 'number' && Number.isInteger(install.onebotPort)) {
+      out.onebotPort = install.onebotPort;
+    }
     return out;
   }
 

@@ -154,6 +154,7 @@ describe('mcp tool registration', () => {
     // T10 追加了 search / format_selection / export / get_config 四个工具（见 tests/mcp-tools-extra.test.ts）；
     // M3 又追加了受管宿主的一组：host_status / install / install_status / start / stop / open_panel
     expect(list.tools.map((t) => t.name).sort()).toEqual([
+      'napcat_adopt',
       'napcat_configure',
       'napcat_detect_local',
       'napcat_export',

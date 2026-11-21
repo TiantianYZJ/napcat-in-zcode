@@ -82,7 +82,7 @@ export interface HostBridgeOptions {
   retryDelayMs?: number;
   /** `appInfo.name`。默认 'napcat-zcode'。 */
   appName?: string;
-  /** `appInfo.version`。默认 '0.7.0'（与 plugin.json / package.json 保持一致）。 */
+  /** `appInfo.version`。默认 '0.8.0'（与 plugin.json / package.json 保持一致）。 */
   appVersion?: string;
   /** 协议版本。默认 '2026-01-26'（官方 bundle 里的常量）。 */
   protocolVersion?: number | string;
@@ -92,7 +92,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_INIT_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 500;
 const DEFAULT_APP_NAME = 'napcat-zcode';
-const DEFAULT_APP_VERSION = '0.7.0';
+const DEFAULT_APP_VERSION = '0.8.0';
 const DEFAULT_PROTOCOL_VERSION = '2026-01-26';
 
 /** 一个在途请求。 */

@@ -20,11 +20,14 @@ export function UnconfiguredForm({
   onDone,
   onDetected,
   initialEndpoint,
+  onGoHost,
 }: {
   onDone: () => void;
   /** 本机探测完成（用来刷新状态条上的探测摘要）。 */
   onDetected?: () => void;
   initialEndpoint?: string;
+  /** 跳到「宿主」页：还没装 NapCat 时去那里下载安装，或接管检测到的安装。 */
+  onGoHost?: () => void;
 }) {
   const [endpoint, setEndpoint] = useState(initialEndpoint ?? 'http://127.0.0.1:3000');
   const [token, setToken] = useState('');
@@ -142,6 +145,11 @@ export function UnconfiguredForm({
       <p className="hint">
         在 NapCat WebUI → 网络配置中启用 HTTP Server。本机回环可不设 token；局域网监听必须设置 token。
       </p>
+      {onGoHost && (
+        <button className="btn" data-testid="go-host-btn" onClick={onGoHost}>
+          还没装 NapCat？到「宿主」页下载安装 →
+        </button>
+      )}
     </div>
   );
 }

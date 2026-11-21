@@ -27,6 +27,9 @@ export function LocalDetect({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DetectResult | null>(null);
   const [err, setErr] = useState('');
+  const [showFailed, setShowFailed] = useState(false);
+  const [adoptBusy, setAdoptBusy] = useState('');
+  const [adoptNote, setAdoptNote] = useState('');
   /**
    * 在途闸门（ref 而不是 state）：`setBusy(true)` 之后的同一次事件循环里，
    * 连点两次仍可能再进一次 handler —— state 更新是异步的，ref 是同步的。
@@ -47,6 +50,36 @@ export function LocalDetect({
     } finally {
       inflight.current = false;
       setBusy(false);
+    }
+  };
+
+  /**
+   * 接管并启动：登记进受管台账（不重新下载）→ 注入模式启动。
+   * 启动后 OneBot 端点才活，用户回上方表单连接（或点候选的「使用这个」）。
+   */
+  const adoptAndStart = async (configDir: string, webuiPort?: number): Promise<void> => {
+    setAdoptBusy(configDir);
+    setAdoptNote('');
+    try {
+      const adopted = await api.adoptHost(configDir, webuiPort);
+      let note = adopted.message;
+      if (!('id' in adopted) || typeof adopted.id !== 'string' || adopted.id === '') {
+        throw new Error('接管结果缺少安装 id。');
+      }
+      try {
+        const started = await api.startHost(adopted.id);
+        note = started.warning
+          ? `${started.message}（${started.warning}）`
+          : `${started.message} 已在注入模式启动。`;
+      } catch (startErr) {
+        note = `${adopted.message}；但启动失败：${startErr instanceof Error ? startErr.message : String(startErr)}`;
+      }
+      setAdoptNote(note);
+      onDetected?.();
+    } catch (e) {
+      setAdoptNote(`接管失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAdoptBusy('');
     }
   };
 
@@ -114,28 +147,56 @@ export function LocalDetect({
           )}
           {failures.length > 0 && (
             <div className="detect-failed" data-testid="detect-failed">
-              {failures.map((f, i) => (
-                <div className="detect-fail" key={`${f.endpoint}-${i}`} data-testid={`detect-fail-${i}`}>
-                  {/*
-                    超时（目标在那儿但不答话）与其它失败是**两回事**，不能合并成一句。
-                    其它失败里既有「根本连不上」，也有「连上了但被拒绝（鉴权/无权限）」——
-                    后者可能因裁剪没进 tokenRequired，所以措辞要**同时覆盖两种**。
-                  */}
-                  <span className="label">{f.unresponsive === true ? '目标无响应（超时）' : '连不上或被拒绝'}</span>
-                  <span className="ep">{f.endpoint}</span>
-                  {f.error && <span className="detail">{f.error}</span>}
-                </div>
-              ))}
+              {/* 默认只给一行摘要：失败端点逐个摆出来全是噪音（用户截图的痛点） */}
+              <button
+                className="detect-failed-toggle"
+                data-testid="detect-failed-toggle"
+                onClick={() => setShowFailed((v) => !v)}
+              >
+                {showFailed ? '收起' : `尝试了 ${failures.length} 个地址，均未连接（NapCat 可能没在运行）`} ▾
+              </button>
+              {showFailed &&
+                failures.map((f, i) => (
+                  <div className="detect-fail" key={`${f.endpoint}-${i}`} data-testid={`detect-fail-${i}`}>
+                    {/*
+                      超时（目标在那儿但不答话）与其它失败是**两回事**，不能合并成一句。
+                      其它失败里既有「根本连不上」，也有「连上了但被拒绝（鉴权/无权限）」——
+                      后者可能因裁剪没进 tokenRequired，所以措辞要**同时覆盖两种**。
+                    */}
+                    <span className="label">{f.unresponsive === true ? '目标无响应（超时）' : '连不上或被拒绝'}</span>
+                    <span className="ep">{f.endpoint}</span>
+                    {f.error && <span className="detail">{f.error}</span>}
+                  </div>
+                ))}
             </div>
           )}
           {(result.installs ?? []).length > 0 && (
             <div className="detect-installs" data-testid="detect-installs">
+              <div className="detect-installs-title">检测到本机安装（可接管：登记后由插件启动 / 停止）</div>
               {result.installs.map((inst, i) => (
-                <div key={`${inst.configDir}-${i}`}>
-                  本机安装：{inst.configDir}
-                  {typeof inst.webuiPort === 'number' ? `（WebUI 端口 ${inst.webuiPort}）` : ''}
+                <div className="detect-install" key={`${inst.configDir}-${i}`} data-testid={`detect-install-${i}`}>
+                  <div className="detect-install-info">
+                    <span className="ep mono">{inst.configDir}</span>
+                    {typeof inst.webuiPort === 'number' && (
+                      <span className="port tabular">WebUI {inst.webuiPort}</span>
+                    )}
+                  </div>
+                  <button
+                    className="btn"
+                    data-testid={`detect-adopt-${i}`}
+                    disabled={adoptBusy !== ''}
+                    title="登记进受管台账（不重新下载），然后用注入模式启动。QQ 9.9.36+ 可能因完整性检查启动失败。"
+                    onClick={() => void adoptAndStart(inst.configDir, inst.webuiPort)}
+                  >
+                    {adoptBusy === inst.configDir ? '接管中…' : '接管并启动'}
+                  </button>
                 </div>
               ))}
+              {adoptNote && (
+                <div className="detect-adopt-note" data-testid="detect-adopt-note">
+                  {adoptNote}
+                </div>
+              )}
             </div>
           )}
           {(result.droppedEndpoints ?? []).length > 0 && (

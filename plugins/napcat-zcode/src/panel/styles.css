@@ -1013,13 +1013,70 @@ textarea {
   color: var(--color-warning-surface-foreground);
 }
 
+/* 失败桶默认折叠：一行摘要 + 展开按钮（逐个摆失败端点全是噪音） */
+.detect .detect-failed-toggle {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  cursor: pointer;
+  text-align: left;
+}
+
+.detect .detect-failed-toggle:hover {
+  color: var(--color-foreground-subtle);
+}
+
+/* 检测到的本机安装：可操作的行卡（接管并启动） */
+.detect .detect-installs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detect .detect-installs-title {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+}
+
+.detect .detect-install {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+}
+
+.detect .detect-install-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detect .detect-install .port {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  font-variant-numeric: tabular-nums;
+}
+
+.detect .detect-adopt-note {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtle);
+  overflow-wrap: anywhere;
+}
+
 .detect .detect-nowebui,
 .detect .detect-notfound {
   color: var(--color-foreground-subtlest);
 }
 
 .detect .detect-notes,
-.detect .detect-installs,
 .detect .detect-dropped {
   color: var(--color-foreground-subtlest);
   font-size: var(--text-ui-xs);

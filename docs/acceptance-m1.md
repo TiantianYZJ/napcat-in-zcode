@@ -650,3 +650,14 @@
 - [x] **设计规范对齐**（zai-org/ZCode `DESIGN.md` / theme tokens / 官方面板模式）：宿主卡信息改为**事实网格**（定宽弱标签列 + 值列，端口/路径 mono、`tabular-nums`）；宿主页顶部摘要行（计数等宽）；消息组头时间 `tabular-nums`；错误卡 / 引导卡走边框分层而非阴影
 - [x] `npm run typecheck` / `npm test`（31 文件 / 726 通过 / 4 跳过，新增 imageresource 10、chat-image 3、friendlyError 4 等）/ `npm run build` / `npm run smoke`（stdio 19/19、panel **15/15**——新增「图片渲染真图」断言）
 - [x] 视口复验：error / unconfigured / install 三场景 × 深浅 × 320/480/800 无溢出无重叠；error 卡与事实网格在两主题下层次清晰
+
+### 15.8 v0.8.0 增量验收记录（接管已有安装 + 检测结果收敛）
+
+用户真机截图（检测到 3 个本机安装却没有任何可操作入口、6 个失败卡占满屏）驱动的改动：
+
+- [x] **`napcat_adopt`**（第 17 个工具）：把检测到的本机安装接管进台账——`configDir` 来自 `napcat_detect_local`；校验 `napcat/NapCatWinBootMain.exe` 存在（独立布局）、`QQ.exe` 同级探测；写缺失的 `qq_path.txt`（QCE 惯例，**绝不覆盖已有记录**）；版本从 NapCat `package.json` 读；登记 `mode: inject, adopted: true`；重复接管幂等
+- [x] **接管条目的卸载保护**：`napcat_uninstall` 对 `adopted` 条目**只销号、不删目录**（返回 `kept: true`，面板文案区分「保留你的安装目录」）
+- [x] **检测面板收敛**：失败端点默认**折叠成一行摘要**（「尝试了 N 个地址，均未连接」+ 展开/收起），逐条详情展开后仍遵守 M2 文案裁定（超时与连不上分开说）；检测到的本机安装从死文本改为**可操作行卡**（configDir mono + WebUI 端口 tabular + 「接管并启动」按钮，结果如实回显含启动失败原因）
+- [x] **未配置/错误相位的安装入口**：页签在握手完成后始终可见（未配置相位也能去「宿主」页）；`UnconfiguredForm` 加「还没装 NapCat？到『宿主』页下载安装 →」；宿主页签在任何非 init 相位渲染
+- [x] `npm run typecheck` / `npm test`（新增 host-adopt 4：成功+幂等+拒绝+卸载保留）/ `npm run build` / `npm run smoke`（stdio **19/19**，17 个工具 + `napcat_adopt` schema）
+- [x] 视觉：失败折叠 / 接管行卡 / 未配置页签与跳转入口在深浅两主题下层次清晰

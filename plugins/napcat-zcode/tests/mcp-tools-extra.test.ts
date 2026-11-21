@@ -585,6 +585,7 @@ describe('mcp tool registration (T10)', () => {
     const c = await makeClient();
     const list = await c.listTools();
     expect(list.tools.map((t) => t.name).sort()).toEqual([
+      'napcat_adopt',
       'napcat_configure',
       'napcat_detect_local',
       'napcat_export',
@@ -612,6 +613,7 @@ describe('mcp tool registration (T10)', () => {
     expect(props('napcat_get_config')).toEqual([]);
     expect(props('napcat_start')).toEqual(['id']);
     expect(props('napcat_uninstall')).toEqual(['id']);
+    expect(props('napcat_adopt')).toEqual(['configDir', 'webuiPort']);
   });
 
   it('publishes the chat structure in the export input schema', async () => {
