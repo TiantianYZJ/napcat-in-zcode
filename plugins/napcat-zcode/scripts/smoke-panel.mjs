@@ -46,7 +46,7 @@ const TOOL_RESULTS = {
       { id: 'b', seq: 102, time: 1700000060, senderId: '2', senderName: 'Bob', segments: [{ kind: 'text', text: '定了，周五十点' }], text: '定了，周五十点' },
       { id: 'c', seq: 103, time: 1700000120, senderId: '3', senderName: 'Carol', segments: [{ kind: 'image', url: 'https://x/i.png' }], text: '[图片]' },
     ],
-    nextBeforeSeq: 100,
+    nextBeforeTime: 1700000000,
     exhausted: false,
   },
   napcat_get_config: { connection: { mode: 'auto', endpoint: 'http://127.0.0.1:3000', token: '' }, export: { dir: 'user', includeImages: false } },

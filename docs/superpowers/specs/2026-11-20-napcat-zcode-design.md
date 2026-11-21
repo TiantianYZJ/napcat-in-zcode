@@ -34,7 +34,7 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
 
 - **M1（本 spec 的实现主体）**：OneBot 客户端（外部端点 HTTP/WS）+ 数据层 + 侧栏面板 + 注入 + 导出。
   **状态：已实现（2026-11-21）**——仅「外部端点」路径；交付说明见仓库根 `README.md`，
-  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 571 条（vitest，另有 2 条仅 POSIX 可跑）全绿。
+  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 666 条（vitest，另有 4 条仅 POSIX 可跑）全绿。
 - **M1.1（增量）**：媒体下载（`includeImages` 真正生效、`media/` 子目录）与合并转发展开
   （`get_forward_msg` 懒加载）。**不在 M1 范围**：M1 的导出 JSON 已含全部媒体 URL，
   转发段以 `[合并转发]` 占位。详见 §5.8。
@@ -46,7 +46,8 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
 ### 3.1 已知限制（实现期实测结论，2026-11-21 起持续追加）
 
 以下条目**不是待办**，是交付时已经确定的事实；M1.1/M2/M3 才改动其中一部分。
-第 1–13 条是 M1 交付时的结论，第 14–17 条是 **M2（本机探测）** 落地时追加的。
+第 1–13 条是 M1 交付时的结论，第 14–17 条是 **M2（本机探测）** 落地时追加的，
+第 18–20 条是 **M1.2（按真实 NapCat 语义重做翻页/区间/搜索）** 实测后追加的。
 
 1. **宿主不回传另存路径。** `ui/download-file` 在协议层丢弃保存路径：成功返回 `{}`，
    失败与用户取消都返回 `{isError:true}`（宿主实测，见 `src/panel/protocol-notes.md` §6.1）。
@@ -87,6 +88,15 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
     用户以为配上了，探测范围其实没变）。
 17. **探测结论是缓存。** 结论只对**当时那份配置**成立：配置一变（端点、扫描路径）或重新配置后即失效，
     面板显示「结论已过期，请重新检测」。结论**不是**实时状态，也不会自动重扫。
+18. **`message_seq` 是随机短 id，不是单调游标。** 实测（§5.3.1）：它是随机 32 位短 id
+    （=== `message_id` === `real_id`），只能当**锚点**（「从这条开始」），**不能**比大小、不能 `cursor+1`。
+    会话内单调的是 `real_seq`（每会话独立计数）。
+    → M1 的翻页/区间/搜索曾建立在「seq 是单调序号」的推断上，在真实 NapCat 上**推不动游标**；
+    M1.2 已按实测语义重做（工具层改用**时间**语义）。
+19. **OB11 `record`（语音）段不带时长。** 实测只有 `file` / `path` / `url` / `file_size` 四个字段。
+    → 插件**不编造也不推断**时长：没有明确的时长字段（`seconds` / `duration`）就是没有时长。
+20. **往更早翻必须显式 `reverse_order: true`。** 不带它时服务端返回的是同一页 → 游标原地打转；
+    插件会带上它，并校验「锚点是否变化 + 时间是否前进」，服务端不配合就**响亮报错**而不是死循环。
 
 ## 4. 仓库布局
 
@@ -201,9 +211,61 @@ interface OneBotClient {
 `get_forward_msg` 属 M1.1（合并转发展开）；`get_msg`（补引用正文）、`get_group_member_info`、
 `download_file`（媒体下载）目前**未实现**，M1 不下发这些动作。
 
-**分页游标语义**：`get_group_msg_history` / `get_friend_msg_history` 以 `message_seq` 为游标、`count` 为页大小。首次调用省略 `message_seq` 取最新一页；此后每页取返回集中最小 `message_seq` 作为下一页游标；返回空或不足 `count` 即到底。禁止一次拉全量（会被服务端截断）。
+**分页游标语义**：`get_group_msg_history` / `get_friend_msg_history` 以 `message_seq`（**短 id**）为锚点、`count` 为页大小。
+首次调用省略 `message_seq` 取最新一页；此后每页带**上一页最早那条的短 id** + `reverse_order: true` 取该锚点**及更早**的消息；
+返回空即到底。禁止一次拉全量（会被服务端截断）。
 
-NapCat 行为注意（来自其源码）：传入不存在的 `message_seq` 会报错「消息不存在」；`message_seq` 是 NapCat 内部 shortId 映射，跨会话可能失效——游标只在单次拉取会话内有效，不持久化。
+> ⚠️ **锚点是短 id，不是序号**：`message_seq` 是随机 32 位短 id，**不能**做大小比较、不能 `cursor + 1`。
+> 往更早翻**必须**带 `reverse_order: true`（不带它服务端返回的是同一页 → 游标原地打转）。
+> 详见 §5.3.1「NapCat 真实语义（实测）」。
+
+### 5.3.1 NapCat 真实语义（实测）
+
+> 2026-11-21 首次拿到**活体 NapCat**（v4.18.42 / QQNT 9.9.31-49738 / 账号 2350355494）后实测。
+> 本节是**事实**，不是推断；插件的翻页模型完全按它实现（见 `plugins/napcat-zcode/scripts/verify-live-napcat.mjs`，
+> 每次发版都按这九条逐条断言）。
+
+**消息字段的职责**
+
+| 字段 | 真实含义 | 样本 |
+|---|---|---|
+| `real_seq` | **会话内单调递增序号**（每会话独立计数；NapCat 发成**字符串**） | 群 B：8647,8648,8649…；群 A：38；好友：5,6,7,8 |
+| `message_seq` | **随机 32 位短 id**（=== `message_id` === `real_id`） | 410858111、299539486、1440518264… |
+| `time` | unix 秒 | 1795235911 … |
+
+→ `message_seq` 只能当**锚点**（「从这条开始」），**不能**当游标、不能比大小；
+会话内真正单调的是 `real_seq`（同秒内多条消息的定序键）。
+→ 私聊与群聊**一致**（抽样 4 个群 + 3 个好友，`seq===id` 100% 命中，时间升序 100% 命中）。
+
+**历史动作的行为**
+
+| 入参 | 返回 |
+|---|---|
+| 不带 `message_seq` | **最新** `count` 条，时间升序（`reverse_order` 被忽略） |
+| `message_seq=S`（S 存在） | 从 S **向更新**取 `count` 条，**含 S**（S 在最前），时间升序 |
+| `message_seq=S` + `reverse_order=true` | 从 S **向更早**取 `count` 条，**含 S**（S 在最后），时间升序 |
+| `message_seq=S`（S 不存在） | **报错**：`消息S不存在`（retcode≠0） |
+| `count` | **守约**（受实际存量限制；实测 count=200→197 条，count=500→该会话全部 288 条） |
+
+补充实测：
+- `message_id` 入参 → **被忽略**（等价于不带 seq，返回最新页）；
+- `reverseOrder`（驼峰旧别名）→ **与 `reverse_order` 等价**；
+- `real_seq` 当 `message_seq` 传 → **查不到**，返回空 → 锚点只能用短 id；
+- 上游实现走的是「短 id → 内部 MsgId」的映射（`GetGroupMsgHistory.ts`）：查不到就拿原值当 MsgId，
+  再查不到就抛「消息<S>不存在」；
+- **OB11 `record`（语音）段不带时长**：实测只有 `file` / `path` / `url` / `file_size` 四个字段
+  → 插件**不得**编造或推断时长（`seconds` / `duration` 是别的实现的明确字段名，照收；`time` **不**当时长）。
+
+**插件据此确定的语义**
+
+| 概念 | 取值 | 理由 |
+|---|---|---|
+| 翻页锚点 | `message_seq`（短 id） | 只有它能被服务端定位 |
+| 翻页方向 | 显式 `reverse_order: true` | 不带它返回同一页 |
+| 区间过滤 | **`time`**（unix 秒，闭区间） | `message_seq` 不可比较 |
+| 排序键 | `time` → `real_seq` → 服务端顺序 | 唯一可用的时间轴 |
+| 去重键 | `message_seq` → `message_id` → `real_id` | 三级退化，三者皆无则不参与去重 |
+| 工具层游标 | **时间**（`beforeTime` / `fromTime` / `toTime`） | 面向调用方的语义不暴露随机短 id |
 
 ### 5.4 数据模型
 
@@ -224,7 +286,8 @@ type Segment =
 
 type Message = {
   id: string;          // 规范化消息 ID
-  seq: number;         // message_seq 游标
+  seq: number;         // message_seq —— **随机短 id**（不是单调序号，见 §5.3.1）
+  realSeq?: number;    // real_seq —— 会话内单调递增序号（同秒内的定序键）
   time?: number;       // epoch 秒；**缺失 = 时间不可信**（上游缺 time / time 非数值）
                        // → 渲染时**跳过该条**（注入体与导出文档都会跳过并报出条数），
                        //   绝不渲染出 NaN-NaN-NaN 这种假时间戳
@@ -246,10 +309,10 @@ type Message = {
 | `napcat_configure` | 配置 OneBot 端点与 token（校验通过才落盘）；返回 `{configured, connected, login}`。M2 追加可选 `paths`（本机扫描路径，**只接受绝对路径**；不传 = 不改，传 `[]` = 清空，传 `[...]` = 整体替换；`endpoint` 传空串 = 只改路径、不动连接） |
 | `napcat_detect_local` | **M2**：本机 NapCat 探测（无入参，范围完全由配置决定）。返回 `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`；探测**不带 token**、**只读**、**不扫局域网**；`budgetExhausted: true` = 扫描没扫完（**不得**读作「没找到」）。结论进 `napcat_status` 的 `detection` 字段（缓存） |
 | `napcat_list_chats` | 群列表 / 好友列表（`kind: 'group'|'friend'`） |
-| `napcat_get_history` | 拉取会话历史消息：`chatKind`、`chatId`、`beforeSeq?`、`count?`（默认 100、上限 200）、`since?/until?`（时间过滤由插件 server 侧完成——OneBot 无时间过滤参数，仍按游标翻页后过滤）。返回 `{messages, nextBeforeSeq, exhausted}`；取窗按**最新优先**（页内配额用满时保留较新的消息，被挤出的更旧消息由下一次向前翻页取回） |
-| `napcat_search_messages` | 会话内关键词搜索：`chatKind`、`chatId`、`query`、`startSeq?`、`maxPages?`（默认 20 页）。OneBot 无服务端搜索，只能向更早翻页后过滤，因此扫描量有限；返回 `{hits: [{message, contextBefore}], scanned, exhausted}` |
+| `napcat_get_history` | 拉取会话历史消息：`chatKind`、`chatId`、`count?`（默认 50、上限 200）、`beforeTime?`（**排他**上界，只取该时间之前的消息 = 往更早翻）、`fromTime?`/`toTime?`（**闭**区间，epoch 秒）。区间与翻页一律按**时间**表达（`message_seq` 是随机短 id，不能当游标，见 §5.3.1）。返回 `{messages, nextBeforeTime, exhausted, stopReason, note}`；`nextBeforeTime` 是更早消息的**时间**游标（传回 `beforeTime` 继续翻）；`exhausted=true` 表示**历史耗尽**（真的没有更早的消息了）；`stopReason` 区分 `count_reached` / `range_covered` / `history_exhausted` / `page_budget_exhausted` |
+| `napcat_search_messages` | 会话内关键词搜索：`chatKind`、`chatId`、`query`、`maxPages?`（默认 20 页）。OneBot 无服务端搜索，只能从最新往**更早**翻页后过滤，因此扫描量有限；返回 `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}` |
 | `napcat_format_selection` | 把选定消息格式化为注入文本：`messages`（Message 对象数组）、`chatName`、`maxChars?`（默认取配置 `inject.maxInjectChars`）。返回 `{text, count, truncated}`；`text` 首行是不可信第三方内容声明，不得截断 |
-| `napcat_export` | 导出 md+json：`chat`（`{kind, id, name}`）、`messages?`（缺省则用 `chatKind`/`chatId`/`fromSeq`/`toSeq` 现拉）、`dir?`（`user`/`workspace`，默认取配置）、`includeImages?`；返回 `{mdPath, jsonPath, gitignoreUpdated}` |
+| `napcat_export` | 导出 md+json：`chat`（`{kind, id, name}`）、`messages?`（缺省则用 `chatKind`/`chatId`/`fromTime`/`toTime` 现拉该**时间**区间）、`dir?`（`user`/`workspace`，默认取配置）、`includeImages?`；返回 `{mdPath, jsonPath, gitignoreUpdated}`。现拉失败是**响亮失败**（区间取不全就报错，不静默导出残缺区间） |
 
 工具返回一律为紧凑 JSON（含截断标志），超长文本不在工具结果里整段铺开——注入走面板，持久化走导出。
 

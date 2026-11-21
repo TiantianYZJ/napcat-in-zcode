@@ -89,7 +89,7 @@ beforeEach(() => {
       ? { chats: [{ kind: 'group', id: '1', name: '产品群' }] }
       : { chats: [{ kind: 'friend', id: '2', name: '张三' }] },
   );
-  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeSeq: null, exhausted: true });
+  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeTime: null, exhausted: true });
   mock.getConfig.mockResolvedValue({
     connection: { mode: 'external', endpoint: 'http://127.0.0.1:3000', token: '***' },
     export: { dir: 'user', includeImages: false },
@@ -204,7 +204,7 @@ describe('App 能力降级', () => {
   it('能力齐备、已打开会话并选中消息 → 动作按钮可点（不再是占位）', async () => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     await mount();
@@ -259,17 +259,17 @@ describe('App 能力降级', () => {
 });
 
 describe('App 会话与消息流', () => {
-  it('点击会话载入消息；向上翻页按 seq 跨调用去重合并', async () => {
+  it('点击会话载入消息；向上翻页按消息 id 跨调用去重合并', async () => {
     mock.getHistory
       .mockResolvedValueOnce({
         messages: [msg('c', 10, 1000), msg('d', 11, 1001)],
-        nextBeforeSeq: 10,
+        nextBeforeTime: 1000,
         exhausted: false,
       })
       .mockResolvedValueOnce({
-        // 第二页把边界那条（seq=10）又带回来了 —— 服务端只在单次调用内去重
+        // 第二页把边界那条（id=c）又带回来了 —— 服务端只在单次调用内去重
         messages: [msg('a', 8, 998), msg('b', 9, 999), msg('c', 10, 1000)],
-        nextBeforeSeq: 8,
+        nextBeforeTime: 998,
         exhausted: false,
       });
 
@@ -282,8 +282,8 @@ describe('App 会话与消息流', () => {
     fireEvent.click(screen.getByTestId('load-older'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(4));
 
-    // 游标取上一页给的 nextBeforeSeq
-    expect(mock.getHistory).toHaveBeenLastCalledWith('group', '1', 10, 100);
+    // 游标取上一页给的 nextBeforeTime（**时间**，不是 seq —— seq 是随机短 id）
+    expect(mock.getHistory).toHaveBeenLastCalledWith('group', '1', 1000, 100);
     // 合并后按序、无重复
     const ids = screen.getAllByTestId(/^msg-/).map((el) => el.getAttribute('data-testid'));
     expect(ids).toEqual(['msg-a', 'msg-b', 'msg-c', 'msg-d']);
@@ -292,21 +292,21 @@ describe('App 会话与消息流', () => {
   it('翻页返回空页 → 不再提供「加载更早」', async () => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     await mount();
     await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
     fireEvent.click(screen.getByTestId('chat-group-1'));
     await waitFor(() => expect(screen.getAllByTestId(/^msg-/)).toHaveLength(1));
-    mock.getHistory.mockResolvedValueOnce({ messages: [], nextBeforeSeq: null, exhausted: true });
+    mock.getHistory.mockResolvedValueOnce({ messages: [], nextBeforeTime: null, exhausted: true });
     fireEvent.click(screen.getByTestId('load-older'));
     await waitFor(() => expect(screen.queryByTestId('load-older')).toBeNull());
   });
 
   it('消息超过渲染上限 → 顶部提示只显示最近 2000 条', async () => {
     const many = Array.from({ length: 2100 }, (_, i) => msg(`m${i}`, i + 1, 1000 + i));
-    mock.getHistory.mockResolvedValueOnce({ messages: many, nextBeforeSeq: 1, exhausted: false });
+    mock.getHistory.mockResolvedValueOnce({ messages: many, nextBeforeTime: 1000, exhausted: false });
     await mount();
     await waitFor(() => expect(screen.getByTestId('chat-group-1')).toBeTruthy());
     fireEvent.click(screen.getByTestId('chat-group-1'));
@@ -321,7 +321,7 @@ describe('App 会话与消息流', () => {
         { ...msg('a', 1, 1000), text: '场地定了吗' },
         { ...msg('b', 2, 1001), text: '定了，周五十点' },
       ],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     await mount();
@@ -351,7 +351,7 @@ describe('App 会话与消息流', () => {
 
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('z', 9, 2000)],
-      nextBeforeSeq: 9,
+      nextBeforeTime: 2000,
       exhausted: false,
     });
     fireEvent.click(screen.getByTestId('chat-friend-2'));
@@ -380,7 +380,7 @@ describe('App 选择规则', () => {
   beforeEach(() => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000), msg('b', 2, 1001), msg('c', 3, 1002)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
   });
@@ -414,7 +414,7 @@ describe('App 选择规则', () => {
 
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('z', 9, 2000)],
-      nextBeforeSeq: 9,
+      nextBeforeTime: 2000,
       exhausted: false,
     });
     fireEvent.click(screen.getByTestId('chat-friend-2'));
@@ -475,7 +475,7 @@ describe('App 动作反馈', () => {
   it('剪贴板写不进去时，toast 给出「复制」按钮，点它再写一次', async () => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     mock.exportSel.mockResolvedValue({
@@ -507,7 +507,7 @@ describe('App 动作反馈', () => {
   it('动作失败 → toast 显示错误消息（不只 console）', async () => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     mock.exportSel.mockRejectedValue(new Error('export failed writing markdown'));
@@ -528,7 +528,7 @@ describe('App 动作反馈', () => {
   it('工作区目录不可用 → toast 显示真实原因，并给「改用用户目录」重试按钮', async () => {
     mock.getHistory.mockResolvedValueOnce({
       messages: [msg('a', 1, 1000)],
-      nextBeforeSeq: 1,
+      nextBeforeTime: 1000,
       exhausted: false,
     });
     mock.exportSel.mockRejectedValueOnce(

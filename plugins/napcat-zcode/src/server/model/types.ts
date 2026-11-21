@@ -21,6 +21,13 @@ export interface Message {
   id: string;
   seq: number;
   /**
+   * 会话内单调递增的序号（`real_seq`）。
+   *
+   * **缺失 = 上游没给**（不是 0）。同一秒内的多条消息靠它定序
+   * （排序键：`time` → `real_seq` → 服务端顺序）。
+   */
+  realSeq?: number;
+  /**
    * 消息时间（epoch 秒）。
    *
    * `undefined` = **没有有效时间**（上游缺 `time` 或 `time` 不是数值）。

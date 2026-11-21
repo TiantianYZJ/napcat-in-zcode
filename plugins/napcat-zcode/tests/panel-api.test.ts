@@ -124,20 +124,21 @@ describe('callToolJson 握手门控', () => {
 });
 
 describe('api 工具封装', () => {
-  it('napcat_get_history 只在有游标时才带 beforeSeq', async () => {
-    host.callTool.mockResolvedValue(textResult(JSON.stringify({ messages: [], nextBeforeSeq: null, exhausted: true })));
+  it('napcat_get_history 只在有游标时才带 beforeTime', async () => {
+    host.callTool.mockResolvedValue(textResult(JSON.stringify({ messages: [], nextBeforeTime: null, exhausted: true })));
     await mod.api.getHistory('group', '123');
     expect(host.callTool).toHaveBeenCalledWith('napcat_get_history', {
       chatKind: 'group',
       chatId: '123',
       count: 100,
     });
-    await mod.api.getHistory('group', '123', 42);
+    // 游标是**时间**（epoch 秒）：服务端 message_seq 是随机短 id，不能当游标
+    await mod.api.getHistory('group', '123', 1700000000);
     expect(host.callTool).toHaveBeenLastCalledWith('napcat_get_history', {
       chatKind: 'group',
       chatId: '123',
       count: 100,
-      beforeSeq: 42,
+      beforeTime: 1700000000,
     });
   });
 

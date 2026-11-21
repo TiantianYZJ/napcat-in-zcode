@@ -79,7 +79,7 @@ beforeEach(() => {
   mock.handshake.mockResolvedValue(ALL_CAPS);
   mock.status.mockResolvedValue({ configured: true, connected: true, mode: 'external' });
   mock.listChats.mockResolvedValue({ chats: [] });
-  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeSeq: null, exhausted: true });
+  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeTime: null, exhausted: true });
   mock.detectLocal.mockResolvedValue({
     found: false,
     candidates: [],

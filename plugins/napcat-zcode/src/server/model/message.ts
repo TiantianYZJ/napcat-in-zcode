@@ -46,23 +46,85 @@ function toNum(v: unknown): number | undefined {
 }
 
 /**
- * 语音时长的取值上界（一小时的秒数）。
+ * 消息排序比较器（**时间语义**，2026-11-21 实测后确立）。
  *
- * `record` 段的时长字段名各实现不一（`seconds` / `duration` / `time`），三种都吃。
- * 但 `time` 这个名字**也被用来放绝对时间戳**（epoch 秒）：那样算出来的「时长」
- * 会是几百万秒（几百天），是个一眼假的数字。
+ * 排序键：`time` 升序 → 同一秒内 `real_seq` 升序 → 再同则**保持服务端顺序**。
  *
- * 因此 `time` 只有在**小于一小时**时才被当作时长；更大（或非数值）→ 视为没有时长。
- * （`seconds` / `duration` 是明确的时长字段名，不做这个上限判断。）
+ * 为什么不用 `message_seq` 排序：实测它是**随机 32 位短 id**（=== `message_id` === `real_id`），
+ * 不是单调序号 —— 按它排序等于按随机数排序，输出顺序会与真实时间轴无关。
+ * 会话内真正单调递增的是 `real_seq`（每会话独立计数）。
+ *
+ * 「保持服务端顺序」靠**稳定排序**实现：`Array.prototype.sort` 自 ES2019 起保证稳定，
+ * 比较器相等时元素相对次序不变。
+ *
+ * 没有有效 `time` 的消息排在**最后**（排不进时间轴），它们之间同样保持服务端顺序。
  */
-const MAX_DURATION_SECONDS = 3600;
-
-/** 从 `time` 字段取语音时长：只在数值小于一小时时才算时长，否则视为无时长。 */
-function durationFromTime(v: unknown): number | undefined {
-  const t = toNum(v);
-  return t !== undefined && t < MAX_DURATION_SECONDS ? t : undefined;
+export function compareMessages(a: OB11Message, b: OB11Message): number {
+  const ta = toNum(a.time);
+  const tb = toNum(b.time);
+  if (ta !== tb) {
+    if (ta === undefined) return 1;
+    if (tb === undefined) return -1;
+    return ta - tb;
+  }
+  const ra = toNum(a.real_seq);
+  const rb = toNum(b.real_seq);
+  if (ra !== rb) {
+    if (ra === undefined) return 1;
+    if (rb === undefined) return -1;
+    return ra - rb;
+  }
+  return 0;
 }
 
+/**
+ * 按时间语义排序消息（升序：`time` → `real_seq` → 服务端顺序）。
+ *
+ * 返回**新数组**（不改原数组）。
+ */
+export function sortMessages(messages: readonly OB11Message[]): OB11Message[] {
+  return [...messages].sort(compareMessages);
+}
+
+/**
+ * 消息去重键：`message_seq`（短 id）优先 → `message_id` → `real_id`。
+ *
+ * 三个字段都没有时返回 `undefined` —— 这条消息**不参与去重**。
+ * 不能拿「页内下标」当键：跨页的同一条消息下标相同，会被误判成重复而静默丢弃。
+ *
+ * 命名空间与面板侧 `App.tsx` 的 `dedupeKey` **同构**：
+ * `s` = 有 `message_seq`，`i` = 只有消息 id（`message_id` / `real_id`）。
+ */
+export function messageDedupKey(m: OB11Message): string | undefined {
+  const seq = toNum(m.message_seq);
+  if (seq !== undefined) return `s${seq}`;
+  const id = toNum(m.message_id) ?? toNum(m.real_id);
+  if (id !== undefined) return `i${id}`;
+  return undefined;
+}
+
+/**
+ * 锚点用的短 id（`message_seq`）。
+ *
+ * 只有 `message_seq` 能当锚点：`real_seq` 传进去**查不到**（实测返回空），
+ * `message_id` 也不是短 id。只有它能表达「从这条开始」。
+ */
+export function messageShortId(m: OB11Message): string | undefined {
+  const seq = toNum(m.message_seq);
+  return seq === undefined ? undefined : String(seq);
+}
+
+
+/**
+ * 语音时长的取值口径。
+ *
+ * `record` 段的时长字段名各实现不一（`seconds` / `duration`），两种都吃。
+ *
+ * **`time` 不再被当作时长**（2026-11-21 实测后移除）：实测 NapCat 的 OB11 `record` 段
+ * 只有 `file` / `path` / `url` / `file_size` 四个字段，**根本不带时长**；
+ * 而 `time` 这个名字在别处被用来放绝对时间戳（epoch 秒）—— 拿它算「时长」
+ * 会得到几百万秒这种一眼假的数字。插件**不编造也不推断**时长：没有明确的时长字段就是没有时长。
+ */
 function normalizeSegment(seg: OB11MessageSegment): Segment {
   const d: Record<string, unknown> = seg.data ?? {};
   switch (seg.type) {
@@ -74,8 +136,9 @@ function normalizeSegment(seg: OB11MessageSegment): Segment {
     case 'face': return { kind: 'face', faceId: String(d.id ?? ''), text: d.text ? String(d.text) : undefined };
     case 'reply': return { kind: 'reply', messageId: String(d.id ?? '') };
     case 'image': return { kind: 'image', url: d.url ? String(d.url) : undefined, fileId: d.file ? String(d.file) : undefined, width: toNum(d.width), height: toNum(d.height) };
-    // 语音时长字段名各实现不一（seconds/duration/time），三种都吃；真实字段名待 NapCat 实测确认。
-    case 'record': return { kind: 'voice', url: d.url ? String(d.url) : undefined, duration: toNum(d.seconds) ?? toNum(d.duration) ?? durationFromTime(d.time) };
+    // 时长只认**明确的时长字段名**（seconds / duration）。
+    // 实测 NapCat 的 record 段**不带任何时长字段** → duration 会是 undefined（不编造）。
+    case 'record': return { kind: 'voice', url: d.url ? String(d.url) : undefined, duration: toNum(d.seconds) ?? toNum(d.duration) };
     case 'video': return { kind: 'video', url: d.url ? String(d.url) : undefined, fileName: d.file ? String(d.file) : undefined };
     case 'file': return { kind: 'file', url: d.url ? String(d.url) : undefined, fileName: d.name ? String(d.name) : d.file ? String(d.file) : undefined, size: toNum(d.size) };
     case 'forward': return { kind: 'forward', messageId: String(d.id ?? '') };
@@ -150,16 +213,26 @@ export function normalizeMessage(raw: OB11Message): Message {
   return {
     id: String(raw.message_id ?? raw.real_id ?? raw.message_seq ?? ''),
     /**
-     * `seq` **只**是 `message_seq`（spec §5.4：`seq: number; // message_seq 游标`）。
+     * `seq` **只**是 `message_seq`（spec §5.4）。
+     *
+     * 注意：实测（2026-11-21）`message_seq` 是**随机 32 位短 id**（=== `message_id` === `real_id`），
+     * **不是**单调游标 —— 它只能当**锚点**（「从这条开始」），不能拿来做大小比较、
+     * 不能 `cursor + 1`。会话内单调递增的是 `real_seq`（见 `realSeq`）。
      *
      * 以前缺 `message_seq` 时会回退成 `message_id` —— 两个不同的编号空间混在一个字段里，
      * 导致「按 seq 去重」可能把两条不同的消息判成同一条（面板与服务端的去重键因此不一致）。
-     * 没有 `message_seq` 就是没有游标：`seq = 0`，去重改用消息 id（`i` 前缀）。
+     * 没有 `message_seq` 就是没有锚点：`seq = 0`，去重改用消息 id（`i` 前缀）。
      *
      * 取值走 `toNum`：`message_seq` 是非数值字符串时**不能**得到 `NaN`
-     * （`NaN` 会一路传染到排序、游标比较与去重键），按「没有游标」处理（0）。
+     * （`NaN` 会一路传染到排序、游标比较与去重键），按「没有锚点」处理（0）。
      */
     seq: toNum(raw.message_seq) ?? 0,
+    /**
+     * `real_seq`：会话内单调递增的序号 —— **同一秒内多条消息的定序键**。
+     *
+     * 缺失 = 上游没给（不是 0）。排序口径见 `compareMessages`：`time` → `real_seq` → 服务端顺序。
+     */
+    realSeq: toNum(raw.real_seq),
     /**
      * `time` 走 `toNum`：缺失或非数值 → `undefined`（**没有有效时间**），
      * 不用 0 兜底（0 是 1970-01-01，是看起来正常的错误时间戳）。

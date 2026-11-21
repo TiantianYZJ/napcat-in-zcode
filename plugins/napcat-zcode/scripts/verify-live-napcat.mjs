@@ -1,6 +1,17 @@
 /**
- * 真机验证：连真实的 NapCat（OneBot 11）端点，跑通插件的完整工具链，
- * 并**实测**三条此前只能靠推断的 NapCat 语义。
+ * 真机验证：连真实的 NapCat（OneBot 11）端点，逐条断言**真实语义**，
+ * 并把插件的完整工具链在真实数据上跑一遍。
+ *
+ * 断言对象（2026-11-21 活体实测，计划 §一）：
+ *   1. 不带 `message_seq` → 返回的是**最新** count 条，且时间升序；
+ *   2. `message_seq=S` → 返回**含 S** 且从 S 向更新；
+ *   3. `message_seq=S` + `reverse_order=true` → 返回**含 S** 且从 S 向更早；
+ *   4. `message_seq=<不存在的 id>` → **必须报错**；
+ *   5. `count` 守约（请求 3 → 返 3；请求 100 → 返 ≤100 且 >0）；
+ *   6. `real_seq` 在同一会话内单调递增；
+ *   7. record 段**不含时长字段**；
+ *   8. 插件工具链往更早翻页**必须真的取到更早的消息**（游标推进）；
+ *   9. 搜索能扫到**首页之外**的关键词。
  *
  * 前置条件：
  *   1. NapCat 正在运行，且已开启 OneBot Server（默认 http://127.0.0.1:3000）
@@ -33,6 +44,7 @@ const record = (name, ok, detail) => {
 const info = (title) => console.log(`\n── ${title} ${'─'.repeat(Math.max(0, 58 - title.length))}`);
 
 // ── 直接打 OneBot 端点 ─────────────────────────────────────────────
+/** 调一个动作；retcode≠0 直接抛错。 */
 async function ob(action, params = {}) {
   const res = await fetch(`${ENDPOINT.replace(/\/$/, '')}/${action}`, {
     method: 'POST',
@@ -43,6 +55,17 @@ async function ob(action, params = {}) {
   const json = await res.json();
   if (json.retcode !== 0) throw new Error(`${action} 失败：${json.wording || json.message || json.retcode}`);
   return json.data;
+}
+
+/** 调一个动作；**不抛错**，返回整个响应（用来断言「必须报错」）。 */
+async function obRaw(action, params = {}) {
+  const res = await fetch(`${ENDPOINT.replace(/\/$/, '')}/${action}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(15000),
+  });
+  return res.json();
 }
 
 console.log(`端点：${ENDPOINT}`);
@@ -84,6 +107,7 @@ async function probe(chat, isGroup) {
     id,
     idKey,
     action,
+    isGroup,
     name: isGroup ? chat.group_name : chat.nickname,
     count,
   };
@@ -112,92 +136,112 @@ const chatId = chat.id;
 const chatName = chat.name;
 const histAction = chat.action;
 const idKey = chat.idKey;
+/** 选中的会话是群还是好友（工具调用要按 kind 传）。 */
+const isGroup = chat.isGroup === true;
 record('选定会话', true, `${chatName}（${histAction} ${chatId}，首页 ${chat.count} 条）`);
 
-// ── 1. 实测 message_seq 的边界语义 ──────────────────────────────────
-info('1. 实测 message_seq 边界语义（独占 vs 包含）');
-const page = await ob(histAction, { [idKey]: chatId, count: 20 });
-const msgs = page.messages || [];
-const seqs = msgs.map((m) => m.message_seq).filter((s) => typeof s === 'number');
-record('拉到消息', msgs.length > 0, `本页 ${msgs.length} 条，seq 范围 ${Math.min(...seqs)}..${Math.max(...seqs)}`);
+// ── 1. 真实语义逐条断言 ─────────────────────────────────────────────
+info('1. 真实语义逐条断言（2026-11-21 实测口径）');
 
-if (msgs.length >= 2) {
-  const minSeq = Math.min(...seqs);
-  const midSeq = seqs.slice().sort((a, b) => a - b)[Math.floor(seqs.length / 2)];
-  const bySeq = (list) => new Set((list.messages || []).map((m) => m.message_seq));
+/** 拉一页；带 shortId 时按锚点拉，backward=true 时向更早。 */
+const page = async (count, { shortId, backward } = {}) => {
+  const params = { [idKey]: chatId, count };
+  if (shortId !== undefined) params.message_seq = String(shortId);
+  if (backward) params.reverse_order = true;
+  const r = await ob(histAction, params);
+  return r.messages || [];
+};
 
-  // 用一个「确实存在」的 seq 作为锚点：若返回结果里仍含该 seq → 包含语义；不含 → 独占语义
-  const atAnchor = await ob(histAction, { [idKey]: chatId, message_seq: String(midSeq), count: 20 });
-  const atSet = bySeq(atAnchor);
-  const inclusive = atSet.has(midSeq);
+// 拉尽可能多的历史作为「基准」（用于判断哪条更新 / 哪条更早）
+const base = await page(200);
+const baseTimes = base.map((m) => m.time);
+const baseSeqs = base.map((m) => m.message_seq);
+const isAscending = (arr) => arr.every((v, i) => i === 0 || v >= arr[i - 1]);
+record('取到历史', base.length > 0, `本页 ${base.length} 条，时间 ${baseTimes[0]}..${baseTimes[baseTimes.length - 1]}`);
 
-  // 锚点 ±1 的对比
-  const atAnchorMinus = await ob(histAction, { [idKey]: chatId, message_seq: String(midSeq - 1), count: 20 });
-  const atAnchorPlus = await ob(histAction, { [idKey]: chatId, message_seq: String(midSeq + 1), count: 20 });
-  const setMinus = bySeq(atAnchorMinus);
-  const setPlus = bySeq(atAnchorPlus);
-
-  const boundary = inclusive
-    ? '包含语义：message_seq = s 会返回 seq <= s（含锚点本身）'
-    : '独占语义：message_seq = s 只返回 seq < s（不含锚点本身）';
-  record('message_seq 边界语义已实测', true,
-    `${boundary}\n        锚点 seq=${midSeq}：请求 s=${midSeq} → 命中锚点=${atSet.has(midSeq)}；请求 s=${midSeq - 1} → 命中锚点=${setMinus.has(midSeq)}；请求 s=${midSeq + 1} → 命中锚点=${setPlus.has(midSeq)}\n        → 插件据此选择游标偏移：${inclusive ? '应当用 cursor（不 +1）' : '应当用 cursor + 1'}`);
-
-  // cursor+1 区间边界的实际效果
-  const viaPlus1 = new Set([...(await ob(histAction, { [idKey]: chatId, message_seq: String(minSeq + 1), count: 20 })).messages || []]
-    .map((m) => m.message_seq));
-  const viaCursor = new Set([...(await ob(histAction, { [idKey]: chatId, message_seq: String(minSeq), count: 20 })).messages || []]
-    .map((m) => m.message_seq));
-  record('cursor+1 与 cursor 的差异已实测', true,
-    `以本页最小 seq=${minSeq} 为界：请求 s=${minSeq} 返回 ${viaCursor.size} 条（含 seq>=${minSeq} 的? ${[...viaCursor].some((s) => s >= minSeq)}）；请求 s=${minSeq + 1} 返回 ${viaPlus1.size} 条（含 seq>=${minSeq + 1} 的? ${[...viaPlus1].some((s) => s >= minSeq + 1)}）`);
-} else {
-  record('message_seq 边界语义已实测', false, '该会话消息不足 2 条，无法构造锚点');
+// 1) 不带 message_seq → 最新 count 条，且时间升序
+{
+  const small = await page(3);
+  const expectedLatest = base.slice(-3).map((m) => m.message_seq);
+  const got = small.map((m) => m.message_seq);
+  record('① 不带 message_seq → 返回最新 count 条，时间升序',
+    got.length === 3 && got.every((s) => expectedLatest.includes(s)) && isAscending(small.map((m) => m.time)),
+    `请求 count=3 → seq ${JSON.stringify(got)}；基准里的最新 3 条 ${JSON.stringify(expectedLatest)}；时间升序=${isAscending(small.map((m) => m.time))}`);
 }
 
-// ── 2. 实测 count 是否被守约 ───────────────────────────────────────
-info('2. 实测 count 是否被守约');
-const small = await ob(histAction, { [idKey]: chatId, count: 3 });
-const big = await ob(histAction, { [idKey]: chatId, count: 50 });
-record('count 被服务端守约', (small.messages || []).length <= 3,
-  `请求 count=3 → 返回 ${(small.messages || []).length} 条；请求 count=50 → 返回 ${(big.messages || []).length} 条`);
+// 2) message_seq=S → 含 S，且从 S 向更新
+// 3) message_seq=S + reverse_order=true → 含 S，且从 S 向更早
+{
+  const anchorIdx = Math.max(0, Math.min(base.length - 1, Math.floor(base.length / 2)));
+  const anchor = base[anchorIdx];
+  const shortId = anchor.message_seq;
 
-// ── 3. 实测 message_seq=0 的行为 ───────────────────────────────────
-info('3. 实测 message_seq=0 的行为');
-try {
-  const zero = await ob(histAction, { [idKey]: chatId, message_seq: '0', count: 5 });
-  const zeroSeqs = (zero.messages || []).map((m) => m.message_seq);
-  const latest = await ob(histAction, { [idKey]: chatId, count: 5 });
-  const latestSeqs = (latest.messages || []).map((m) => m.message_seq);
-  const same = JSON.stringify(zeroSeqs) === JSON.stringify(latestSeqs);
-  record('message_seq=0 的行为已实测', true,
-    `seq=0 返回 ${(zero.messages || []).length} 条 ${JSON.stringify(zeroSeqs)}；不带参数返回 ${(latest.messages || []).length} 条 ${JSON.stringify(latestSeqs)} → ${same ? '两者相同（0 被当作「最新页」，插件不会因 seq=0 而错乱）' : '两者不同（0 不是「最新页」，插件的 minSeq-1 探测会落到意料之外的位置）'}`);
-} catch (e) {
-  record('message_seq=0 的行为已实测', true, `服务端对 seq=0 直接报错：${e.message}（插件不会下发 0，除极端边界）`);
-}
+  const forward = await page(5, { shortId });
+  const forwardSeqs = forward.map((m) => m.message_seq);
+  const forwardHasAnchor = forwardSeqs.includes(shortId);
+  const forwardAllNewerOrEqual = forward.every((m) => m.time >= anchor.time);
+  const forwardIdxInBase = base.findIndex((m) => m.message_seq === shortId);
+  record('② message_seq=S → 含 S，且从 S 向更新',
+    forwardHasAnchor && forwardAllNewerOrEqual && forwardIdxInBase >= 0,
+    `锚点 seq=${shortId}（第 ${anchorIdx + 1}/${base.length} 条，t=${anchor.time}）；返回 ${forward.length} 条，含锚点=${forwardHasAnchor}，都不早于锚点=${forwardAllNewerOrEqual}`);
 
-// ── 4. 实测 record 段的时长字段名 ──────────────────────────────────
-info('4. 实测 record（语音）段的时长字段名');
-const scan = [];
-for (const c of groups.slice(0, 5)) {
-  const p = await ob('get_group_msg_history', { group_id: String(c.group_id), count: 50 }).catch(() => ({ messages: [] }));
-  scan.push(...(p.messages || []));
-}
-for (const f of friends.slice(0, 5)) {
-  const p = await ob('get_friend_msg_history', { user_id: String(f.user_id), count: 50 }).catch(() => ({ messages: [] }));
-  scan.push(...(p.messages || []));
-}
-const recordSegs = scan.flatMap((m) => (m.message || []).filter((s) => s.type === 'record'));
-const keyTally = {};
-for (const s of recordSegs) for (const k of Object.keys(s.data || {})) keyTally[k] = (keyTally[k] || 0) + 1;
-const durationKeys = ['seconds', 'duration', 'time'].filter((k) => keyTally[k]);
-record('record 段时长字段名已实测', true,
-  `扫描 ${scan.length} 条消息、${recordSegs.length} 个 record 段；出现的字段：${JSON.stringify(keyTally)}\n        → 时长候选字段中真实存在的是：${durationKeys.length ? durationKeys.join(', ') : '（本次样本里没有 record 段，时长字段名仍未确定）'}`);
-if (recordSegs.length === 0) {
-  record('record 样本充足（可用于判定时长字段名）', false, '样本里没有语音消息，需换一个含语音的会话再跑一次');
+  const backward = await page(5, { shortId, backward: true });
+  const backwardSeqs = backward.map((m) => m.message_seq);
+  const backwardHasAnchor = backwardSeqs.includes(shortId);
+  const backwardAllOlderOrEqual = backward.every((m) => m.time <= anchor.time);
+  const backwardIsEarlierPage = backward.length > 0 && backward[0].time <= anchor.time;
+  record('③ message_seq=S + reverse_order=true → 含 S，且从 S 向更早',
+    backwardHasAnchor && backwardAllOlderOrEqual && backwardIsEarlierPage,
+    `锚点 seq=${shortId}；返回 ${backward.length} 条，含锚点=${backwardHasAnchor}，都不晚于锚点=${backwardAllOlderOrEqual}，首条 t=${backward[0]?.time}（锚点 t=${anchor.time}）`);
+
+  // 4) 不存在的 message_seq → 必须报错
+  const bogus = await obRaw(histAction, { [idKey]: chatId, message_seq: '1', count: 5 });
+  record('④ message_seq=<不存在的 id> → 必须报错', bogus.retcode !== 0,
+    `retcode=${bogus.retcode}，wording=${JSON.stringify(bogus.wording || bogus.message || '')}`);
 }
 
-// ── 5. 跑插件自身的工具链（真实产物 over stdio）─────────────────────
-info('5. 插件工具链（真实 dist/server.mjs over stdio）');
+// 5) count 守约
+{
+  const three = await page(3);
+  const hundred = await page(100);
+  record('⑤ count 被服务端守约', three.length === 3 && hundred.length <= 100 && hundred.length > 0,
+    `请求 count=3 → ${three.length} 条；请求 count=100 → ${hundred.length} 条`);
+}
+
+// 6) real_seq 在同一会话内单调递增
+{
+  // 真实 NapCat 把 real_seq 发成**字符串**（"8841"）→ 先转成数再比
+  const withReal = base
+    .map((m) => ({ m, r: Number(m.real_seq) }))
+    .filter((x) => Number.isFinite(x.r));
+  const mono = withReal.every((x, i) => i === 0 || x.r > withReal[i - 1].r);
+  const seqIsNotMonotonic = baseSeqs.some((s, i) => i > 0 && s <= baseSeqs[i - 1]);
+  record('⑥ real_seq 在会话内单调递增（而 message_seq 不是）', mono && withReal.length > 0,
+    `本页 ${withReal.length}/${base.length} 条带 real_seq，单调递增=${mono}；message_seq 是否单调=${!seqIsNotMonotonic ? '是（本次样本恰好单调）' : '否（短 id 本就随机）'}；示例 real_seq=${withReal.slice(0, 6).map((x) => x.r).join(',')}`);
+}
+
+// 7) record 段不含时长字段
+{
+  const scan = [];
+  for (const c of groups.slice(0, 10)) {
+    const p = await ob('get_group_msg_history', { group_id: String(c.group_id), count: 100 }).catch(() => ({ messages: [] }));
+    scan.push(...(p.messages || []));
+  }
+  for (const f of friends.slice(0, 10)) {
+    const p = await ob('get_friend_msg_history', { user_id: String(f.user_id), count: 100 }).catch(() => ({ messages: [] }));
+    scan.push(...(p.messages || []));
+  }
+  const recordSegs = scan.flatMap((m) => (Array.isArray(m.message) ? m.message : []).filter((s) => s.type === 'record'));
+  const keyTally = {};
+  for (const s of recordSegs) for (const k of Object.keys(s.data || {})) keyTally[k] = (keyTally[k] || 0) + 1;
+  const durationKeys = ['seconds', 'duration', 'duration_time', 'length', 'time'].filter((k) => keyTally[k]);
+  record('⑦ record 段不含时长字段（实测：只有 file/path/url/file_size）',
+    recordSegs.length > 0 && durationKeys.length === 0,
+    `扫描 ${scan.length} 条消息、${recordSegs.length} 个 record 段；出现的字段：${JSON.stringify(keyTally)}；时长类字段：${durationKeys.length ? durationKeys.join(', ') : '（无 —— 确认 record 段不带时长）'}`);
+}
+
+// ── 2. 插件自身的工具链（真实产物 over stdio）─────────────────────
+info('2. 插件工具链（真实 dist/server.mjs over stdio）');
 if (!existsSync(SERVER)) {
   record('构建产物存在', false, `未找到 ${SERVER}，请先 npm run build`);
 } else {
@@ -246,12 +290,17 @@ if (!existsSync(SERVER)) {
 
     const hist = toolText(await rpc('tools/call', { name: 'napcat_get_history', arguments: { chatKind: isGroup ? 'group' : 'friend', chatId, count: 20 } }));
     record('napcat_get_history 取到真实消息', (hist.messages || []).length > 0,
-      `${(hist.messages || []).length} 条，seq=${(hist.messages || []).slice(0, 5).map((m) => m.seq).join(',')}`);
+      `${(hist.messages || []).length} 条，nextBeforeTime=${hist.nextBeforeTime}，stopReason=${hist.stopReason}`);
 
-    const older = toolText(await rpc('tools/call', { name: 'napcat_get_history', arguments: { chatKind: isGroup ? 'group' : 'friend', chatId, count: 20, beforeSeq: hist.nextBeforeSeq } }));
-    const firstSeq = older.messages?.[0]?.seq;
-    record('插件游标翻页取到更早的真实消息', (older.messages || []).length > 0 && (firstSeq === undefined || firstSeq < hist.messages[0].seq),
-      `${(older.messages || []).length} 条，最早 seq=${firstSeq}（本页最早 seq=${hist.messages?.[0]?.seq}）`);
+    // ⑧ 往更早翻页必须真的取到更早的消息（游标推进，且与前一页无重叠）
+    const older = toolText(await rpc('tools/call', { name: 'napcat_get_history', arguments: { chatKind: isGroup ? 'group' : 'friend', chatId, count: 20, beforeTime: hist.nextBeforeTime } }));
+    const histTimes = (hist.messages || []).map((m) => m.time);
+    const olderTimes = (older.messages || []).map((m) => m.time);
+    const overlap = olderTimes.filter((t) => histTimes.includes(t));
+    const strictlyOlder = olderTimes.length > 0 && olderTimes[0] < Math.min(...histTimes);
+    record('⑧ 插件往更早翻页取到更早的真实消息（游标推进）',
+      olderTimes.length > 0 && strictlyOlder && overlap.length === 0,
+      `第二页 ${olderTimes.length} 条，最早 t=${olderTimes[0]}（第一页最早 t=${Math.min(...histTimes)}）；重叠 ${overlap.length} 条；nextBeforeTime=${older.nextBeforeTime}（第一页 ${hist.nextBeforeTime}）`);
 
     const fmt = toolText(await rpc('tools/call', { name: 'napcat_format_selection', arguments: { messages: hist.messages || [], chatName } }));
     record('napcat_format_selection 产出注入文本', typeof fmt.text === 'string' && fmt.text.length > 0, `首行：${String(fmt.text).split('\n')[0].slice(0, 60)}…（共 ${fmt.count} 条）`);
@@ -260,9 +309,21 @@ if (!existsSync(SERVER)) {
     const mdOk = existsSync(exp.mdPath) && readFileSync(exp.mdPath, 'utf-8').length > 0;
     record('napcat_export 导出真实记录到文件', mdOk, `${exp.mdPath}`);
 
-    const searched = toolText(await rpc('tools/call', { name: 'napcat_search_messages', arguments: { chatKind: isGroup ? 'group' : 'friend', chatId, query: '的' } }));
-    record('napcat_search_messages 在真实数据上扫描', typeof searched.scanned === 'number',
-      `scanned=${searched.scanned} hits=${(searched.hits || []).length} note=${String(searched.note || '').slice(0, 60)}`);
+    // ⑨ 搜索能扫到**首页之外**的关键词
+    //    取一条「比较早」的消息里的字样当关键词 → 只有真的往更早翻页才扫得到
+    const oldest = base.length > 3 ? base[0] : null;
+    const oldestText = oldest && Array.isArray(oldest.message)
+      ? (oldest.message.find((s) => s.type === 'text')?.data?.text ?? '')
+      : '';
+    const keyword = String(oldestText).trim().slice(0, 4);
+    if (keyword.length >= 2) {
+      const searched = toolText(await rpc('tools/call', { name: 'napcat_search_messages', arguments: { chatKind: isGroup ? 'group' : 'friend', chatId, query: keyword } }));
+      record('⑨ 搜索能扫到首页之外的关键词', (searched.hits || []).length > 0 && (searched.pages ?? 0) > 1,
+        `关键词「${keyword}」（取自最早那条消息）→ 命中 ${(searched.hits || []).length} 条，scanned=${searched.scanned}，pages=${searched.pages}，stopReason=${searched.stopReason}`);
+    } else {
+      record('⑨ 搜索能扫到首页之外的关键词', false,
+        '最早那条消息里没有可用的文本关键词（无法构造搜索用例）');
+    }
   } catch (e) {
     record('插件工具链全链路', false, e.message);
   } finally {

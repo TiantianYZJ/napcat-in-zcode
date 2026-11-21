@@ -73,7 +73,7 @@ beforeEach(() => {
   mock.listChats.mockImplementation(async (kind: string) =>
     kind === 'group' ? { chats: [{ kind: 'group', id: '1', name: '产品群' }] } : { chats: [] },
   );
-  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeSeq: null, exhausted: true });
+  mock.getHistory.mockResolvedValue({ messages: [], nextBeforeTime: null, exhausted: true });
   mock.getConfig.mockResolvedValue({
     connection: { mode: 'external', endpoint: 'http://127.0.0.1:3000', token: '***' },
     export: { dir: 'user', includeImages: false },

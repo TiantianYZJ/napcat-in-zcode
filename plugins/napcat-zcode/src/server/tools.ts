@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import { isAbsolute } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { fetchHistoryPage, fetchMessagesBetween, getFriendList, getGroupList } from './onebot/actions.js';
+import { fetchMessagesBetween, getFriendList, getGroupList, scanHistoryBackwards } from './onebot/actions.js';
 import { normalizeMessage } from './model/message.js';
 import { formatSelection } from './model/format.js';
 import { exportSelection } from './export/export.js';
 import { loadConfigData } from './config.js';
 import type { ChatRef, Message, Segment } from './model/types.js';
 import { safeEndpointLabel, type OneBotClient } from './onebot/client.js';
-import type { OB11Message } from './onebot/types.js';
 import type { AppState } from './state.js';
 import { endpointSecurityWarning } from './state.js';
 import { detectLocalOnce } from './host/detect-local.js';
@@ -17,6 +16,8 @@ import { detectLocalOnce } from './host/detect-local.js';
 const MAX_PAGES = 40;
 /** `napcat_get_history` 一次最多返回多少条。 */
 const MAX_COUNT = 200;
+/** `napcat_get_history` 默认返回多少条。 */
+const DEFAULT_COUNT = 50;
 
 /** 搜索单页大小（`napcat_search_messages` 向更早翻页时一次取多少条）。 */
 const SEARCH_PAGE_SIZE = 100;
@@ -45,129 +46,133 @@ function fail(state: AppState, e: unknown) {
   };
 }
 
-/** 原始消息里的 `message_seq`（游标只能用这个；`message_id` 不是序号）。 */
-function rawSeqOf(raw: OB11Message): number | undefined {
-  const s = raw.message_seq;
-  return typeof s === 'number' && Number.isFinite(s) ? s : undefined;
-}
-
 /**
- * 去重键：优先 `message_seq`，其次 `message_id` / `real_id`。
+ * 翻页终止原因。
  *
- * 两者都没有时返回 undefined —— 这条消息**不参与去重**。
- * 不能拿「页内下标」当键：跨页的同一条消息下标相同，会被误判成重复而静默丢弃。
+ * **三种情况必须能区分**（不能都笼统说「没有更多了」）：
+ * - `history_exhausted`：历史耗尽 —— 已经翻到会话最开始，真的没有更早的消息了；
+ * - `page_budget_exhausted`：翻页预算用尽 —— 可能还有更早的消息没取到；
+ * - `count_reached`：攒够了 `count` 条 —— 窗口已满（还有更早的消息，只是这次没取）；
+ * - `range_covered`：区间已完整覆盖（翻过了 `fromTime` 下界）。
+ *
+ * 「锚点失效」（服务端报「消息<S>不存在」）是**错误**（`isError: true`），
+ * 不是上面任何一种终止原因。
  */
-function dedupKey(raw: OB11Message): string | undefined {
-  const seq = rawSeqOf(raw);
-  if (seq !== undefined) return `s${seq}`;
-  const id = raw.message_id ?? raw.real_id;
-  if (typeof id === 'number' && Number.isFinite(id)) return `i${id}`;
-  return undefined;
-}
+export type HistoryStopReason =
+  | 'count_reached'
+  | 'range_covered'
+  | 'history_exhausted'
+  | 'page_budget_exhausted';
 
 interface HistoryResult {
   messages: Message[];
-  nextBeforeSeq: number | null;
+  /**
+   * 更早消息的游标（**时间**，unix 秒）：把它作为 `beforeTime` 传回来即可继续往前翻。
+   *
+   * 取窗口内**最早**那条消息的时间；窗口里没有有效时间时为 null。
+   */
+  nextBeforeTime: number | null;
+  /**
+   * 历史耗尽（真的没有更早的消息了）。
+   *
+   * **不等于**「本次没取满」——没取满可能是预算用尽 / 区间已覆盖 / 锚点失效，
+   * 看 `stopReason` 与 `note`。
+   */
   exhausted: boolean;
+  /** 终止原因（机器可读）。 */
+  stopReason: HistoryStopReason;
+  /** 人类可读说明（中文，区分历史耗尽 / 锚点失效 / 翻页预算用尽）。 */
+  note: string;
+}
+
+/** 消息列表里最早的有效时间（epoch 秒）；没有有效时间 → undefined。 */
+function earliestTimeOf(messages: readonly Message[]): number | undefined {
+  let min: number | undefined;
+  for (const m of messages) {
+    if (m.time === undefined || !Number.isFinite(m.time)) continue;
+    if (min === undefined || m.time < min) min = m.time;
+  }
+  return min;
 }
 
 /**
- * 拉取历史消息（游标分页，时间正序返回）。
+ * 拉取历史消息（**时间语义**，时间正序返回）。
  *
- * 取窗规则：**页内按 seq 降序挑选，取最新的 `want` 条**（最终输出仍按 seq 升序）。
- * - 为什么取最新：配额在页中途填满时，被挤掉的是该页**更旧**的消息，
- *   它们落在 `nextBeforeSeq` 之前 → 下一次向前翻页正好能取回来。
- *   若反过来取最旧，被挤掉的就是**更新**的消息，而游标已经越过它们 → 永久取不回（还会在窗口里留空洞）。
- * - `seen` 按稳定键去重（`message_seq` 优先、`message_id` 次之）：服务端在页边界上重叠同一条消息时不会重复返回；
- * - `since` / `until` 是**服务端没有的时间过滤**，只能翻页后在本地过滤；
- * - `exhausted` = 没攒满 `want` 条（**三合一语义**，详见下方说明——不要读作「已经没有更早的消息了」）。
+ * 参数语义：
+ * - `count`：要多少条（默认 50）；
+ * - `beforeTime`：**排他**上界（只取该时间**之前**的消息）—— 「往更早翻一页」用它；
+ * - `fromTime` / `toTime`：**闭**区间（unix 秒）。
+ *
+ * 翻页模型（按真实 NapCat 语义，2026-11-21 实测）：服务端**只认短 id 锚点**，
+ * 且往更早翻**必须**带 `reverse_order` —— 插件内部用 `scanHistoryBackwards` 负责这件事，
+ * 工具层只面对「时间」。
+ *
+ * 区间过滤一律用**时间**（unix 秒）；`message_seq` 是随机短 id，**不能**做大小比较。
  */
 async function fetchHistory(
   client: OneBotClient,
   chatKind: 'group' | 'friend',
   chatId: string,
-  beforeSeq: number | undefined,
-  want: number,
-  since: number | undefined,
-  until: number | undefined,
+  opts: { count: number; beforeTime?: number; fromTime?: number; toTime?: number },
 ): Promise<HistoryResult> {
-  const out: Message[] = [];
-  const outSeqs: number[] = []; // out 里那些「有原始 message_seq」的 seq（同序子集）
-  const seen = new Set<string>();
-  let cursor = beforeSeq;
-  let exhausted = false;
-
-  for (let guard = 0; guard < MAX_PAGES && out.length < want; guard++) {
-    const page = await fetchHistoryPage(client, chatKind, chatId, cursor, want);
-    if (page.length === 0) {
-      break; // 空页：没有更早的历史了（窗口必然没攒满 → exhausted 由循环后的统一判定给出）
-    }
-
-    const norm = page
-      .map((raw) => ({ raw, msg: normalizeMessage(raw) }))
-      .sort((a, b) => a.msg.seq - b.msg.seq);
-
-    let belowSince = false;
-    // 降序遍历：先收最新的，配额满了就停（更旧的留给下一次翻页）
-    for (const item of [...norm].reverse()) {
-      const key = dedupKey(item.raw);
-      if (key !== undefined) {
-        if (seen.has(key)) continue; // 页边界可能重叠同一条消息
-        seen.add(key);
-      }
-      // 时间不可信的消息（`time` 缺失/非数值）不参与时间过滤：
-      // 它既无法证明在窗口内，也无法证明在窗口外 → 保留，由渲染层决定跳过。
-      if (until !== undefined && item.msg.time !== undefined && item.msg.time > until) continue;
-      if (since !== undefined && item.msg.time !== undefined && item.msg.time < since) {
-        belowSince = true;
-        continue; // 时间单调：更早的消息也都在 since 之前（exhausted 由循环后的统一判定给出）
-      }
-      if (out.length < want) {
-        out.push(item.msg);
-        const rawSeq = rawSeqOf(item.raw);
-        if (rawSeq !== undefined) outSeqs.push(rawSeq);
-      }
-    }
-    if (belowSince) break; // 越过了 since 边界，再翻更早的页也没有意义
-
-    const pageSeqs = norm.map((x) => rawSeqOf(x.raw)).filter((s): s is number => s !== undefined);
-    if (pageSeqs.length === 0) break; // 页里没有可定位的消息 → 游标推不动
-    const minSeq = Math.min(...pageSeqs);
-    if (cursor !== undefined && minSeq >= cursor) break; // 游标没有前进（服务端不认 message_seq）→ 停
-    cursor = minSeq;
+  /**
+   * 有效区间（闭区间，unix 秒）。
+   *
+   * `beforeTime` 是**排他**上界（「该时间之前」）→ 换算成闭区间就是 `beforeTime - 1`；
+   * 与 `toTime` 同时给出时取**更早**的那个上界。
+   */
+  let lo = opts.fromTime;
+  let hi = opts.toTime;
+  if (opts.beforeTime !== undefined) {
+    const exclusive = opts.beforeTime - 1;
+    hi = hi === undefined ? exclusive : Math.min(hi, exclusive);
   }
 
-  /**
-   * `exhausted` 的唯一判定口径：**窗口没攒满 `want` 条**时为 true。
-   *
-   * 它是**三合一**语义，不等于「历史一定到底」：
-   * ① 历史耗尽（空页 / 翻到最开头）；
-   * ② 游标推不动（服务端不认 `message_seq`，或页里没有可定位的消息）；
-   * ③ 翻页数触顶（MAX_PAGES）。
-   *
-   * 下游不要把它读作「已经没有更早的消息了」——窗口满时它为 false，
-   * 而窗口不满也可能是 ②/③ 而不是 ①。
-   *
-   * 目前**没有**可靠的「真的到底」信号：
-   * - `nextBeforeSeq` 只表示窗口内最小 seq——窗口为空、或窗口内消息都没有 `message_seq` 时它是 null
-   *   （那时历史可能还有消息），而真正翻到底时它通常反而**非** null；
-   * - `exhausted` 是上面的三合一语义。
-   * 要等真实 NapCat 的 `message_seq` 边界语义实测（T14）后才能定。
-   * 面板若要判断「还有没有更早的消息」，以「**再翻一页返回空**」为准。
-   */
-  if (out.length < want) exhausted = true;
+  const scan = await scanHistoryBackwards(client, chatKind, chatId, {
+    count: opts.count,
+    fromTime: lo,
+    toTime: hi,
+    pageSize: opts.count,
+    maxPages: MAX_PAGES,
+  });
 
-  out.sort((a, b) => a.seq - b.seq);
-  /**
-   * 翻页游标：返回窗口里最小的 seq。
-   *
-   * 语义假设：服务端的 `message_seq` 是**独占**边界（传 s 返回 seq < s 的消息）。
-   * `onebot/actions.ts` 的 `fetchMessagesBetween` 对「含 / 不含」两种语义都做了防御，
-   * 这里只按独占实现 —— 若真实 NapCat 是「含」边界，调用方（面板）需要按 seq 跨调用去重，
-   * 否则边界那条会被重复返回（真实语义待 T14 实测确认）。
-   */
-  const nextBeforeSeq = outSeqs.length > 0 ? Math.min(...outSeqs) : null;
-  return { messages: out, nextBeforeSeq, exhausted };
+  const messages = scan.messages.map(normalizeMessage);
+  const nextBeforeTime = earliestTimeOf(messages) ?? null;
+
+  const stopReason: HistoryStopReason = scan.budgetExhausted
+    ? 'page_budget_exhausted'
+    : scan.rangeCovered
+      ? 'range_covered'
+      : scan.exhausted
+        ? 'history_exhausted'
+        : 'count_reached';
+
+  const notes: string[] = [];
+  switch (stopReason) {
+    case 'history_exhausted':
+      notes.push('已翻到会话最开始：没有更早的消息了。');
+      break;
+    case 'page_budget_exhausted':
+      notes.push(
+        `翻页预算用尽（单次最多 ${MAX_PAGES} 页）：可能还有更早的消息没取到，请调大 count 或缩小时间范围。`,
+      );
+      break;
+    case 'range_covered':
+      notes.push('时间区间已完整覆盖（已翻过区间下界）。');
+      break;
+    case 'count_reached':
+      notes.push(
+        nextBeforeTime === null
+          ? `已返回 ${messages.length} 条（窗口内没有有效时间，无法继续往前翻）。`
+          : `已返回 ${messages.length} 条（达到 count 上限）；把 nextBeforeTime 作为 beforeTime 传回即可继续取更早的消息。`,
+      );
+      break;
+  }
+  if (stopReason === 'range_covered' && nextBeforeTime !== null) {
+    notes.push(`更早的消息从 ${nextBeforeTime}（epoch 秒）之前继续取。`);
+  }
+
+  return { messages, nextBeforeTime, exhausted: scan.exhausted, stopReason, note: notes.join(' ') };
 }
 
 /**
@@ -261,110 +266,101 @@ interface SearchHit {
   contextBefore: Message | null;
 }
 
+/** 搜索的终止原因（**三种必须能区分**）。 */
+export type SearchStopReason = 'history_exhausted' | 'page_budget_exhausted' | 'hits_limit';
+
 interface SearchResult {
   hits: SearchHit[];
   /** 实际扫描过的**不同**消息条数。 */
   scanned: number;
   /** 实际发起的翻页次数（含最后一页空页）。 */
   pages: number;
-  /** 三合一语义（见 `searchMessages` 的注释），**不等于**「没有更早的消息了」。 */
+  /** 历史耗尽（真的翻到会话最开始，没有更早的消息了）。 */
   exhausted: boolean;
   /** 命中数达到上限、扫描提前停止。 */
   hitsTruncated: boolean;
+  /** 终止原因（机器可读）。 */
+  stopReason: SearchStopReason;
   /** 扫描有限性的说明（工具返回里必须带上，别让调用方以为搜全了）。 */
   note: string;
 }
 
 /**
- * 会话内关键词搜索：向**更早**的方向翻页，拿到一页就在本地过滤。
+ * 会话内关键词搜索：从最新往**更早**翻页扫描，拿到一页就在本地过滤。
  *
  * OneBot 11 没有服务端搜索动作，搜索只能客户端翻页过滤 → 扫描量天然有限。
  *
- * - 翻页方向：从 `startSeq`（缺省=最新）向更早翻页（游标取页内最小 `message_seq`）；
+ * - 翻页方向：从最新往更早（每页带上一页最早那条的**短 id** + `reverse_order`）；
  * - 匹配：`message.text` 小写后包含 `query`（小写）即命中（大小写不敏感）；
- * - `contextBefore`：命中消息在时间上**紧邻其前（更早）**的那条 → 需要一个元素的 lookahead
- *   （扫描流是「新→旧」，更早的那条在命中之后才出现）；
- * - `exhausted`：**三合一**语义（历史耗尽 / 游标推不动 / 翻页触顶 `maxPages`），
- *   和 `napcat_get_history` 同一口径 —— **不要**读成「已经没有更早的消息了」，
- *   要判断还有更早消息应以「**再翻一页是否返回空**」为准。
+ * - `contextBefore`：命中消息在时间上**紧邻其前（更早）**的那条 → 扫描流（新→旧）里的**下一条**；
+ * - 终止原因（**三种必须能区分**）：历史耗尽 / 翻页预算用尽 / 命中数达上限。
+ *   「锚点失效」（服务端报「消息<S>不存在」）是**错误**，不是终止原因。
  */
 async function searchMessages(
   client: OneBotClient,
   chatKind: 'group' | 'friend',
   chatId: string,
   query: string,
-  startSeq: number | undefined,
   maxPages: number,
 ): Promise<SearchResult> {
   const q = query.trim().toLowerCase();
+  const matches = (m: Message): boolean => m.text.toLowerCase().includes(q);
+
+  // 命中计数在扫描过程中累计（每页只算这一页的新消息）——不在最后把全部历史重扫一遍。
+  let hitCount = 0;
+  const scan = await scanHistoryBackwards(client, chatKind, chatId, {
+    pageSize: SEARCH_PAGE_SIZE,
+    maxPages,
+    shouldStop: (fresh) => {
+      hitCount += fresh.filter((raw) => matches(normalizeMessage(raw))).length;
+      return hitCount >= SEARCH_MAX_HITS;
+    },
+  });
+
+  /**
+   * 扫描顺序是「新 → 旧」→ 命中消息的「上文」= 扫描流里的**下一条**（更早的那条）。
+   */
+  const order = scan.scanOrder.map(normalizeMessage);
   const hits: SearchHit[] = [];
-  const seen = new Set<string>();
-  let scanned = 0;
-  let pages = 0;
-  let exhausted = false;
   let hitsTruncated = false;
-  let cursor = startSeq;
-  /** 待定命中：它的「上文」是扫描流里的下一条，要等下一条出现才能确定。 */
-  let pending: Message | null = null;
-
-  for (let i = 0; i < maxPages; i++) {
-    const page = await fetchHistoryPage(client, chatKind, chatId, cursor, SEARCH_PAGE_SIZE);
-    pages++;
-    if (page.length === 0) {
-      exhausted = true; // 空页：历史耗尽
+  for (let i = 0; i < order.length; i++) {
+    if (!matches(order[i])) continue;
+    if (hits.length >= SEARCH_MAX_HITS) {
+      hitsTruncated = true;
       break;
     }
-    // 页内按 seq **降序**（新→旧）：与扫描方向一致，命中消息的「下一条」始终是更早的一条
-    const norm = page
-      .map((raw) => ({ raw, msg: normalizeMessage(raw) }))
-      .sort((a, b) => b.msg.seq - a.msg.seq);
-
-    for (const item of norm) {
-      const key = dedupKey(item.raw);
-      if (key !== undefined) {
-        if (seen.has(key)) continue; // 页边界可能重叠同一条消息
-        seen.add(key);
-      }
-      scanned++;
-      // 当前这条就是待定命中的「上文」（时间上更早的一条）
-      if (pending) {
-        hits.push({ message: pending, contextBefore: item.msg });
-        pending = null;
-      }
-      if (!item.msg.text.toLowerCase().includes(q)) continue;
-      if (hits.length >= SEARCH_MAX_HITS) {
-        hitsTruncated = true;
-        break;
-      }
-      pending = item.msg;
-    }
-    if (hitsTruncated) break;
-
-    const pageSeqs = norm.map((x) => rawSeqOf(x.raw)).filter((s): s is number => s !== undefined);
-    if (pageSeqs.length === 0) {
-      exhausted = true; // 页里没有可定位的消息 → 游标推不动
-      break;
-    }
-    const minSeq = Math.min(...pageSeqs);
-    if (cursor !== undefined && minSeq >= cursor) {
-      exhausted = true; // 游标没有前进（服务端不认 message_seq）→ 推不动
-      break;
-    }
-    cursor = minSeq;
+    hits.push({ message: order[i], contextBefore: i + 1 < order.length ? order[i + 1] : null });
   }
-  // 翻页触顶：扫描结束，但**不代表**历史到底（同一个三合一口径）
-  if (!hitsTruncated && pages >= maxPages) exhausted = true;
-  // 扫描范围内最旧的一条命中没有上文
-  if (pending) hits.push({ message: pending, contextBefore: null });
+  // 扫描是**因为命中数达上限**而提前停的 → 命中被截断（哪怕刚好只多出一条）。
+  if (scan.stoppedEarly) hitsTruncated = true;
+
+  const stopReason: SearchStopReason = hitsTruncated
+    ? 'hits_limit'
+    : scan.budgetExhausted
+      ? 'page_budget_exhausted'
+      : 'history_exhausted';
+
+  const tail =
+    stopReason === 'hits_limit'
+      ? `命中数达到上限（${SEARCH_MAX_HITS}），扫描提前停止。`
+      : stopReason === 'page_budget_exhausted'
+        ? `翻页预算用尽（最多 ${maxPages} 页）：可能还有更早的消息没扫到，请调大 maxPages。`
+        : '已翻到会话最开始（没有更早的消息了）。';
 
   const note =
-    `搜索为有限扫描（OneBot 11 没有服务端搜索动作，只能向更早翻页后过滤）：本次翻页 ${pages} 页、` +
-    `扫描 ${scanned} 条消息、命中 ${hits.length} 条。exhausted 为三合一语义（历史耗尽 / 游标推不动 / ` +
-    `翻页触顶 maxPages 上限），不等于「没有更早的消息了」——判断还有更早消息请看「再翻一页是否返回空」。` +
-    (hitsTruncated ? `命中数达到上限（${SEARCH_MAX_HITS}），扫描提前停止。` : '') +
+    `搜索为有限扫描（OneBot 11 没有服务端搜索动作，只能向更早翻页后过滤）：本次翻页 ${scan.pages} 页、` +
+    `扫描 ${order.length} 条消息、命中 ${hits.length} 条。${tail}` +
     `未命中时可提高 maxPages，或先用 napcat_get_history 按时间范围取一段再搜。`;
 
-  return { hits, scanned, pages, exhausted, hitsTruncated, note };
+  return {
+    hits,
+    scanned: order.length,
+    pages: scan.pages,
+    exhausted: scan.exhausted,
+    hitsTruncated,
+    stopReason,
+    note,
+  };
 }
 
 /**
@@ -559,22 +555,40 @@ export function registerTools(server: McpServer, state: AppState): void {
   server.registerTool(
     'napcat_get_history',
     {
-      description: '拉取会话历史消息（游标分页，时间正序返回）',
+      description:
+        '拉取会话历史消息（**按时间翻页**，时间正序返回）。' +
+        'count=要多少条（默认 50，上限 200）；' +
+        'beforeTime=**排他**上界（只取该时间**之前**的消息）：把上一次返回的 nextBeforeTime 传回来即可继续往前翻；' +
+        'fromTime / toTime=**闭**区间（epoch 秒）。' +
+        '区间与翻页一律按**时间**（epoch 秒）表达 —— 服务端的 message_seq 是随机短 id，不能当游标用。' +
+        '返回 {messages, nextBeforeTime, exhausted, stopReason, note}：' +
+        'nextBeforeTime=更早消息的时间游标（传回 beforeTime 继续翻）；' +
+        'exhausted=true 表示**历史耗尽**（真的没有更早的消息了）；' +
+        'stopReason 说明本次为什么停（count_reached / range_covered / history_exhausted / page_budget_exhausted）；' +
+        'note 是中文说明（区分历史耗尽、锚点失效、翻页预算用尽）。',
       inputSchema: {
         chatKind: z.enum(['group', 'friend']),
         chatId: z.union([z.string(), z.number()]).describe('会话 id（QQ 群号/好友号是数字型，允许传数字）'),
-        beforeSeq: z.number().optional().describe('传入上一页返回的 nextBeforeSeq 获取更早消息'),
-        count: z.number().optional().default(100).describe('1-200'),
-        since: z.number().optional().describe('起始时间 epoch 秒（含）'),
-        until: z.number().optional().describe('结束时间 epoch 秒（含）'),
+        count: z.number().optional().default(DEFAULT_COUNT).describe('1-200，默认 50'),
+        beforeTime: z
+          .number()
+          .optional()
+          .describe('只取该时间**之前**的消息（epoch 秒，排他）；传上一页返回的 nextBeforeTime 可取更早的消息'),
+        fromTime: z.number().optional().describe('区间下界（epoch 秒，含）'),
+        toTime: z.number().optional().describe('区间上界（epoch 秒，含）'),
       },
     },
-    async ({ chatKind, chatId, beforeSeq, count, since, until }) => {
+    async ({ chatKind, chatId, count, beforeTime, fromTime, toTime }) => {
       try {
         const c = await state.ensureClient();
-        const want = Math.min(Math.max(Math.floor(count ?? 100), 1), MAX_COUNT);
+        const want = Math.min(Math.max(Math.floor(count ?? DEFAULT_COUNT), 1), MAX_COUNT);
         // 会话 id 允许传数字 → 下发前统一归一成字符串（OneBot 的 group_id/user_id 是字符串型）
-        const result = await fetchHistory(c, chatKind, String(chatId), beforeSeq, want, since, until);
+        const result = await fetchHistory(c, chatKind, String(chatId), {
+          count: want,
+          beforeTime,
+          fromTime,
+          toTime,
+        });
         return ok(result);
       } catch (e) {
         return fail(state, e);
@@ -586,18 +600,18 @@ export function registerTools(server: McpServer, state: AppState): void {
     'napcat_search_messages',
     {
       description:
-        '会话内关键词搜索：向更早翻页扫描后按正文过滤（OneBot 11 无服务端搜索动作，扫描范围有限）。' +
-        '返回 {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}；' +
+        '会话内关键词搜索：从最新往**更早**翻页扫描后按正文过滤（OneBot 11 无服务端搜索动作，扫描范围有限）。' +
+        '返回 {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}；' +
         'scanned = 扫过的不同消息条数；pages = 翻过的页数（含可能的最后一空页）；' +
         'contextBefore 是命中消息在时间上紧邻其前（更早）的那条；' +
-        'exhausted 为三合一语义（历史耗尽 / 游标推不动 / 翻页触顶 maxPages 上限），不等于「没有更早的消息了」' +
-        '——判断还有更早消息请看「再翻一页是否返回空」；' +
-        '命中数达上限而提前停止时 exhausted 为 false（那时是 hitsTruncated 在说明）。',
+        'exhausted=true 表示**历史耗尽**（真的翻到会话最开始）；' +
+        'stopReason 说明本次为什么停（history_exhausted / page_budget_exhausted / hits_limit）；' +
+        'hitsTruncated=true 表示命中数达上限、扫描提前停止。' +
+        'note 是中文说明：搜索是**有限扫描**，别把它当成搜全了。',
       inputSchema: {
         chatKind: z.enum(['group', 'friend']),
         chatId: z.union([z.string(), z.number()]).describe('会话 id（QQ 群号/好友号是数字型，允许传数字）'),
         query: z.string().describe('关键词（大小写不敏感，按消息正文匹配）'),
-        startSeq: z.number().optional().describe('起始游标：只扫描 message_seq 小于它的消息；缺省从最新一条开始'),
         maxPages: z
           .number()
           .optional()
@@ -605,13 +619,13 @@ export function registerTools(server: McpServer, state: AppState): void {
           .describe(`最多翻多少页（1-${SEARCH_MAX_PAGES}，默认 ${SEARCH_DEFAULT_MAX_PAGES}）`),
       },
     },
-    async ({ chatKind, chatId, query, startSeq, maxPages }) => {
+    async ({ chatKind, chatId, query, maxPages }) => {
       try {
         const q = (query ?? '').trim();
         if (!q) return fail(state, new Error('搜索关键词不能为空'));
         const pages = Math.min(Math.max(Math.floor(maxPages ?? SEARCH_DEFAULT_MAX_PAGES), 1), SEARCH_MAX_PAGES);
         const c = await state.ensureClient();
-        return ok(await searchMessages(c, chatKind, String(chatId), q, startSeq, pages));
+        return ok(await searchMessages(c, chatKind, String(chatId), q, pages));
       } catch (e) {
         return fail(state, e);
       }
@@ -649,6 +663,10 @@ export function registerTools(server: McpServer, state: AppState): void {
       description:
         '导出选定消息为 Markdown + JSON 文件对：默认落在 ~/.zcode/napcat/exports，' +
         'dir=workspace 时落在 <工作区>/.zcode/napcat/exports 并自动补 .gitignore 规则。' +
+        'messages 缺省（或为空数组）时用 chatKind + chatId + fromTime + toTime **现拉**该时间区间' +
+        '（epoch 秒，闭区间，四个参数缺一不可；区间反了直接报错）。' +
+        '现拉失败是**响亮失败**（isError）：区间取不全（翻页预算用尽 / 锚点失效）时直接报错，' +
+        '不会静默导出一段缺消息的区间。' +
         'gitignoreUpdated=false 表示「.gitignore 已覆盖该目录」或「用户写了取反规则而跳过」。' +
         'includeImages 目前不下载图片文件（导出里图片为占位符 + URL 记录），媒体下载随 M1.1 增强。' +
         '返回 {mdPath, jsonPath, gitignoreUpdated}。',
@@ -656,7 +674,9 @@ export function registerTools(server: McpServer, state: AppState): void {
         messages: z
           .any()
           .optional()
-          .describe('要导出的消息（Message 对象数组；元素须带 time 字段）；缺省时用 chatKind/chatId/fromSeq/toSeq 现拉该 seq 区间'),
+          .describe(
+            '要导出的消息（Message 对象数组；元素须带 time 字段）；缺省时用 chatKind/chatId/fromTime/toTime 现拉该时间区间',
+          ),
         // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
         // id 允许数字：QQ 群号/好友号本来就是数字型，面板与 agent 很可能就这么传
         // （归一化成字符串仍在 coerceChat 里做，比较时统一用归一后的字符串）。
@@ -666,8 +686,8 @@ export function registerTools(server: McpServer, state: AppState): void {
           .describe('会话引用 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: z.enum(['group', 'friend']).optional().describe('现拉时的会话类型'),
         chatId: z.union([z.string(), z.number()]).optional().describe('现拉时的会话 id（QQ 群号/好友号是数字型，允许传数字）'),
-        fromSeq: z.number().optional().describe('现拉时的起始 message_seq（含）'),
-        toSeq: z.number().optional().describe('现拉时的结束 message_seq（含）'),
+        fromTime: z.number().optional().describe('现拉时的起始时间（epoch 秒，含）'),
+        toTime: z.number().optional().describe('现拉时的结束时间（epoch 秒，含）'),
         dir: z.enum(['user', 'workspace']).optional().describe('导出目录；缺省取配置 export.dir'),
         includeImages: z.boolean().optional().describe('是否下载图片（M1 尚未实现媒体下载，本参数不影响产物）'),
         workspaceDir: z.string().optional().describe('工作区导出时的目录根；缺省取 ZCODE_PROJECT_DIR'),
@@ -681,26 +701,30 @@ export function registerTools(server: McpServer, state: AppState): void {
         // 空数组与缺省同等处理（brief 的口径）：一律走「现拉该 seq 区间」，
         // 而不是导出一份空文件——空选区更可能是「我想要这个区间」而不是「我想要 0 条」。
         if (a.messages === undefined || a.messages.length === 0) {
-          if (a.chatKind === undefined || a.chatId === undefined || a.fromSeq === undefined || a.toSeq === undefined) {
-            throw new Error('缺少 messages 时需要同时给出 chatKind、chatId、fromSeq、toSeq（现拉该 seq 区间）');
+          if (a.chatKind === undefined || a.chatId === undefined || a.fromTime === undefined || a.toTime === undefined) {
+            throw new Error('缺少 messages 时需要同时给出 chatKind、chatId、fromTime、toTime（现拉该时间区间）');
           }
           // 会话 id 允许传数字 → 统一归一成字符串再比较/下发
           // （`chat.id` 已由 coerceChat 归一；这里归一 chatId，两边比的是归一后的字符串）。
           const fetchId = String(a.chatId);
           // 区间反了 → 明确报错。否则 fetchMessagesBetween 会返回空数组，
           // 工具静默写出一对 `{会话名}_empty` 的空文件（看着像导出成功，其实是空的）。
-          if (a.fromSeq > a.toSeq) {
-            throw new Error(`fromSeq（${a.fromSeq}）不能大于 toSeq（${a.toSeq}）`);
+          if (a.fromTime > a.toTime) {
+            throw new Error(`fromTime（${a.fromTime}）不能大于 toTime（${a.toTime}）`);
           }
           // 交叉校验：现拉的会话必须与 chat 指向同一个会话。
-          // 不校验就能把 B 群的区间写进 A 群名下的文件（张冠李戴，且事后看不出来）。
+          // 不校验就能把 B 群的时间区间写进 A 群名下的文件（张冠李戴，且事后看不出来）。
           if (chat.kind !== a.chatKind || chat.id !== fetchId) {
             throw new Error(
               `chat（${chat.kind}/${chat.id}）与现拉参数（${a.chatKind}/${fetchId}）不一致`,
             );
           }
           const c = await state.ensureClient();
-          msgs = (await fetchMessagesBetween(c, a.chatKind, fetchId, a.fromSeq, a.toSeq)).map(normalizeMessage);
+          const fetched = await fetchMessagesBetween(c, a.chatKind, fetchId, {
+            fromTime: a.fromTime,
+            toTime: a.toTime,
+          });
+          msgs = fetched.messages.map(normalizeMessage);
         } else {
           msgs = coerceMessages(a.messages);
         }

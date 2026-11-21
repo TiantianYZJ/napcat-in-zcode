@@ -10,7 +10,9 @@ import { AppState } from '../src/server/state.js';
 import { registerTools } from '../src/server/tools.js';
 import { registerPanelResource } from '../src/server/uiresource.js';
 import { createClient, type OneBotClient } from '../src/server/onebot/client.js';
+import { OneBotError } from '../src/server/onebot/errors.js';
 import type { OB11Message } from '../src/server/onebot/types.js';
+import { createFakeOneBot, makeFakeMessages, type FakeMessage } from './helpers/fake-onebot.js';
 
 /**
  * 造一个 OneBot 客户端替身：`handler` 按 action 返回数据。
@@ -27,22 +29,20 @@ function stubClient(handler: (action: string, params?: object) => unknown): OneB
 }
 
 function fakeClient(): OneBotClient {
-  // NapCat 返回页内消息按时间正序（seq 1 最旧）；省略 message_seq 返回最新一页
-  const msgs: OB11Message[] = Array.from({ length: 5 }, (_, i) => ({
-    message_seq: i + 1, time: 1700000000 + i, sender: { user_id: 1, nickname: `u${i + 1}` },
-    message: [{ type: 'text', data: { text: `m${i + 1}` } }],
-  }));
-  return stubClient((action, params) => {
-    if (action === 'get_login_info') return { user_id: 2350355494, nickname: 'TestBot' };
-    if (action === 'get_group_list') return [{ group_id: 123, group_name: '产品群' }];
-    if (action === 'get_friend_list') return [{ user_id: 9, nickname: '张三' }];
-    if (action === 'get_group_msg_history') {
-      const p = params as { message_seq?: string };
-      if (!p.message_seq) return { messages: msgs };
-      return { messages: [] };
-    }
-    throw new Error(`unexpected ${action}`);
-  });
+  /**
+   * 假 OneBot 按**真实 NapCat 语义**工作（2026-11-21 实测）：
+   * 短 id 随机、`real_seq` 单调；翻页靠「短 id 锚点 + reverse_order」。
+   */
+  const fake = createFakeOneBot(makeFakeMessages(5, 1700000000, 1));
+  return {
+    async call<T>(action: string, params?: object): Promise<T> {
+      if (action === 'get_login_info') return { user_id: 2350355494, nickname: 'TestBot' } as unknown as T;
+      if (action === 'get_group_list') return [{ group_id: 123, group_name: '产品群' }] as unknown as T;
+      if (action === 'get_friend_list') return [{ user_id: 9, nickname: '张三' }] as unknown as T;
+      return fake.client.call<T>(action, params);
+    },
+    async close() {},
+  };
 }
 
 async function makeClient() {
@@ -119,15 +119,16 @@ describe('mcp tools', () => {
     expect(payload.chats[0]).toMatchObject({ id: '123', name: '产品群' });
   });
 
-  it('napcat_get_history normalizes messages and exposes cursor', async () => {
+  it('napcat_get_history normalizes messages and exposes the time cursor', async () => {
     const c = await makeClient();
     const r = await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '123', count: 3 } });
     const payload = JSON.parse((r.content as [{ type: string; text: string }])[0].text);
     expect(payload.messages).toHaveLength(3);
-    // 取窗「最新优先」：页内按 seq 降序挑 count 条，输出再按 seq 升序
-    expect(payload.messages[0]).toMatchObject({ seq: 3, senderName: 'u3', text: 'm3' });
-    expect(payload.messages[2]).toMatchObject({ seq: 5, senderName: 'u5', text: 'm5' });
-    expect(payload.nextBeforeSeq).toBe(3); // 窗口内最小 seq，作为向更早翻页的游标
+    // 取窗「最新优先」：最新 3 条，时间正序
+    expect(payload.messages[0]).toMatchObject({ senderName: 'u3', text: 'm3' });
+    expect(payload.messages[2]).toMatchObject({ senderName: 'u5', text: 'm5' });
+    // 游标是**时间**（seq 是随机短 id，不能当游标用）
+    expect(payload.nextBeforeTime).toBe(1700000002);
   });
 
   it('napcat_status reports unconfigured without endpoint', async () => {
@@ -175,11 +176,23 @@ describe('mcp tool registration', () => {
         '端点不在本机且没有 token 时，返回里会带 warning（局域网暴露风险提示）。',
     );
     expect(byName.get('napcat_list_chats')?.description).toBe('列出群或好友');
-    expect(byName.get('napcat_get_history')?.description).toBe('拉取会话历史消息（游标分页，时间正序返回）');
+    // get_history 的 description 必须写明**时间语义**（agent 只看得到 description）：
+    // seq 是随机短 id，不能当游标；游标是 nextBeforeTime（时间）。
+    const historyDesc = byName.get('napcat_get_history')?.description ?? '';
+    expect(historyDesc).toContain('按时间翻页');
+    expect(historyDesc).toContain('nextBeforeTime');
+    expect(historyDesc).not.toContain('beforeSeq');
     // 入参 schema 形状固定（T10/T12 依赖）
     expect(byName.get('napcat_status')?.inputSchema).toMatchObject({ type: 'object' });
     const history = byName.get('napcat_get_history')?.inputSchema as { properties?: Record<string, unknown> };
-    expect(Object.keys(history.properties ?? {}).sort()).toEqual(['beforeSeq', 'chatId', 'chatKind', 'count', 'since', 'until']);
+    expect(Object.keys(history.properties ?? {}).sort()).toEqual([
+      'beforeTime',
+      'chatId',
+      'chatKind',
+      'count',
+      'fromTime',
+      'toTime',
+    ]);
   });
 });
 
@@ -429,28 +442,18 @@ describe('napcat_list_chats', () => {
 
 describe('napcat_get_history', () => {
   /**
-   * 模拟 NapCat：返回「不晚于 cursor 的最后 N 条」（含 cursor 本身），按 seq 正序。
+   * 假 OneBot 按**真实 NapCat 语义**工作（2026-11-21 实测）：
+   * - 不带 `message_seq` → 最新 count 条；带 `message_seq` + `reverse_order` → 锚点**及更早**；
+   * - `message_seq` 是**随机短 id**（不是单调序号）；`real_seq` 会话内单调；
+   * - 锚点**含**在返回里 → 相邻两页在边界上重叠一条；
+   * - `message_seq` 不存在 → 报错「消息<S>不存在」。
    *
-   * - `pageSize` 不给：N = 请求的 count（服务端守约）。
-   * - `pageSize` 给了：N 固定（模拟服务端固定页大小）；相邻两页因此在边界上重叠一条。
+   * `pageSize` 给了 = 服务端固定页大小（模拟服务端把 count 钳小）。
    */
-  function pagingClient(total: number, pageSize?: number): OneBotClient {
-    const all: OB11Message[] = Array.from({ length: total }, (_, i) => ({
-      message_seq: i + 1,
-      time: 1700000000 + i,
-      sender: { user_id: 1, nickname: `u${i + 1}` },
-      message: [{ type: 'text', data: { text: `m${i + 1}` } }],
-    }));
-    return stubClient((action, params) => {
-      if (action === 'get_group_msg_history') {
-        const p = params as { message_seq?: string; count?: number };
-        const count = pageSize ?? p.count ?? 50;
-        const cursor = p.message_seq === undefined ? Number.POSITIVE_INFINITY : Number(p.message_seq);
-        const slice = all.filter((m) => (m.message_seq ?? 0) <= cursor).slice(-count);
-        return { messages: slice };
-      }
-      throw new Error(`unexpected ${action}`);
-    });
+  function pagingClient(total: number, pageSize?: number): { client: OneBotClient; msgs: FakeMessage[] } {
+    const msgs = makeFakeMessages(total, 1700000000, 1);
+    const fake = createFakeOneBot(msgs, { maxItemsPerPage: pageSize });
+    return { client: fake.client, msgs };
   }
 
   async function historyClient(client: OneBotClient) {
@@ -465,74 +468,100 @@ describe('napcat_get_history', () => {
     return c;
   }
 
-  it('returns the newest page and exposes the cursor to older messages', async () => {
-    const c = await historyClient(pagingClient(10));
+  it('returns the newest page and exposes the time cursor', async () => {
+    const { client, msgs } = pagingClient(10);
+    const c = await historyClient(client);
     const r = await c.callTool({
       name: 'napcat_get_history',
       arguments: { chatKind: 'group', chatId: '123', count: 4 },
     });
     const p = payload(r);
-    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([7, 8, 9, 10]);
-    expect(p.nextBeforeSeq).toBe(7);
+    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual(msgs.slice(-4).map((m) => m.message_seq));
+    // 游标是**时间**（seq 是随机短 id，不能拿来做大小比较）
+    expect(p.nextBeforeTime).toBe(msgs[6].time);
     expect(p.exhausted).toBe(false);
+    expect(p.stopReason).toBe('count_reached');
   });
 
   it('walks back with the cursor and deduplicates overlapping page boundaries', async () => {
-    // 固定页大小 2 → 相邻两页在边界上重叠一条；count=5 需要翻 4 页才够
-    const c = await historyClient(pagingClient(10, 2));
+    // 固定页大小 2 → 相邻两页在边界上重叠一条；count=5 需要翻多页才够
+    const { client, msgs } = pagingClient(10, 2);
+    const c = await historyClient(client);
     const r = await c.callTool({
       name: 'napcat_get_history',
       arguments: { chatKind: 'group', chatId: '123', count: 5 },
     });
     const p = payload(r);
     const seqs = p.messages.map((m: { seq: number }) => m.seq);
-    expect(seqs).toEqual([6, 7, 8, 9, 10]); // 时间升序
+    expect(seqs).toEqual(msgs.slice(5).map((m) => m.message_seq)); // 最新 5 条，时间升序
     expect(new Set(seqs).size).toBe(seqs.length); // 页边界重叠的消息只出现一次
-    expect(p.nextBeforeSeq).toBe(6);
+    expect(p.nextBeforeTime).toBe(msgs[5].time);
     // 页是「短页」（固定页大小 2 < count 5），但窗口是攒满的 → 不能报 exhausted
     expect(p.exhausted).toBe(false);
   });
 
-  it('filters by until and keeps walking back to older pages', async () => {
-    const c = await historyClient(pagingClient(10));
-    // until = m5 的时间：最新几页全被过滤掉，必须继续向更早翻页
+  it('beforeTime 取到更早的消息，且与前一页无重叠', async () => {
+    // 验收口径：count=5 取最新 5 条 → 再用 beforeTime=<最早那条的时间> 取更早的 5 条，两页不重叠
+    const { client, msgs } = pagingClient(20);
+    const c = await historyClient(client);
+    const first = payload(
+      await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '123', count: 5 } }),
+    );
+    const second = payload(
+      await c.callTool({
+        name: 'napcat_get_history',
+        arguments: { chatKind: 'group', chatId: '123', count: 5, beforeTime: first.nextBeforeTime },
+      }),
+    );
+    expect(second.messages.map((m: { time: number }) => m.time)).toEqual([
+      msgs[10].time,
+      msgs[11].time,
+      msgs[12].time,
+      msgs[13].time,
+      msgs[14].time,
+    ]);
+    const firstTimes = first.messages.map((m: { time: number }) => m.time);
+    expect(second.messages.some((m: { time: number }) => firstTimes.includes(m.time))).toBe(false);
+    // 时间游标必须是**更早**的
+    expect(second.nextBeforeTime).toBeLessThan(first.nextBeforeTime);
+  });
+
+  it('filters by toTime and keeps walking back to older pages', async () => {
+    const { client, msgs } = pagingClient(10);
+    const c = await historyClient(client);
+    // toTime = m5 的时间：最新几页全被过滤掉，必须继续向更早翻页
     const r = await c.callTool({
       name: 'napcat_get_history',
-      arguments: { chatKind: 'group', chatId: '123', count: 3, until: 1700000004 },
+      arguments: { chatKind: 'group', chatId: '123', count: 3, toTime: msgs[4].time },
     });
     const p = payload(r);
-    expect(p.messages.every((m: { time: number }) => m.time <= 1700000004)).toBe(true);
+    expect(p.messages.every((m: { time: number }) => m.time <= msgs[4].time)).toBe(true);
     expect(p.messages.length).toBeGreaterThan(0);
     // 取窗「最新优先」：窗口是时间窗内**最新的 3 条**，且连续（不再出现空洞）
-    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([3, 4, 5]);
+    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual(msgs.slice(2, 5).map((m) => m.message_seq));
   });
 
-  it('stops at the since boundary and reports exhausted', async () => {
-    const c = await historyClient(pagingClient(10));
+  it('covers a closed time range (fromTime + toTime)', async () => {
+    const { client, msgs } = pagingClient(10);
+    const c = await historyClient(client);
     const r = await c.callTool({
       name: 'napcat_get_history',
-      arguments: { chatKind: 'group', chatId: '123', count: 3, beforeSeq: 5, since: 1700000004 },
+      arguments: {
+        chatKind: 'group',
+        chatId: '123',
+        count: 10,
+        fromTime: msgs[3].time,
+        toTime: msgs[6].time,
+      },
     });
     const p = payload(r);
-    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([5]);
-    expect(p.exhausted).toBe(true);
-    expect(p.nextBeforeSeq).toBe(5);
-  });
-
-  it('reports exhausted only when the window is not full', async () => {
-    // 固定页大小 3 → 页里既有 >= since 的也有 < since 的；窗口被填满 → 不能报 exhausted
-    const c = await historyClient(pagingClient(10, 3));
-    const r = await c.callTool({
-      name: 'napcat_get_history',
-      arguments: { chatKind: 'group', chatId: '123', count: 2, beforeSeq: 6, since: 1700000004 },
-    });
-    const p = payload(r);
-    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual([5, 6]); // 窗口是满的
-    expect(p.exhausted).toBe(false); // 窗口满了 → exhausted 只能是 false
+    expect(p.messages.map((m: { seq: number }) => m.seq)).toEqual(msgs.slice(3, 7).map((m) => m.message_seq));
+    expect(p.stopReason).toBe('range_covered');
   });
 
   it('reports exhausted when the history runs out', async () => {
-    const c = await historyClient(pagingClient(3));
+    const { client, msgs } = pagingClient(3);
+    const c = await historyClient(client);
     const r = await c.callTool({
       name: 'napcat_get_history',
       arguments: { chatKind: 'group', chatId: '123', count: 10 },
@@ -540,50 +569,137 @@ describe('napcat_get_history', () => {
     const p = payload(r);
     expect(p.messages).toHaveLength(3);
     expect(p.exhausted).toBe(true);
-    expect(p.nextBeforeSeq).toBe(1);
+    expect(p.stopReason).toBe('history_exhausted');
+    expect(p.nextBeforeTime).toBe(msgs[0].time);
+    expect(p.note).toContain('没有更早的消息');
+  });
+
+  it('reports a page-budget stop distinctly from history exhaustion', async () => {
+    // 每一页只回一条、且每页都**更早** → 翻页预算（40 页）用尽：不能报成「历史耗尽」
+    let calls = 0;
+    const c = await historyClient(
+      stubClient((action) => {
+        if (action !== 'get_group_msg_history') throw new Error(`unexpected ${action}`);
+        calls++;
+        return {
+          messages: [
+            {
+              message_seq: 100000 + calls,
+              real_seq: calls,
+              time: 1700000000 - calls,
+              sender: { user_id: 1, nickname: 'u' },
+              message: [{ type: 'text', data: { text: `m${calls}` } }],
+            },
+          ],
+        };
+      }),
+    );
+    const r = await c.callTool({
+      name: 'napcat_get_history',
+      arguments: { chatKind: 'group', chatId: '123', count: 100 },
+    });
+    const p = payload(r);
+    expect(calls).toBe(40);
+    expect(p.stopReason).toBe('page_budget_exhausted');
+    expect(p.exhausted).toBe(false);
+    expect(p.note).toContain('翻页预算用尽');
+    expect(p.note).not.toContain('没有更早的消息');
+  });
+
+  it('reports an anchor failure as an error, not as "no more messages"', async () => {
+    // 服务端说「消息<S>不存在」→ 锚点失效：响亮报错，且文案要说清是锚点失效
+    const c = await historyClient(
+      stubClient((action, params) => {
+        if (action !== 'get_group_msg_history') throw new Error(`unexpected ${action}`);
+        const p = params as { message_seq?: string };
+        if (p.message_seq === undefined) {
+          return {
+            messages: [
+              {
+                message_seq: 4242,
+                real_seq: 1,
+                time: 1700000000,
+                sender: { user_id: 1, nickname: 'u' },
+                message: [{ type: 'text', data: { text: 'x' } }],
+              },
+            ],
+          };
+        }
+        throw new OneBotError(1, `消息${p.message_seq}不存在`);
+      }),
+    );
+    const r = await c.callTool({
+      name: 'napcat_get_history',
+      arguments: { chatKind: 'group', chatId: '123', count: 5 },
+    });
+    expect(isError(r)).toBe(true);
+    expect(payload(r).error).toContain('历史锚点已失效');
+    expect(payload(r).error).not.toContain('没有更早');
   });
 
   it('applies the default count and clamps it to the documented range', async () => {
     const calls: Array<{ count?: number }> = [];
+    const three: OB11Message[] = [
+      { message_seq: 11, real_seq: 1, time: 1700000000, message: [{ type: 'text', data: { text: 'a' } }] },
+      { message_seq: 12, real_seq: 2, time: 1700000001, message: [{ type: 'text', data: { text: 'b' } }] },
+      { message_seq: 13, real_seq: 3, time: 1700000002, message: [{ type: 'text', data: { text: 'c' } }] },
+    ];
     const c = await historyClient(stubClient((action, params) => {
       if (action === 'get_group_msg_history') {
         calls.push(params as { count?: number });
-        return { messages: [] };
+        return { messages: three };
       }
       throw new Error(`unexpected ${action}`);
     }));
+    // 每次调用单独计数（一次调用可能发多页请求）
+    const call = async (args: Record<string, unknown>) => {
+      calls.length = 0;
+      const r = await c.callTool({ name: 'napcat_get_history', arguments: args });
+      return { r, counts: calls.map((x) => x.count) };
+    };
 
-    await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1' } });
-    expect(calls[0]?.count).toBe(100); // 默认 100
-    await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1', count: 500 } });
-    expect(calls[1]?.count).toBe(200); // 上限 200
-    await c.callTool({ name: 'napcat_get_history', arguments: { chatKind: 'group', chatId: '1', count: 0 } });
-    expect(calls[2]?.count).toBe(1); // 下限 1
+    const def = await call({ chatKind: 'group', chatId: '1' });
+    expect(def.counts[0]).toBe(50); // 默认 50（M1.2 起默认条数从 100 收到 50）
+    const big = await call({ chatKind: 'group', chatId: '1', count: 500 });
+    expect(big.counts[0]).toBe(200); // 上限 200
+    const zero = await call({ chatKind: 'group', chatId: '1', count: 0 });
+    // 请求的 count 是**翻页页大小**：至少 2（往更早翻时页大小为 1 迈不出步）
+    expect(zero.counts[0]).toBe(2);
+    // 返回条数仍然受 count 约束（下限 1）
+    expect(payload(zero.r).messages).toHaveLength(1);
   });
 
   it('does not drop messages that have neither message_seq nor message_id', async () => {
-    // 这类消息没有稳定标识：不能拿「页内下标」当去重键，否则跨页的同下标消息会被误判成重复而丢弃
-    const page1: OB11Message[] = [
-      { time: 1700000001, message: [{ type: 'text', data: { text: 'a' } }] },
-      { message_seq: 2, time: 1700000002, message: [{ type: 'text', data: { text: 'b' } }] },
-      { time: 1700000003, message: [{ type: 'text', data: { text: 'c' } }] },
+    // 这类消息没有稳定标识：不能拿「页内下标」当去重键，否则跨页的同下标消息会被误判成重复而丢弃。
+    //
+    // 去重键只有三级（计划 Task 3）：message_seq → message_id → real_id；
+    // 三者都没有的消息**不参与去重** → 页边界重叠时它可能出现两次（宁可重复，不可静默丢消息）。
+    const all: OB11Message[] = [
+      { time: 1700000000, message: [{ type: 'text', data: { text: 'a' } }] },
+      { time: 1700000001, message: [{ type: 'text', data: { text: 'b' } }] },
+      { message_seq: 2, real_seq: 2, time: 1700000002, message: [{ type: 'text', data: { text: 'c' } }] },
+      { time: 1700000003, message: [{ type: 'text', data: { text: 'd' } }] },
     ];
-    const page2: OB11Message[] = [
-      { time: 1700000004, message: [{ type: 'text', data: { text: 'd' } }] },
-      { message_seq: 2, time: 1700000002, message: [{ type: 'text', data: { text: 'b' } }] }, // 与上一页重叠
-    ];
-    let n = 0;
-    const c = await historyClient(stubClient((action) => {
-      if (action === 'get_group_msg_history') return { messages: n++ === 0 ? page1 : page2 };
-      throw new Error(`unexpected ${action}`);
-    }));
+    // 真实语义：最新页 = 全部；往更早翻（带锚点 + reverse_order）= 锚点及更早（含锚点）
+    const stub: OneBotClient = {
+      async call<T>(_action: string, params?: object): Promise<T> {
+        const p = (params ?? {}) as { message_seq?: string };
+        if (p.message_seq === undefined) return { messages: all } as unknown as T;
+        const idx = all.findIndex((m) => String(m.message_seq) === p.message_seq);
+        return { messages: all.slice(0, idx + 1) } as unknown as T;
+      },
+      async close(): Promise<void> {},
+    };
+    const c = await historyClient(stub);
     const r = await c.callTool({
       name: 'napcat_get_history',
       arguments: { chatKind: 'group', chatId: '1', count: 10 },
     });
     const p = payload(r);
-    const texts = p.messages.map((m: { text: string }) => m.text).sort();
-    expect(texts).toEqual(['a', 'b', 'c', 'd']); // 三条无 seq 的消息都在
+    const texts = p.messages.map((m: { text: string }) => m.text);
+    expect(new Set(texts)).toEqual(new Set(['a', 'b', 'c', 'd'])); // 一条都没丢
+    // 有稳定标识的那条只出现一次（去重生效）
+    expect(texts.filter((t: string) => t === 'c')).toHaveLength(1);
   });
 
   it('reports an error when the upstream call fails', async () => {

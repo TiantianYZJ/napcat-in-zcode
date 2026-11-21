@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AppState } from '../src/server/state.js';
 import { registerTools } from '../src/server/tools.js';
 import type { OneBotClient } from '../src/server/onebot/client.js';
+import { createFakeOneBot, makeFakeMessages } from './helpers/fake-onebot.js';
 
 /**
  * T10 的四个工具：search / format_selection / export / get_config。
@@ -28,25 +29,26 @@ function stubClient(handler: (action: string, params?: object) => unknown): OneB
 }
 
 /**
- * brief 给的假客户端：10 条消息（message_seq 10→1），其中 seq=6 的正文是「场地定了吗」。
- * 翻页语义：省略 message_seq → 最新 4 条；带 message_seq=s → seq < s 的前 4 条。
+ * 假数据集：10 条消息（**短 id 随机**、时间递增），其中第 5 条正文是「场地定了吗」。
+ *
+ * 短 id 随机是刻意的：插件若还按「seq 是单调序号」用（M1 的错误假设），立刻露馅。
+ */
+const FAKE_MSGS = makeFakeMessages(10, 1700000000, 60);
+FAKE_MSGS[4].text = '场地定了吗';
+/** 只出现在**最早**那条消息里的关键词（用来验证搜索真的会往更早翻页）。 */
+FAKE_MSGS[0].text = '最早的那条';
+
+/**
+ * 假客户端：按**真实 NapCat 语义**工作（2026-11-21 实测）。
+ *
+ * - 不带 `message_seq` → 最新 count 条；
+ * - 带 `message_seq` + `reverse_order` → 锚点**及更早**（含锚点）；
+ * - 锚点是**随机短 id**。
+ *
+ * `maxItemsPerPage: 4` 模拟服务端把页大小钳到 4 → 相邻两页在边界上重叠一条。
  */
 function fakeClient(): OneBotClient {
-  const msgs = Array.from({ length: 10 }, (_, i) => ({
-    message_seq: 10 - i,
-    time: 1700000000 + i,
-    sender: { user_id: 1, nickname: `u${10 - i}` },
-    message: [{ type: 'text', data: { text: i === 4 ? '场地定了吗' : `m${10 - i}` } }],
-  }));
-  return stubClient((action, params) => {
-    if (action === 'get_group_msg_history') {
-      const p = params as { message_seq?: string };
-      if (!p.message_seq) return { messages: msgs.slice(0, 4) };
-      const s = Number(p.message_seq);
-      return { messages: msgs.filter((m) => m.message_seq < s).slice(0, 4) };
-    }
-    throw new Error(`unexpected ${action}`);
-  });
+  return createFakeOneBot(FAKE_MSGS, { maxItemsPerPage: 4 }).client;
 }
 
 /** 记录每次历史请求的参数（用于断言翻页方向）。 */
@@ -139,15 +141,24 @@ describe('search & export tools', () => {
     expect(p.jsonPath).toMatch(/\.json$/);
   }, 20000);
 
-  it('export refetches by seq range when messages absent', async () => {
+  it('export refetches by time range when messages absent', async () => {
     const c = await makeClient();
-    const r = await c.callTool({ name: 'napcat_export', arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 } });
+    const r = await c.callTool({
+      name: 'napcat_export',
+      arguments: {
+        chat: { kind: 'group', id: '1', name: '产品群' },
+        chatKind: 'group',
+        chatId: '1',
+        fromTime: FAKE_MSGS[5].time,
+        toTime: FAKE_MSGS[9].time,
+      },
+    });
     const p = payload(r);
     expect(p.mdPath).toContain(tmp);
-    // 真的现拉了：seq 6..10 共 5 条
-    const json = JSON.parse(readFileSync(p.jsonPath, 'utf-8')) as { count: number; messages: Array<{ seq: number }> };
+    // 真的现拉了：第 6..10 条共 5 条（时间闭区间）
+    const json = JSON.parse(readFileSync(p.jsonPath, 'utf-8')) as { count: number; messages: Array<{ time: number }> };
     expect(json.count).toBe(5);
-    expect(json.messages.map((m) => m.seq)).toEqual([6, 7, 8, 9, 10]);
+    expect(json.messages.map((m) => m.time)).toEqual(FAKE_MSGS.slice(5).map((m) => m.time));
   }, 20000);
 });
 
@@ -162,12 +173,19 @@ describe('napcat_search_messages', () => {
       .filter((x) => x.action === 'get_group_msg_history')
       .map((x) => (x.params as { message_seq?: string } | undefined)?.message_seq);
     expect(seqs[0]).toBeUndefined();          // 第一页取最新
-    expect(seqs[1]).toBe('7');                 // 之后向更早翻页（上一页的最小 seq）
-    expect(Number(seqs[1])).toBeLessThan(10);
+    expect(seqs[1]).toBe(String(FAKE_MSGS[6].message_seq)); // 之后向更早翻页（上一页最早的短 id）
+    expect(seqs[2]).toBe(String(FAKE_MSGS[3].message_seq));
+    // 往更早翻必须带 reverse_order（真实语义：不带它服务端返回同一页）
+    const reverses = calls
+      .filter((x) => x.action === 'get_group_msg_history')
+      .map((x) => (x.params as { reverse_order?: boolean }).reverse_order);
+    expect(reverses[0]).toBeUndefined();
+    expect(reverses[1]).toBe(true);
 
     expect(p.scanned).toBe(10);                // 10 条不同的消息都被扫过
-    expect(p.pages).toBe(4);                   // 4 页（最后一页为空）
+    expect(p.pages).toBe(4);                   // 4 页（最后一页没有新消息 → 历史耗尽）
     expect(p.exhausted).toBe(true);
+    expect(p.stopReason).toBe('history_exhausted');
     expect(typeof p.note).toBe('string');
     expect(p.note).toContain('有限');          // 必须说明扫描范围有限
   });
@@ -177,35 +195,35 @@ describe('napcat_search_messages', () => {
     const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: '1', query: 'M10' } });
     const p = payload(r);
     expect(p.hits).toHaveLength(1);
-    expect(p.hits[0].message.seq).toBe(10);
+    expect(p.hits[0].message.text).toBe('m10');
     // 上文 = 时间上紧邻其前（更早）的那条
-    expect(p.hits[0].contextBefore.seq).toBe(9);
+    expect(p.hits[0].contextBefore.text).toBe('m9');
   });
 
   it('matches case-insensitively', async () => {
     const c = await makeClient();
     const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: '1', query: 'M9' } });
     const p = payload(r);
-    expect(p.hits.map((h: { message: { seq: number } }) => h.message.seq)).toEqual([9]);
+    expect(p.hits.map((h: { message: { text: string } }) => h.message.text)).toEqual(['m9']);
   });
 
-  it('honours startSeq as the starting cursor', async () => {
-    const calls: Array<{ action: string; params?: object }> = [];
-    const c = await makeClient(recordingClient(fakeClient(), calls));
-    const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: '1', query: 'm', startSeq: 7 } });
+  it('finds a keyword that only exists in an older page', async () => {
+    // 关键词只出现在**最早**那条消息里 → 必须真的往更早翻页才能扫到
+    const c = await makeClient();
+    const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: '1', query: '最早' } });
     const p = payload(r);
-    const first = calls.find((x) => x.action === 'get_group_msg_history');
-    expect((first?.params as { message_seq?: string }).message_seq).toBe('7');
-    // startSeq=7 → 只看 seq < 7 的消息
-    expect(p.hits.every((h: { message: { seq: number } }) => h.message.seq < 7)).toBe(true);
+    expect(p.hits.map((h: { message: { text: string } }) => h.message.text)).toEqual(['最早的那条']);
+    expect(p.pages).toBeGreaterThan(1); // 翻了不止一页
+    expect(p.scanned).toBe(10);
   });
 
-  it('reports exhausted with the three-in-one semantics when the page cap is hit', async () => {
+  it('reports the page budget as its own stop reason, not as "no more messages"', async () => {
     const c = await makeClient();
     const r = await c.callTool({ name: 'napcat_search_messages', arguments: { chatKind: 'group', chatId: '1', query: 'm', maxPages: 1 } });
     const p = payload(r);
-    expect(p.exhausted).toBe(true);          // 触顶也算「扫描结束」
-    expect(p.note).toContain('三合一');        // 但不能写成「没有更多了」
+    expect(p.stopReason).toBe('page_budget_exhausted'); // 触顶是「预算用尽」，不是「历史耗尽」
+    expect(p.exhausted).toBe(false);
+    expect(p.note).toContain('翻页预算用尽');
     expect(p.note).not.toContain('没有更多');
   });
 
@@ -214,7 +232,7 @@ describe('napcat_search_messages', () => {
     const list = await c.listTools();
     const desc = list.tools.find((t) => t.name === 'napcat_search_messages')?.description ?? '';
     expect(desc).toContain('有限');
-    expect(desc).toContain('三合一');
+    expect(desc).toContain('stopReason');
     expect(desc).not.toContain('没有更多');
   });
 
@@ -352,11 +370,11 @@ describe('napcat_export', () => {
     expect(p.mdPath).not.toContain(join(tmp, '.zcode', 'napcat', 'exports')); // 没落到 user 目录
   });
 
-  it('reports an error when neither messages nor a seq range is given', async () => {
+  it('reports an error when neither messages nor a time range is given', async () => {
     const c = await makeClient();
     const r = await c.callTool({ name: 'napcat_export', arguments: { chat: { kind: 'group', id: '1', name: '产品群' } } });
     expect(isError(r)).toBe(true);
-    expect(payload(r).error).toContain('fromSeq');
+    expect(payload(r).error).toContain('fromTime');
   });
 
   it('reports an error for an invalid chat reference instead of throwing', async () => {
@@ -372,21 +390,21 @@ describe('napcat_export', () => {
     const c = await makeClient(stubClient(() => { throw new Error('export upstream down'); }));
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('export upstream down');
   });
 
-  it('rejects a reversed seq range instead of writing an empty export', async () => {
-    // fromSeq > toSeq → fetchMessagesBetween 会返回 []，工具就会静默写出一对 `_empty` 空文件
+  it('rejects a reversed time range instead of writing an empty export', async () => {
+    // fromTime > toTime → fetchMessagesBetween 会返回 []，工具就会静默写出一对 `_empty` 空文件
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromSeq: 10, toSeq: 6 },
+      arguments: { chat: { kind: 'group', id: '1', name: '产品群' }, chatKind: 'group', chatId: '1', fromTime: 1700009999, toTime: 1700000000 },
     });
     expect(isError(r)).toBe(true);
-    expect(payload(r).error).toContain('fromSeq');
+    expect(payload(r).error).toContain('fromTime');
   });
 
   it('rejects a chat that disagrees with the fetch parameters', async () => {
@@ -394,7 +412,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: '999', name: '另一个群' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: '999', name: '另一个群' }, chatKind: 'group', chatId: '1', fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');
@@ -404,7 +422,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'friend', id: '1', name: '张三' }, chatKind: 'group', chatId: '1', fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'friend', id: '1', name: '张三' }, chatKind: 'group', chatId: '1', fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');
@@ -416,7 +434,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '123', fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '123', fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(false);
     const p = payload(r);
@@ -427,7 +445,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '456', fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: 123, name: '产品群' }, chatKind: 'group', chatId: '456', fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');
@@ -438,7 +456,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: '123', name: '产品群' }, chatKind: 'group', chatId: 123, fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: '123', name: '产品群' }, chatKind: 'group', chatId: 123, fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(false);
     const p = payload(r);
@@ -449,7 +467,7 @@ describe('napcat_export', () => {
     const c = await makeClient();
     const r = await c.callTool({
       name: 'napcat_export',
-      arguments: { chat: { kind: 'group', id: '456', name: '产品群' }, chatKind: 'group', chatId: 123, fromSeq: 6, toSeq: 10 },
+      arguments: { chat: { kind: 'group', id: '456', name: '产品群' }, chatKind: 'group', chatId: 123, fromTime: 1700000000, toTime: 1700009999 },
     });
     expect(isError(r)).toBe(true);
     expect(payload(r).error).toContain('不一致');
@@ -552,9 +570,9 @@ describe('mcp tool registration (T10)', () => {
     const props = (name: string) =>
       Object.keys((byName.get(name)?.inputSchema as { properties?: Record<string, unknown> }).properties ?? {}).sort();
 
-    expect(props('napcat_search_messages')).toEqual(['chatId', 'chatKind', 'maxPages', 'query', 'startSeq']);
+    expect(props('napcat_search_messages')).toEqual(['chatId', 'chatKind', 'maxPages', 'query']);
     expect(props('napcat_format_selection')).toEqual(['chatName', 'maxChars', 'messages']);
-    expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromSeq', 'includeImages', 'messages', 'toSeq', 'workspaceDir']);
+    expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromTime', 'includeImages', 'messages', 'toTime', 'workspaceDir']);
     expect(props('napcat_get_config')).toEqual([]);
   });
 

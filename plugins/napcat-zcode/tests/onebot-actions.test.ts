@@ -1,326 +1,274 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createServer, type Server } from 'node:http';
-import { createClient, type OneBotClient } from '../src/server/onebot/client.js';
+import { describe, expect, it } from 'vitest';
+import { OneBotError } from '../src/server/onebot/errors.js';
 import {
   fetchHistoryPage,
   fetchMessagesBetween,
   getFriendList,
   getGroupList,
   getLoginInfo,
+  isAnchorInvalidError,
+  scanHistoryBackwards,
 } from '../src/server/onebot/actions.js';
+import { createFakeOneBot, makeFakeMessages } from './helpers/fake-onebot.js';
+import type { OB11Message } from '../src/server/onebot/types.js';
 
-// 数据集：seq 1..10，时间正序。服务端“最新页”= seq 8..10（页大小 3）。
-// 给定 message_seq=s 时返回“比 s 更早的 3 条”（即 seq < s 的最大 3 条）——这是本文件的契约假设：
-// 真实 NapCat 的 message_seq 是独占还是包含语义尚未实测（留待 Task 14 验收），
-// 因此测试用 inclusiveSeq 开关把两种语义都覆盖一遍。
-const ALL = Array.from({ length: 10 }, (_, i) => ({ message_seq: i + 1, time: 1700000000 + i, sender: { nickname: `u${i + 1}` }, message: [{ type: 'text', data: { text: `m${i + 1}` } }] }));
+/**
+ * 本文件覆盖**真实 NapCat 语义**（2026-11-21 活体实测，计划 §1.2）：
+ *
+ * - 不带 `message_seq` → **最新** count 条，时间升序；
+ * - `message_seq=S` → 从 S **向更新**取 count 条，**含 S**；
+ * - `message_seq=S` + `reverse_order=true` → 从 S **向更早**取 count 条，**含 S**；
+ * - `message_seq=S`（S 不存在）→ **报错**「消息S不存在」；
+ * - `message_seq` 是**随机短 id**（不是单调序号）→ 只能当锚点，不能比大小。
+ *
+ * 假 OneBot 的行为由 `tests/helpers/fake-onebot.ts` 实现（与真实语义一一对应）。
+ */
+const MSGS = makeFakeMessages(10);
+const byShortId = (m: OB11Message) => m.message_seq as number;
 
-const GROUPS = [{ group_id: 900, group_name: '群A', member_count: 3 }];
-const FRIENDS = [{ user_id: 777, nickname: '好友A' }];
-
-let server: Server;
-let port: number;
-
-// 最近一次请求的 URL 与请求体（用于断言 action 名与参数名）。
-let lastUrl = '';
-let lastBody: Record<string, unknown> = {};
-let requestCount = 0;
-
-// 服务端行为开关：
-// - listShape：列表动作返回裸数组还是 {groups}/{friends} 包装；
-// - nullData：列表/历史动作的 data 为 null；
-// - nullLoginInfo：get_login_info 的 data 为 null；
-// - ignoreMessageSeq：服务端忽略 message_seq（恒返回最新一页，游标不推进）；
-// - maxItemsPerPage：服务端把每页条目数钳到该值（0 = 不钳，模拟 count 被服务端限流）；
-// - seqlessItems：每页额外混入一条没有 message_seq 的消息；
-// - inclusiveSeq：服务端 message_seq 语义取「包含式」（返回 seq <= s）而非「独占式」（返回 seq < s）；
-// - oldestOnly：服务端只拥有最老的那条消息（seq 1），即不存在比它更早的历史；
-// - seqlessAfterFirst：第一次请求之后，服务端返回的页里只剩没有 message_seq 的消息。
-let listShape: 'array' | 'object' = 'array';
-let nullData = false;
-let nullLoginInfo = false;
-let ignoreMessageSeq = false;
-let maxItemsPerPage = 0;
-let seqlessItems = false;
-let inclusiveSeq = false;
-let oldestOnly = false;
-let seqlessAfterFirst = false;
-
-beforeEach(async () => {
-  listShape = 'array';
-  nullData = false;
-  nullLoginInfo = false;
-  ignoreMessageSeq = false;
-  maxItemsPerPage = 0;
-  seqlessItems = false;
-  inclusiveSeq = false;
-  oldestOnly = false;
-  seqlessAfterFirst = false;
-  lastUrl = '';
-  lastBody = {};
-  requestCount = 0;
-  server = createServer((req, res) => {
-    let chunks: Buffer[] = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      requestCount++;
-      lastUrl = req.url ?? '';
-      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
-      lastBody = body;
-      const action = req.url?.slice(1) ?? '';
-      const count = maxItemsPerPage > 0 ? maxItemsPerPage : (body.count ?? 3);
-      const dataset = oldestOnly ? ALL.filter((m) => m.message_seq === 1) : ALL;
-      let page: typeof ALL;
-      if (!body.message_seq) {
-        page = oldestOnly ? dataset : ALL.filter((m) => m.message_seq > 7); // 最新一页
-      } else {
-        const s = Number(body.message_seq);
-        page = dataset.filter((m) => (inclusiveSeq ? m.message_seq <= s : m.message_seq < s)).slice(-count);
-      }
-      if (ignoreMessageSeq) page = ALL.filter((m) => m.message_seq > 7); // 忽略游标：恒返回最新一页
-      if (seqlessItems) page = [...page, { time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as typeof ALL;
-      if (seqlessAfterFirst && requestCount > 1) {
-        page = [{ time: 1700000000, sender: { nickname: 'no-seq' }, message: [] }] as unknown as typeof ALL;
-      }
-      res.setHeader('content-type', 'application/json');
-      if (action === 'get_login_info') {
-        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullLoginInfo ? null : { user_id: 12345, nickname: 'Bot' } }));
-        return;
-      }
-      if (action === 'get_group_list') {
-        const data = listShape === 'object' ? { groups: GROUPS } : GROUPS;
-        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullData ? null : data }));
-        return;
-      }
-      if (action === 'get_friend_list') {
-        const data = listShape === 'object' ? { friends: FRIENDS } : FRIENDS;
-        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullData ? null : data }));
-        return;
-      }
-      res.end(JSON.stringify({ status: 'ok', retcode: 0, data: nullData ? null : { messages: page } }));
-
-    });
+describe('fetchHistoryPage —— 真实语义', () => {
+  it('不带锚点 → 返回最新的一页，时间升序', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const page = await fetchHistoryPage(fake.client, 'group', '123', { count: 3 });
+    expect(page.map(byShortId)).toEqual([MSGS[7].message_seq, MSGS[8].message_seq, MSGS[9].message_seq]);
+    expect(page.map((m) => m.time)).toEqual([MSGS[7].time, MSGS[8].time, MSGS[9].time]);
   });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  port = (server.address() as { port: number }).port;
+
+  it('带锚点 → 从锚点向更新取，含锚点本身', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const page = await fetchHistoryPage(fake.client, 'group', '123', {
+      anchor: { shortId: String(MSGS[4].message_seq) },
+      count: 3,
+    });
+    expect(page.map(byShortId)).toEqual([MSGS[4].message_seq, MSGS[5].message_seq, MSGS[6].message_seq]);
+  });
+
+  it('带锚点 + backward → 从锚点向更早取，含锚点本身，时间仍升序', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const page = await fetchHistoryPage(fake.client, 'group', '123', {
+      anchor: { shortId: String(MSGS[4].message_seq) },
+      count: 3,
+      backward: true,
+    });
+    expect(page.map(byShortId)).toEqual([MSGS[2].message_seq, MSGS[3].message_seq, MSGS[4].message_seq]);
+    expect(page.map((m) => m.time)).toEqual([MSGS[2].time, MSGS[3].time, MSGS[4].time]);
+  });
+
+  it('锚点不存在 → 报错，并翻译成可读中文（不是「历史耗尽」）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    let err: unknown;
+    try {
+      await fetchHistoryPage(fake.client, 'group', '123', { anchor: { shortId: '999999999' }, count: 3 });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeDefined();
+    expect(isAnchorInvalidError(err)).toBe(true);
+    expect((err as Error).message).toContain('历史锚点已失效');
+    expect((err as Error).message).toContain('可能消息已过期');
+  });
+
+  it('count 非法时连请求都不发', async () => {
+    const fake = createFakeOneBot(MSGS);
+    await expect(fetchHistoryPage(fake.client, 'group', '123', { count: 0 })).rejects.toMatchObject({
+      name: 'OneBotError',
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
 });
 
-afterEach(async () => {
-  await new Promise<void>((r) => server.close(() => r()));
+describe('fetchHistoryPage —— 请求映射', () => {
+  it('群走 get_group_msg_history，带 group_id/count', async () => {
+    const fake = createFakeOneBot(MSGS);
+    await fetchHistoryPage(fake.client, 'group', '123', { count: 3 });
+    expect(fake.calls[0].action).toBe('get_group_msg_history');
+    expect(fake.calls[0].params).toEqual({ count: 3, group_id: '123' });
+  });
+
+  it('好友走 get_friend_msg_history，带 user_id/count', async () => {
+    const fake = createFakeOneBot(MSGS);
+    await fetchHistoryPage(fake.client, 'friend', '555', { count: 3 });
+    expect(fake.calls[0].action).toBe('get_friend_msg_history');
+    expect(fake.calls[0].params).toEqual({ count: 3, user_id: '555' });
+  });
+
+  it('锚点以短 id（message_seq）下发，且 backward 时带 reverse_order', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const shortId = String(MSGS[4].message_seq);
+    await fetchHistoryPage(fake.client, 'group', '123', { anchor: { shortId }, count: 3, backward: true });
+    expect(fake.calls[0].params).toEqual({
+      count: 3,
+      group_id: '123',
+      message_seq: shortId,
+      reverse_order: true,
+    });
+  });
+
+  it('不带锚点时不下发 message_seq / reverse_order', async () => {
+    const fake = createFakeOneBot(MSGS);
+    await fetchHistoryPage(fake.client, 'group', '123', { count: 3 });
+    expect(fake.calls[0].params.message_seq).toBeUndefined();
+    expect(fake.calls[0].params.reverse_order).toBeUndefined();
+  });
 });
 
-describe('history paging', () => {
-  it('first page returns latest messages', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const page = await fetchHistoryPage(c, 'group', '123');
-    expect(page.map((m) => m.message_seq)).toEqual([8, 9, 10]);
-    await c.close();
+describe('scanHistoryBackwards —— 往更早翻', () => {
+  it('从最新往更早翻，收集到指定条数，时间正序', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const scan = await scanHistoryBackwards(fake.client, 'group', '123', { count: 6, pageSize: 3 });
+    expect(scan.messages.map(byShortId)).toEqual(MSGS.slice(4).map((m) => m.message_seq));
+    const times = scan.messages.map((m) => m.time).filter((t): t is number => t !== undefined);
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(scan.pages).toBeGreaterThan(1);
   });
 
-  it('cursor page returns older messages', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const page = await fetchHistoryPage(c, 'group', '123', 8, 3);
-    expect(page.map((m) => m.message_seq)).toEqual([5, 6, 7]);
-    await c.close();
+  it('每一页都带 reverse_order 与上一页最早那条的短 id', async () => {
+    const fake = createFakeOneBot(MSGS);
+    await scanHistoryBackwards(fake.client, 'group', '123', { count: 6, pageSize: 3 });
+    const hist = fake.calls.filter((c) => c.action === 'get_group_msg_history');
+    expect(hist[0].params.message_seq).toBeUndefined(); // 第一页取最新
+    expect(hist[0].params.reverse_order).toBeUndefined();
+    expect(hist[1].params.reverse_order).toBe(true);
+    // 锚点是「上一页最早那条」的短 id（真实语义：锚点含在返回里 → 下页会重叠一条）
+    expect(hist[1].params.message_seq).toBe(String(MSGS[7].message_seq));
+    expect(hist[2].params.message_seq).toBe(String(MSGS[5].message_seq));
   });
 
-  it('fetchMessagesBetween walks to the boundary', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 4, 10, 3);
-    expect(msgs.map((m) => m.message_seq)).toEqual([4, 5, 6, 7, 8, 9, 10]);
-    await c.close();
+  it('翻到历史开头 → exhausted（真的没有更早的消息了）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const scan = await scanHistoryBackwards(fake.client, 'group', '123', { pageSize: 4 });
+    expect(scan.messages).toHaveLength(MSGS.length);
+    expect(scan.exhausted).toBe(true);
+    expect(scan.budgetExhausted).toBe(false);
   });
 
-  it('friend history uses get_friend_msg_history', async () => {
-    let action = '';
-    server.closeAllConnections?.();
-    const s2 = createServer((req, res) => {
-      action = req.url?.slice(1) ?? '';
-      let chunks: Buffer[] = [];
-      req.on('data', (c2) => chunks.push(c2));
-      req.on('end', () => {
-        res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ status: 'ok', retcode: 0, data: { messages: [] } }));
-      });
+  it('区间下界被覆盖 → rangeCovered，且消息都在区间内', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const from = MSGS[3].time;
+    const to = MSGS[6].time;
+    const scan = await scanHistoryBackwards(fake.client, 'group', '123', { fromTime: from, toTime: to, pageSize: 2 });
+    expect(scan.rangeCovered).toBe(true);
+    expect(scan.messages.map((m) => m.time)).toEqual([MSGS[3].time, MSGS[4].time, MSGS[5].time, MSGS[6].time]);
+  });
+
+  it('翻页预算用尽 → budgetExhausted（不是「历史耗尽」）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const scan = await scanHistoryBackwards(fake.client, 'group', '123', { pageSize: 1, maxPages: 2 });
+    expect(scan.budgetExhausted).toBe(true);
+    expect(scan.exhausted).toBe(false);
+  });
+
+  it('服务端忽略 reverse_order（游标原地打转）→ 响亮报错，不静默返回同一页', async () => {
+    const fake = createFakeOneBot(MSGS, { ignoreReverseOrder: true });
+    await expect(
+      scanHistoryBackwards(fake.client, 'group', '123', { pageSize: 3 }),
+    ).rejects.toMatchObject({ name: 'OneBotError' });
+  });
+
+  it('页里没有 message_seq → 响亮报错（无法定位锚点）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    // 造一批「只有 real_seq、没有 message_seq」的消息：锚点只能是短 id
+    const noShortId = MSGS.map((m) => ({
+      ...m,
+      message_seq: undefined as unknown as number,
+      message_id: undefined as unknown as number,
+      real_id: undefined as unknown as number,
+    }));
+    fake.setMessages(noShortId);
+    await expect(scanHistoryBackwards(fake.client, 'group', '123', { pageSize: 3 })).rejects.toMatchObject({
+      name: 'OneBotError',
     });
-    await new Promise<void>((r) => s2.listen(0, '127.0.0.1', r));
-    const p2 = (s2.address() as { port: number }).port;
-    const c = createClient({ endpoint: `http://127.0.0.1:${p2}` });
-    await fetchHistoryPage(c, 'friend', '555');
-    expect(action).toBe('get_friend_msg_history');
-    await c.close();
-    await new Promise<void>((r) => s2.close(() => r()));
+  });
+
+  it('锚点失效（服务端报「消息<S>不存在」）→ 报可读中文，不是「没有更多了」', async () => {
+    // 锚点是服务端给的短 id；消息在翻页途中被清理 → 服务端报「不存在」
+    const stale = {
+      async call<T>(_action: string, params?: object): Promise<T> {
+        const p = (params ?? {}) as Record<string, unknown>;
+        if (p.message_seq === undefined) {
+          return { messages: [MSGS[0]] } as unknown as T;
+        }
+        throw new OneBotError(1, `消息${String(p.message_seq)}不存在`);
+      },
+      async close(): Promise<void> {},
+    };
+    let err: unknown;
+    try {
+      await scanHistoryBackwards(stale, 'group', '123', { pageSize: 3 });
+    } catch (e) {
+      err = e;
+    }
+    expect(isAnchorInvalidError(err)).toBe(true);
+    expect((err as Error).message).toContain('历史锚点已失效');
+  });
+});
+
+describe('fetchMessagesBetween —— 时间区间', () => {
+  it('返回闭区间内的全部消息（时间正序）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const r = await fetchMessagesBetween(fake.client, 'group', '123', {
+      fromTime: MSGS[2].time,
+      toTime: MSGS[5].time,
+    });
+    expect(r.messages.map((m) => m.time)).toEqual([MSGS[2].time, MSGS[3].time, MSGS[4].time, MSGS[5].time]);
+    expect(r.exhausted).toBe(false);
+  });
+
+  it('区间跨越历史开头 → 也能干净完成（exhausted）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const r = await fetchMessagesBetween(fake.client, 'group', '123', { fromTime: MSGS[0].time });
+    expect(r.messages).toHaveLength(MSGS.length);
+    expect(r.exhausted).toBe(true);
+  });
+
+  it('区间内一条都没有 → 空数组（不是报错）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    const r = await fetchMessagesBetween(fake.client, 'group', '123', {
+      fromTime: MSGS[0].time - 1000,
+      toTime: MSGS[0].time - 1,
+    });
+    expect(r.messages).toEqual([]);
+  });
+
+  it('翻页预算用尽 → 响亮报错（区间可能残缺，不能静默返回）', async () => {
+    // 每页都比上一页更早 1 条：游标永远前进，但永远到不了区间下界 → 触顶页数上限。
+    let calls = 0;
+    const stub = {
+      async call<T>(): Promise<T> {
+        calls++;
+        return {
+          messages: [{ message_seq: 100000 - calls, real_seq: calls, time: 1700000000 - calls }],
+        } as unknown as T;
+      },
+      async close(): Promise<void> {},
+    };
+    await expect(fetchMessagesBetween(stub, 'group', '123', { fromTime: 0 })).rejects.toThrow(/page limit/);
+    expect(calls).toBe(1000);
   });
 });
 
 describe('action wrappers', () => {
   it('getLoginInfo returns login info', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const info = await getLoginInfo(c);
-    expect(info).toEqual({ user_id: 12345, nickname: 'Bot' });
-    await c.close();
+    const fake = createFakeOneBot(MSGS);
+    expect(await getLoginInfo(fake.client)).toEqual({ user_id: 1, nickname: 'Bot' });
   });
 
-  it('getGroupList accepts both array and {groups} shapes', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    listShape = 'array';
-    expect(await getGroupList(c)).toEqual(GROUPS);
-    listShape = 'object';
-    expect(await getGroupList(c)).toEqual(GROUPS);
-    await c.close();
+  it('getGroupList / getFriendList 返回空数组（兼容 null data）', async () => {
+    const fake = createFakeOneBot(MSGS);
+    expect(await getGroupList(fake.client)).toEqual([{ group_id: 123, group_name: '产品群' }]);
+    expect(await getFriendList(fake.client)).toEqual([{ user_id: 9, nickname: '张三' }]);
   });
 
-  it('getFriendList accepts both array and {friends} shapes', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    listShape = 'array';
-    expect(await getFriendList(c)).toEqual(FRIENDS);
-    listShape = 'object';
-    expect(await getFriendList(c)).toEqual(FRIENDS);
-    await c.close();
-  });
-
-  it('tolerates null data without throwing', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    nullData = true;
-    expect(await getGroupList(c)).toEqual([]);
-    expect(await getFriendList(c)).toEqual([]);
-    expect(await fetchHistoryPage(c, 'group', '123')).toEqual([]);
-    expect(await fetchHistoryPage(c, 'friend', '555')).toEqual([]);
-    await c.close();
-  });
-
-  it('getLoginInfo throws OneBotError when the server returns null data', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    nullLoginInfo = true;
-    await expect(getLoginInfo(c)).rejects.toMatchObject({ name: 'OneBotError', retcode: -1 });
-    await c.close();
-  });
-});
-
-describe('request mapping', () => {
-  it('group path calls get_group_msg_history with group_id/message_seq/count', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await fetchHistoryPage(c, 'group', '123', 8, 3);
-    expect(lastUrl).toBe('/get_group_msg_history');
-    expect(lastBody).toEqual({ group_id: '123', message_seq: '8', count: 3 });
-    await c.close();
-  });
-
-  it('friend path calls get_friend_msg_history with user_id/message_seq/count', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await fetchHistoryPage(c, 'friend', '555', 8, 3);
-    expect(lastUrl).toBe('/get_friend_msg_history');
-    expect(lastBody).toEqual({ user_id: '555', message_seq: '8', count: 3 });
-    await c.close();
-  });
-
-  it('treats beforeSeq 0 as a real cursor instead of "no cursor"', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const page = await fetchHistoryPage(c, 'group', '123', 0, 3);
-    expect(lastUrl).toBe('/get_group_msg_history');
-    expect(lastBody).toEqual({ group_id: '123', message_seq: '0', count: 3 });
-    expect(page).toEqual([]); // seq < 0 没有消息
-    await c.close();
-  });
-
-  it('rejects a non-positive count before sending a request', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await expect(fetchHistoryPage(c, 'group', '123', undefined, 0)).rejects.toMatchObject({ name: 'OneBotError' });
-    expect(requestCount).toBe(0);
-    await c.close();
-  });
-});
-
-describe('pagination robustness', () => {
-  it('keeps paging when the server returns fewer items than count', async () => {
-    maxItemsPerPage = 2; // 服务端把每页钳到 2 条（少于请求的 3），不等于历史耗尽
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 4, 10, 3);
-    expect(msgs.map((m) => m.message_seq)).toEqual([4, 5, 6, 7, 8, 9, 10]);
-    await c.close();
-  });
-
-  it('throws instead of returning a partial range when the server ignores message_seq', async () => {
-    ignoreMessageSeq = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 3)).rejects.toMatchObject({ name: 'OneBotError' });
-    expect(requestCount).toBeLessThan(10); // 不能空转到页数上限
-    await c.close();
-  });
-
-  it('throws instead of returning a partial range when pageSize is 1', async () => {
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
-    expect(requestCount).toBeLessThan(10);
-    await c.close();
-  });
-
-  it('throws when the page limit is exceeded', async () => {
-    // 用内存 stub：每页都比上一页更早 1 条，游标永远前进但永远到不了下界 → 触顶页数上限。
-    let calls = 0;
-    const stub: OneBotClient = {
+  it('data 为 null 时安全回落（不抛 TypeError）', async () => {
+    const nullClient = {
       async call<T>(): Promise<T> {
-        calls++;
-        return { messages: [{ message_seq: 100000 - calls }] } as unknown as T;
+        return null as unknown as T;
       },
       async close(): Promise<void> {},
     };
-    await expect(fetchMessagesBetween(stub, 'group', '123', 0, 100000, 1)).rejects.toThrow(/page limit/);
-    expect(calls).toBe(1000);
-  });
-
-  it('completes when the history is exhausted above fromSeq', async () => {
-    // fromSeq=0 小于最老消息的 seq=1：重叠式翻页会一直拿到边界消息，
-    // 靠「严格更早」的探测请求证明历史已耗尽 → 区间完整返回，而不是误报「无进展」。
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
-    expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    await c.close();
-  });
-
-  it('completes when the server uses inclusive message_seq semantics', async () => {
-    // 服务端语义为「message_seq=s → 返回 seq <= s」（包含式）：探测请求会带回边界消息 [minSeq]，
-    // 而不是空页。耗尽判定必须与独占/包含语义无关，否则触底查询会被误判成失败。
-    inclusiveSeq = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 10, 3);
-    expect(msgs.map((m) => m.message_seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    await c.close();
-  });
-
-  it('throws instead of truncating with inclusive semantics and capacity 1', async () => {
-    // 容量 1：探测页装不下「边界消息 + 更早消息」两条，hasOlder 恒为假，
-    // 不能据此断定历史耗尽 —— 更早的 seq 9 确实存在，区间 [4,10] 必然残缺 → 必须抛错。
-    inclusiveSeq = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
-    await c.close();
-  });
-
-  it('completes with inclusive semantics and capacity 1 when no earlier message exists', async () => {
-    // 服务端最老的消息就是 seq 1（不存在更早的历史）：第二次探测为空 → 确认耗尽 → 正常完成。
-    inclusiveSeq = true;
-    oldestOnly = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 0, 1, 1);
-    expect(msgs.map((m) => m.message_seq)).toEqual([1]);
-    await c.close();
-  });
-
-  it('throws when the probe page carries no message_seq at all', async () => {
-    // 探测页非空但取不到任何可比较的 message_seq → 无法验证是否耗尽 → 不得当作耗尽。
-    seqlessAfterFirst = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    await expect(fetchMessagesBetween(c, 'group', '123', 4, 10, 1)).rejects.toMatchObject({ name: 'OneBotError' });
-    await c.close();
-  });
-
-  it('skips messages that carry no message_seq', async () => {
-    seqlessItems = true;
-    const c = createClient({ endpoint: `http://127.0.0.1:${port}` });
-    const msgs = await fetchMessagesBetween(c, 'group', '123', 4, 10, 3);
-    expect(msgs.every((m) => m.message_seq !== undefined)).toBe(true);
-    expect(msgs.map((m) => m.message_seq)).toEqual([4, 5, 6, 7, 8, 9, 10]);
-    await c.close();
+    expect(await getGroupList(nullClient)).toEqual([]);
+    expect(await getFriendList(nullClient)).toEqual([]);
+    expect(await fetchHistoryPage(nullClient, 'group', '123')).toEqual([]);
+    await expect(getLoginInfo(nullClient)).rejects.toMatchObject({ name: 'OneBotError' });
   });
 });

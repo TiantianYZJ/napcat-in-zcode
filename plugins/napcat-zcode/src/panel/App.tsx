@@ -35,11 +35,14 @@ function errText(e: unknown): string {
 }
 
 /**
- * 跨调用去重键：与服务端 `tools.ts` 的 `dedupKey` **同构**（`s` / `i` 两个命名空间）。
+ * 跨调用去重键：与服务端 `model/message.ts` 的 `messageDedupKey` **同构**（`s` / `i` 两个命名空间）。
  *
  * - `s${seq}`：服务端 `Message.seq` 只承载 `message_seq`（没有就是 0），所以 `s` 前缀
  *   精确对应「有 message_seq」；
  * - `i${id}`：没有 `message_seq` 时用消息 id（`message_id` / `real_id`）。
+ *
+ * 注意：`message_seq` 是**随机短 id**（不是单调序号）—— 它只能当**去重键**，
+ * 不能当游标（游标是**时间**，见 `cursorRef`）。
  *
  * 之前这里一律用 `s${m.seq}`（单一命名空间），而服务端的 seq 在缺 `message_seq`
  * 时会回退成 `message_id` → 两边的键空间不一致，跨调用去重可能误删不同的消息。
@@ -152,7 +155,12 @@ export function App() {
 
   /** 当前会话（`loadOlder` 是稳定回调，用 ref 读最新值）。 */
   const activeRef = useRef<Chat | null>(null);
-  /** 翻页游标 = 服务端给的 `nextBeforeSeq`（窗口内最小 seq）。 */
+  /**
+   * 翻页游标 = 服务端给的 `nextBeforeTime`（窗口内**最早**那条消息的时间，epoch 秒）。
+   *
+   * 为什么是时间不是 seq：服务端的 `message_seq` 是**随机短 id**（不是单调序号），
+   * 拿它做游标比较是错的 —— 实测 M1 的 seq 游标在真实 NapCat 上原地打转。
+   */
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingOlderRef = useRef(false);
   const noMoreRef = useRef(false);
@@ -273,14 +281,14 @@ export function App() {
         setOlderNote('没有更早的消息了（服务端返回空页）');
         return;
       }
-      if (typeof r.nextBeforeSeq !== 'number') {
-        // 服务端没能给出游标（窗口里的消息没有 message_seq）→ 没法继续向前翻
+      if (typeof r.nextBeforeTime !== 'number') {
+        // 服务端没能给出时间游标（窗口里的消息没有有效 time）→ 没法继续向前翻
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('服务端未提供可继续向前翻页的游标（消息缺少 message_seq）');
+        setOlderNote('服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）');
         return;
       }
-      cursorRef.current = r.nextBeforeSeq;
+      cursorRef.current = r.nextBeforeTime;
     } catch (e) {
       showNotice(errText(e));
     }
@@ -289,8 +297,10 @@ export function App() {
   /**
    * 载入更早的消息。
    *
-   * 「还有没有更早的消息」**不看 `exhausted`**（它是历史耗尽 / 游标推不动 / 扫描页数触顶的
-   * 三合一语义），而看「**再翻一页是否返回空**」→ 空页才确认到底。
+   * 游标是**时间**（`nextBeforeTime`），不是 seq —— seq 是随机短 id，比大小没有意义。
+   *
+   * 「还有没有更早的消息」看服务端返回：`exhausted` 为 true = **历史耗尽**；
+   * `stopReason` 区分「历史耗尽 / 翻页预算用尽（还能再翻）/ 锚点失效（工具报错）」。
    */
   const loadOlder = useCallback(async () => {
     const chat = activeRef.current;
@@ -318,21 +328,29 @@ export function App() {
       }
       messagesRef.current = merged;
       setMessages(merged);
-      if (typeof r.nextBeforeSeq !== 'number') {
+      if (typeof r.nextBeforeTime !== 'number') {
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('服务端未提供可继续向前翻页的游标（消息缺少 message_seq）');
+        setOlderNote('服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）');
         return;
       }
-      if (before !== undefined && r.nextBeforeSeq >= before) {
-        // 游标没有前进 → 再翻也是同一页，停。
+      if (before !== undefined && r.nextBeforeTime >= before) {
+        // 时间游标没有前进 → 再翻也是同一页，停。
         noMoreRef.current = true;
         setNoMore(true);
-        setOlderNote('游标没有前进（服务端未接受该游标），无法加载更早的消息');
+        setOlderNote('时间游标没有前进（服务端未接受该游标），无法加载更早的消息');
         return;
       }
-      cursorRef.current = r.nextBeforeSeq;
+      cursorRef.current = r.nextBeforeTime;
+      /**
+       * 翻页预算用尽 ≠ 「没有更多了」：
+       * 服务端这次没翻完，但游标已经推进 → 再点一次「加载更早」就能继续。
+       */
+      if (r.stopReason === 'page_budget_exhausted') {
+        setOlderNote(r.note ?? '翻页预算用尽：可能还有更早的消息没取到，再点一次「加载更早」继续。');
+      }
     } catch (e) {
+      // 锚点失效（服务端报「消息<S>不存在」）走这里：文案由服务端给（已中文化）。
       showNotice(errText(e));
     } finally {
       loadingOlderRef.current = false;

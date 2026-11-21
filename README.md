@@ -14,7 +14,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 （NapCat 官方仓库已归档，可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release —— 见[已知限制](#已知限制与路线图)第 7 条。）
 
 > **当前状态（M2 已落地）**：外部 OneBot 端点（HTTP / WebSocket）路径与**本机 NapCat 自动探测**
-> （面板里的「检测本机 NapCat」）均已实现，有 571 条自动化测试覆盖。
+> （面板里的「检测本机 NapCat」）均已实现，有 666 条自动化测试覆盖。
 > 插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）**尚未实现**，
 > 详见[已知限制与路线图](#已知限制与路线图)。
 
@@ -42,7 +42,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 聊天记录留在 QQ 里，AI 看不见。想让模型基于一段真实对话回答问题，常规做法是手动截图、
 复制粘贴、反复解释背景。这个插件把这条链路接上：
 
-1. **浏览** —— 侧栏面板里直接列群和好友，滚动看历史消息（游标翻页，按需加载更早）。
+1. **浏览** —— 侧栏面板里直接列群和好友，滚动看历史消息（**时间游标**翻页，按需加载更早）。
 2. **挑选** —— 单击 / Shift 连选 / Ctrl 点选 / 拖拽划选，四种方式挑出要用的那段。
 3. **投喂** —— 两种注入语义（发进对话 / 设为背景），也可以导出成文件再 `@` 引用。
 
@@ -252,19 +252,22 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 ### 消息流（右栏）
 
 - 首次打开拉最新 **100 条**（服务端单次上限 200）；
-- **向上滚动到顶部**自动加载更早的一页（游标翻页）；顶部同时常驻一个「加载更早」按钮，
+- **向上滚动到顶部**自动加载更早的一页（**时间游标**翻页）；顶部同时常驻一个「加载更早」按钮，
   不想靠滚动（或环境里没有 `IntersectionObserver`）时可以直接点它；
 - 插入更早消息时视口会自动补偿高度，不会把你甩到列表中间；
 - **渲染上限 2000 条**：超过后只渲染最近 2000 条，顶部出现提示条
   `仅显示最近 2000 条，导出/搜索可处理更多`。更早的消息仍在内存里，导出与搜索照常能处理；
-- 翻不动时顶部会给出中文原因，四种分别是：
-  - `没有更早的消息了（服务端返回空页）`
-  - `服务端未提供可继续向前翻页的游标（消息缺少 message_seq）`
+- 翻不动时顶部会给出中文原因（**四种**分别是）：
+  - `没有更早的消息了（服务端返回空页）` —— **历史耗尽**
+  - `服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）`
   - `本轮没有返回新消息（边界重复或已到历史开头）`
-  - `游标没有前进（服务端未接受该游标），无法加载更早的消息`
+  - `时间游标没有前进（服务端未接受该游标），无法加载更早的消息`
+  - 另外，**锚点失效**（服务端报「消息<S>不存在」）与**翻页预算用尽**会以提示条/错误给出，
+    不会混成一句「没有更多了」
 
-> **「还有没有更早的消息」不看 `exhausted`** —— `exhausted` 是三合一语义
-> （历史耗尽 / 游标推不动 / 翻页触顶），详见[已知限制](#已知限制与路线图)。以「再翻一页是否返回空」为准。
+> **「还有没有更早的消息」看 `exhausted` 与 `stopReason`**：`exhausted: true` = 历史耗尽（真的到底了）；
+> `stopReason` 区分「攒够了 / 区间覆盖 / 历史耗尽 / 翻页预算用尽」；锚点失效是**工具错误**（`isError`）。
+> 详见[真实语义](#napcat-真实语义实测)与[已知限制](#已知限制与路线图)。
 
 ### 过滤（工具栏）
 
@@ -473,28 +476,27 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 | `napcat_configure` | `{endpoint, token?, clearToken?, paths?}` | `{configured: true, connected: true, login, warning?, pathsSaved?, paths?}`。校验不过 → `isError`。**token 留空 = 保留已保存的 token**；清除要显式 `clearToken: true`。`paths`（本机扫描路径）的语义：**不传 = 不改**；传 `[]` = **清空**扫描路径；传 `[...]` = **整体替换**（不是追加）；**相对路径会被拒绝**（直接报错，不静默丢弃）。`endpoint` 传**空串** = 只更新扫描路径、**不动已有连接**（这样不会把你 WS URL 里的 `?access_token=` 抹掉） |
 | `napcat_detect_local` | 无 | `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`。探测**不带 token**（只回答「这个端点活着吗、需要 token 吗」），疑似需要 token 的端点在 `tokenRequired` 里。`budgetExhausted: true` = 扫描**没扫完**，结果可能不全，**不能**据此判断「本机没有 NapCat」。结论会带进 `napcat_status` 的 `detection` 字段（缓存，不重复扫描）。`installs[].configDir`、`scanned.paths`、`candidates[].detail` 与 `droppedEndpoints[].detail` 是**本机绝对路径**，只用于解释「这个端点是从哪来的」 |
 | `napcat_list_chats` | `{kind: "group" \| "friend"}` | `{chats: [{kind, id, name, memberCount?}]}`；`id` 一律是字符串 |
-| `napcat_get_history` | `{chatKind, chatId, beforeSeq?, count?, since?, until?}` | `{messages, nextBeforeSeq, exhausted}`。`count` 1–200，默认 100；`chatId` 接受数字或字符串；`since` / `until` 是 epoch 秒（含），在服务端本地过滤 |
-| `napcat_search_messages` | `{chatKind, chatId, query, startSeq?, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
+| `napcat_get_history` | `{chatKind, chatId, count?, beforeTime?, fromTime?, toTime?}` | `{messages, nextBeforeTime, exhausted, stopReason, note}`。`count` 1–200，默认 **50**；`chatId` 接受数字或字符串；`beforeTime` 是**排他**上界（只取该时间**之前**的消息）—— 把上一次返回的 `nextBeforeTime` 传回来即可继续往前翻；`fromTime` / `toTime` 是**闭**区间（epoch 秒）。区间与翻页一律按**时间**表达：服务端的 `message_seq` 是**随机短 id**，不能当游标用（见[真实语义](#napcat-真实语义实测)） |
+| `napcat_search_messages` | `{chatKind, chatId, query, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
 | `napcat_format_selection` | `{messages, chatName, maxChars?}` | `{text, count, truncated}`。`text` 首行恒为不可信声明；`count` 是**实际渲染进正文的条数**；`maxChars` 缺省取配置 |
-| `napcat_export` | `{chat, messages?, chatKind?, chatId?, fromSeq?, toSeq?, dir?, includeImages?, workspaceDir?}` | `{mdPath, jsonPath, gitignoreUpdated}` |
+| `napcat_export` | `{chat, messages?, chatKind?, chatId?, fromTime?, toTime?, dir?, includeImages?, workspaceDir?}` | `{mdPath, jsonPath, gitignoreUpdated}` |
 | `napcat_get_config` | 无 | 当前配置；**token 设了时显示为 `***`、未设置时是空串**，端点按脱敏形态返回（去掉 query 与 userinfo）；**扫描路径只给条数**（`autoDetect.pathsCount`，不返回路径内容） |
 
 `napcat_export` 的细则：
 
-- `messages` 缺省（或为空数组）时，改用 `chatKind` + `chatId` + `fromSeq` + `toSeq` **现拉**该 seq 区间；
-  这四个参数缺一不可；
-- `fromSeq > toSeq` → `isError`（区间反了）；
+- `messages` 缺省（或为空数组）时，改用 `chatKind` + `chatId` + `fromTime` + `toTime` **现拉**该时间区间
+  （epoch 秒，闭区间）；这四个参数缺一不可；
+- `fromTime > toTime` → `isError`（区间反了）；
 - `chat` 与 `chatKind` / `chatId` 不一致 → `isError`（防止把 B 群的区间写进 A 群名下的文件）；
 - `dir` 缺省取配置 `export.dir`；工作区目录的解析顺序是
   参数 `workspaceDir` → 环境变量 `ZCODE_PROJECT_DIR` → 都没有（此时工作区导出会报错）；
 - `includeImages` **在 M1 不改变产物**；
-- **现拉模式是「响亮失败」，不会静默返回残缺区间。** 服务端不认 `message_seq`、翻页推不动或
-  翻页数触顶时，`napcat_export` 直接返回 `isError: true` + `{error}`，错误文案形如
-  `history pagination made no progress at cursor N; the server ignored message_seq` /
-  `history pagination made no progress at cursor N; earlier history exists but the cursor cannot advance` /
-  `history pagination exceeded page limit (1000)`。
+- **现拉模式是「响亮失败」，不会静默返回残缺区间。** 翻页预算用尽（区间取不完）或锚点失效
+  （服务端报「消息<S>不存在」）时，`napcat_export` 直接返回 `isError: true` + `{error}`，
+  错误文案形如 `历史锚点已失效，可能消息已过期或已被清理：消息123不存在` /
+  `history pagination exceeded page limit (1000); the requested time range may be incomplete`。
   也就是说：**要么拿到完整区间，要么拿到错误**，不会把一段不完整的区间当成功导出。
-  （`napcat_get_history` 不一样 —— 它的「取不满」是**正常返回**，靠 `exhausted` 表达。）
+  （`napcat_get_history` 不一样 —— 它的「取不满」是**正常返回**，靠 `exhausted` / `stopReason` 表达。）
 
 `napcat_detect_local` 的细则：
 
@@ -518,6 +520,53 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
   只给条数 `autoDetect.pathsCount`；`napcat_detect_local` 属于诊断类 →
   返回里**含本机绝对路径**（`installs[].configDir`、`scanned.paths`、`candidates[].detail`、
   `droppedEndpoints[].detail`），它们**只用于解释「这个端点是从哪来的」**，不要拿它做别的用途。
+
+---
+
+## NapCat 真实语义（实测）
+
+2026-11-21 首次拿到**活体 NapCat**（v4.18.42 / QQNT 9.9.31-49738）后实测。
+这一节是**事实**（不是推断），插件的翻页模型完全按它实现；
+`npm run verify:live` 每次都会按这九条逐条断言。
+
+| 字段 | 真实含义 | 样本 |
+|---|---|---|
+| `real_seq` | **会话内单调递增序号**（每会话独立计数；NapCat 发成**字符串**） | 群 B：8647,8648,8649…；好友：5,6,7,8 |
+| `message_seq` | **随机 32 位短 id**（=== `message_id` === `real_id`） | 410858111、299539486、1440518264… |
+| `time` | unix 秒 | 1795235911 … |
+
+历史动作（`get_group_msg_history` / `get_friend_msg_history`）：
+
+| 入参 | 返回 |
+|---|---|
+| 不带 `message_seq` | **最新** `count` 条，时间升序（`reverse_order` 被忽略） |
+| `message_seq=S`（S 存在） | 从 S **向更新**取 `count` 条，**含 S**（S 在最前） |
+| `message_seq=S` + `reverse_order=true` | 从 S **向更早**取 `count` 条，**含 S**（S 在最后） |
+| `message_seq=S`（S 不存在） | **报错**「消息S不存在」 |
+| `count` | **守约**（受实际存量限制） |
+
+另外两条实测结论：
+
+- **`real_seq` 当 `message_seq` 传查不到** → 锚点只能用短 id；
+- **OB11 `record`（语音）段不带时长**（只有 `file` / `path` / `url` / `file_size`）
+  → 插件不编造也不推断时长。
+
+### 这对工具意味着什么
+
+| 概念 | 取值 | 理由 |
+|---|---|---|
+| 往更早翻一页 | `napcat_get_history` 带 `beforeTime = 上一次的 nextBeforeTime` | 游标是**时间**（排除式），与前一页天然不重叠 |
+| 取某个时间段 | `napcat_get_history` 带 `fromTime` + `toTime`（闭区间） | 区间只能按**时间**表达 —— `message_seq` 不可比较 |
+| 现拉一段区间导出 | `napcat_export` 带 `fromTime` + `toTime` | 同上；区间取不全就**响亮报错**，不静默导出残缺区间 |
+| 搜索 | `napcat_search_messages` 从最新往**更早**翻页扫描 | OneBot 没有服务端搜索；扫描范围有限，看 `scanned` / `pages` / `stopReason` |
+
+### 三种「翻不动」要分清
+
+| 情况 | 表现 | 含义 |
+|---|---|---|
+| **历史耗尽** | `exhausted: true`、`stopReason: "history_exhausted"`、`note` 里说「已翻到会话最开始」 | 真的没有更早的消息了 |
+| **锚点失效** | 工具返回 `isError: true`，错误文案「历史锚点已失效，可能消息已过期或已被清理：消息<S>不存在」 | 服务端说那条消息查不到（被清理 / 短 id 映射失效）——**不是**「没有更多了」 |
+| **翻页预算用尽** | `stopReason: "page_budget_exhausted"`，`note` 里说「翻页预算用尽（单次最多 40 页）」 | 可能还有更早的消息没取到；**再翻一次**（游标已推进）就能继续 |
 
 ---
 
@@ -566,11 +615,12 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
    实际路径是「保存为附件… → 导出并复制 `@路径` → 你粘贴到输入框」。
 3. **注入文本首行是不可信第三方内容声明。** 注入体放在模型上下文里，模型会把聊天内容当作
    第三方内容而不是指令 —— 这是设计意图，不要因为「模型没听我的」就去删这一行。
-4. **搜索是有限扫描。** OneBot 11 没有服务端搜索动作，只能向更早的方向翻页后在本地过滤。
-   返回里的 `scanned` / `pages` / `hitsTruncated` / `note` 就是在说「这次只扫了这么多」。
-5. **`exhausted` 是三合一语义。** 它表示「历史耗尽 **或** 游标推不动 **或** 翻页触顶」，
-   **不等于**「没有更多了」。判断还有没有更早的消息，以「再翻一页是否返回空」为准
-   （`napcat_get_history` 与 `napcat_search_messages` 同此口径）。
+4. **搜索是有限扫描。** OneBot 11 没有服务端搜索动作，只能从最新往**更早**的方向翻页后在本地过滤。
+   返回里的 `scanned` / `pages` / `hitsTruncated` / `stopReason` / `note` 就是在说「这次只扫了这么多」。
+5. **`exhausted` 只表示「历史耗尽」。** `exhausted: true` = 真的翻到会话最开始、没有更早的消息了；
+   「没取满」可能是别的原因 → 看 `stopReason`（`count_reached` / `range_covered` /
+   `history_exhausted` / `page_budget_exhausted`）与 `note`。
+   **锚点失效**（服务端报「消息<S>不存在」）是**工具错误**（`isError: true`），不是终止原因。
    「翻页触顶」的具体上限：`napcat_get_history` 单次调用最多翻 **40 页**，
    `napcat_search_messages` 最多翻 `maxPages`（≤ 100 页）、命中上限 **20** 条。
 6. **「包含图片」在 M1 不下载媒体**（只记 URL），面板上的开关是禁用状态。标为 M1.1。
@@ -666,22 +716,24 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 ### 找不到消息 / 消息流是空的
 
 - **会话本身没消息** —— 消息流底部显示「没有消息」，说明这个会话拉回来就是空的。
-- **只加载了最新 100 条** —— 消息按时间正序排列（早的在上面），**向上滚到顶部**会继续加载更早的；
-  若顶部提示「服务端未提供可继续向前翻页的游标」，说明这批消息没有 `message_seq`，
-  没法继续向前翻。
+- **只加载了最新一页** —— 消息按时间正序排列（早的在上面），**向上滚到顶部**会继续加载更早的；
+  若顶部提示「服务端未提供可继续向前翻页的时间游标」，说明这批消息没有有效 `time`，没法继续向前翻。
 - **被过滤条件筛掉了** —— 关键词 / 发送人 / 时间范围三个条件是**与**关系，先清空工具栏再试。
-- **翻页卡住** —— 顶部提示「游标没有前进（服务端未接受该游标）」说明上游没接受这个游标，
+- **翻页卡住** —— 顶部提示「时间游标没有前进（服务端未接受该游标）」说明上游没接受这个游标，
   插件会停下来而不是死循环。
+- **锚点失效** —— 提示条出现「历史锚点已失效，可能消息已过期或已被清理：消息<S>不存在」：
+  服务端查不到那条锚点消息了（被清理 / 短 id 映射失效），**不是**「没有更多了」。
 
 ### 搜索命中很少
 
 搜索只能**向更早的方向**翻页后本地过滤，扫不到的部分就是搜不到。
 
 - 看返回里的 `scanned`（扫过多少条）、`pages`（翻了多少页）、`hitsTruncated`
-  （命中数达上限，扫描提前停止）；
+  （命中数达上限，扫描提前停止）、`stopReason`（为什么停）；
 - 想要更多：把 `maxPages` 调大（上限 100，默认 20），或先用 `napcat_get_history`
-  按 `since` / `until` 取一段再在本地筛；
-- `exhausted` 为 `true` **不代表**历史到底（见[已知限制](#已知限制与路线图)）。
+  按 `fromTime` / `toTime` 取一段再在本地筛；
+- `exhausted: true` 表示**历史耗尽**（真的扫到会话最开始）；`stopReason: "page_budget_exhausted"`
+  表示**翻页预算用尽**（可能还有更早的消息没扫到）。
 
 ### 「另存一份…」没反应 / 不知道存哪了
 
@@ -702,10 +754,12 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 
 - 本插件只依赖**标准 OneBot 11 动作**（`get_login_info` / `get_group_list` / `get_friend_list` /
   `get_group_msg_history` / `get_friend_msg_history`），不碰 NapCat 私有桥接；
-- `message_seq` 的**含 / 不含边界**语义在 NapCat 各版本间可能不同。插件按「独占」实现，
-  并在面板侧按 `seq` **跨调用去重**（边界那条即使被重复返回也不会重复出现）；
-- 若你发现向上翻页时出现重复消息或翻不动，把 NapCat 的版本号记下来 —— 这是 M1 收尾时
-  计划要实测确认的语义点之一。
+- 翻页语义**已按真实 NapCat 实测**（2026-11-21，v4.18.42）重做：
+  `message_seq` 是**随机短 id**（不能当游标）、往更早翻必须带 `reverse_order`、
+  锚点含在返回里、区间一律按**时间**表达 —— 详见[NapCat 真实语义（实测）](#napcat-真实语义实测)；
+- 面板侧的游标是**时间**（`nextBeforeTime`），跨调用按消息 id 去重（边界那条即使被重复返回也不会重复出现）；
+- 若你发现向上翻页时出现重复消息或翻不动，把 NapCat 的版本号记下来 —— 语义若变了，
+  `npm run verify:live` 的九条断言会先报出来。
 
 ### 面板一直显示「正在连接宿主…」
 
@@ -741,7 +795,7 @@ D:/Develop/Napcat in ZCode/
 │     ├─ dist/                      # 构建产物（随插件分发）
 │     │  ├─ server.mjs
 │     │  └─ ui/panel.html
-│     └─ tests/                     # vitest（571 条 + 2 条平台相关跳过）
+│     └─ tests/                     # vitest（666 条 + 4 条平台相关跳过）
 ├─ docs/
 │  ├─ acceptance-m1.md              # M1 实机验收清单（+ M2 验收项）
 │  └─ superpowers/{plans,specs}/    # 计划与设计文档
@@ -755,7 +809,7 @@ D:/Develop/Napcat in ZCode/
 cd plugins/napcat-zcode
 npm install          # 首次
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run（571 条 + 2 条平台相关跳过）
+npm test             # vitest run（666 条 + 4 条平台相关跳过）
 npm run build        # = build:server + build:panel
 npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
 npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只能推断的 NapCat 语义
@@ -765,15 +819,17 @@ npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只�
 
 | 脚本 | 检查什么 |
 |------|----------|
-| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：9 个工具的出入参契约、本机探测与结论缓存、游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
+| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：9 个工具的出入参契约、本机探测与结论缓存、时间游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
 | `scripts/smoke-panel.mjs` | 把构建出的 `dist/ui/panel.html` 装进 DOM，由一个说 MCP-UI 协议的模拟宿主驱动：握手、会话列表、消息流、选择状态机（未打开会话 → 未选择消息 → 可点） |
 
 两个脚本都不连真实 QQ，跑完即退出（退出码 0 = 全通过）。
 
 `npm run verify:live` 需要**真实 NapCat 在跑**（见上文「配置 NapCat」），它会：
 
-1. 直连 OneBot 端点，**实测**三条此前只能靠推断的语义——`message_seq` 是独占还是包含边界、`count` 是否被守约、`message_seq=0` 的行为、以及语音段时长的真实字段名；
-2. 用构建产物把插件的完整工具链跑一遍（连真 NapCat → 拉真会话 → 拉真消息 → 游标翻页 → 注入文本 → 真实导出）；
+1. 直连 OneBot 端点，按**九条真实语义**逐条断言 —— 最新页 / 锚点向更新 / 锚点向更早（含锚点）/
+   不存在的 seq 必须报错 / `count` 守约 / `real_seq` 会话内单调 / record 段不带时长；
+2. 用构建产物把插件的完整工具链跑一遍（连真 NapCat → 拉真会话 → 拉真消息 → **往更早翻页（游标必须真的推进）**
+   → 注入文本 → 真实导出 → 搜索扫到首页之外的关键词）；
 3. 打印一张结论表 + 一份 JSON 报告（落在临时目录）。
 
 导出落在临时 HOME，不污染用户真实导出目录。

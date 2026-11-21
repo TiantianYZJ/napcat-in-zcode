@@ -109,13 +109,24 @@ export interface StatusInfo {
 /** `napcat_get_history` 的返回。 */
 export interface HistoryResult {
   messages: Msg[];
-  /** 窗口内最小 seq（= 下一次「加载更早」要带回去的游标）。 */
-  nextBeforeSeq: number | null;
   /**
-   * 三合一语义（历史耗尽 / 游标推不动 / 扫描页数触顶）。
-   * **不能**读作「没有更早的消息了」——判断还有更早消息要看「再翻一页是否返回空」。
+   * 更早消息的游标（**时间**，epoch 秒）：把它作为 `beforeTime` 传回服务端即可继续往前翻。
+   *
+   * 为什么是时间而不是 seq：服务端的 `message_seq` 是**随机短 id**（不是单调序号），
+   * 拿它当游标比较是错的（实测 M1 的游标在真实 NapCat 上原地打转）。
+   */
+  nextBeforeTime: number | null;
+  /**
+   * 历史耗尽（真的没有更早的消息了）。
+   *
+   * **不等于**「本次没取满」——没取满可能是预算用尽 / 区间已覆盖 / 锚点失效，
+   * 看 `stopReason` 与 `note`。
    */
   exhausted: boolean;
+  /** 终止原因：count_reached / range_covered / history_exhausted / page_budget_exhausted。 */
+  stopReason?: string;
+  /** 人类可读说明（中文，区分历史耗尽 / 锚点失效 / 翻页预算用尽）。 */
+  note?: string;
 }
 
 /** `napcat_search_messages` 的命中项。 */
@@ -130,8 +141,11 @@ export interface SearchResult {
   hits: SearchHit[];
   scanned: number;
   pages: number;
+  /** 历史耗尽（真的翻到会话最开始）。 */
   exhausted: boolean;
   hitsTruncated: boolean;
+  /** 终止原因：history_exhausted / page_budget_exhausted / hits_limit。 */
+  stopReason?: string;
   note: string;
 }
 
@@ -433,23 +447,20 @@ export const api = {
   /**
    * 拉历史（时间正序）。
    *
-   * `beforeSeq` 传上一页给的 `nextBeforeSeq`；**跨调用要按 seq 去重**
+   * `beforeTime` 传上一页给的 `nextBeforeTime`；**跨调用要按消息 id 去重**
    * （服务端只在单次调用内去重，边界那条可能被重复返回）。
    */
-  getHistory: (chatKind: 'group' | 'friend', chatId: string, beforeSeq?: number, count = PAGE_SIZE) =>
+  getHistory: (chatKind: 'group' | 'friend', chatId: string, beforeTime?: number, count = PAGE_SIZE) =>
     callToolJson<HistoryResult>(
       'napcat_get_history',
-      beforeSeq === undefined
+      beforeTime === undefined
         ? { chatKind, chatId, count }
-        : { chatKind, chatId, beforeSeq, count },
+        : { chatKind, chatId, beforeTime, count },
     ),
 
-  /** 会话内关键词搜索（服务端向更早方向有限扫描）。 */
-  search: (chatKind: 'group' | 'friend', chatId: string, query: string, startSeq?: number) =>
-    callToolJson<SearchResult>(
-      'napcat_search_messages',
-      startSeq === undefined ? { chatKind, chatId, query } : { chatKind, chatId, query, startSeq },
-    ),
+  /** 会话内关键词搜索（服务端从最新往更早有限扫描）。 */
+  search: (chatKind: 'group' | 'friend', chatId: string, query: string) =>
+    callToolJson<SearchResult>('napcat_search_messages', { chatKind, chatId, query }),
 
   /** 把选定消息格式化成注入文本（首行是不可信声明，服务端不改写）。 */
   formatSelection: async (messages: Msg[], chatName: string) => {

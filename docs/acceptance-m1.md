@@ -151,53 +151,55 @@
 - [ ] **5.6** 顶部**常驻**一个「加载更早」按钮（只要还能翻就会显示，不依赖 `IntersectionObserver`）——
       不想靠滚动、或环境里没有 `IntersectionObserver` 时可以直接点它
 - [ ] **5.7** 反复向上滚能持续加载更早的消息；**边界那条不会重复出现**
-      （面板按 `seq` 跨调用去重）
+      （面板按消息 id 跨调用去重）
 - [ ] **5.8** 翻到底时顶部给出中文原因，四选一：
-      - `没有更早的消息了（服务端返回空页）`
-      - `服务端未提供可继续向前翻页的游标（消息缺少 message_seq）`
+      - `没有更早的消息了（服务端返回空页）`（= **历史耗尽**）
+      - `服务端未提供可继续向前翻页的时间游标（本页消息缺少有效时间）`
       - `本轮没有返回新消息（边界重复或已到历史开头）`
-      - `游标没有前进（服务端未接受该游标），无法加载更早的消息`
+      - `时间游标没有前进（服务端未接受该游标），无法加载更早的消息`
+- [ ] **5.8b** 另外两种「翻不动」**不混进上面四选一**，而是各自给说法：
+      **锚点失效** → `历史锚点已失效，可能消息已过期或已被清理：消息<S>不存在`（错误提示）；
+      **翻页预算用尽** → 提示条说明「可能还有更早的消息没取到」，**可以再点一次继续**
 - [ ] **5.9** 底部提示**不会**出现「没有更多了」这类含糊文案
 - [ ] **5.10 渲染上限**：在一个消息数超过 2000 的会话里，顶部出现提示条
       **`仅显示最近 2000 条，导出/搜索可处理更多`**，且只渲染最近 2000 条
 - [ ] **5.11 切换会话**：从会话 A 切到 B → 消息清空并重拉 B；A 的选择被清空；
       底部的 `已选 N 条` 归零
-- [ ] **5.12 `message_seq` 边界语义（自动化覆盖不了，必须实机确认）** —— 记下 NapCat 版本号，
-      并确认下面几件事（**两条路径的约定不一样，别混**）：
+- [ ] **5.12 NapCat 真实语义（2026-11-21 实测结论 + 验收项）**
+      —— 下面是**已实测的结论**（活体 NapCat v4.18.42 / QQNT 9.9.31-49738 / 账号 2350355494），
+      不是待办。插件的翻页模型已按它重做（`npm run verify:live` 每次都按这九条逐条断言）。
 
-  **A. 面板翻页路径（`napcat_get_history`）**
-  - 向上翻页时**边界那条会不会重复返回**（插件按「独占」语义下发游标，面板再按 `seq` 跨调用去重；
-    若 NapCat 实际是「包含」语义，去重后用户侧看不到重复，但原始工具返回里会有重复）
-  - 翻到历史开头时 `napcat_get_history` 的 `nextBeforeSeq` 是不是仍非空
-  - `count` 会不会被服务端钳制（实际返回条数 < 请求的 `count`）
+  **实测结论**
 
-  **B. 导出现拉路径（`napcat_export` → `fetchMessagesBetween`）—— 游标约定不同**
-  - 这条路径下发的是 **`message_seq = cursor + 1`**（`actions.ts` 的 `fetchMessagesBetween`）。
-    按插件假定的「**独占**」语义（服务端返回 seq < message_seq），这等于请求
-    「seq ≤ cursor」的一页，**边界含在内**；随后按 `fromSeq ≤ seq ≤ toSeq` 过滤，
-    区间两端**都是闭区间**
-  - 实测确认：用 `fromSeq` / `toSeq` 精确取一条已知消息 → 导出结果里**该条在**（闭区间成立）
-  - 实测确认：把 `toSeq` 设成某条消息的 seq → 该条**在**导出里（不是被排除）
-  - **若 NapCat 实际是「包含」语义**（服务端返回 seq ≤ message_seq）：这条路径会多取到
-    `cursor + 1` 那一条，但区间过滤会把它剔掉 → **导出的区间内容仍然正确**；
-    真正的风险是**触底附近**：「游标没有前进」的探测可能误判，
-    导致导出**响亮失败**（`history pagination made no progress at cursor N; …`）而不是干净地完成。
-    → 实测确认：导出一个**一直拉到历史开头**的区间，要么成功、要么响亮报错，
-    **不能静默少一条边界消息**
-  - 两处口径差异的根源：面板路径下发 `message_seq = cursor`（独占语义下不含边界），
-    导出现拉路径下发 `message_seq = cursor + 1`（独占语义下含边界）——
-    **不要用其中一条的观察去推断另一条**
+  | 事实 | 含义 |
+  |---|---|
+  | `message_seq` 是**随机 32 位短 id**（=== `message_id` === `real_id`），不是单调序号 | 不能当游标、不能比大小；只能当**锚点**（「从这条开始」） |
+  | `real_seq` 是**会话内单调递增**序号（每会话独立计数；NapCat 发成**字符串**） | 同秒内多条消息的定序键；排序键 = `time` → `real_seq` → 服务端顺序 |
+  | 不带 `message_seq` → 返回**最新** count 条，时间升序（`reverse_order` 被忽略） | 首屏取最新一页 |
+  | `message_seq=S` → 从 S **向更新**取 count 条，**含 S**（S 在最前） | 锚点含在返回里 → 跨页要按短 id 去重 |
+  | `message_seq=S` + `reverse_order=true` → 从 S **向更早**取 count 条，**含 S**（S 在最后） | **往更早翻必须带 `reverse_order`**，否则返回同一页 |
+  | `message_seq=S`（S 不存在）→ **报错**「消息S不存在」 | 锚点失效 ≠ 历史耗尽，必须报可读错误 |
+  | `count` 守约（受实际存量限制） | 请求 3 → 返 3；请求 100 → 返 ≤100 |
+  | `real_seq` 当 `message_seq` 传 → **查不到** | 锚点只能用短 id |
+  | OB11 `record`（语音）段**不带时长**（只有 `file`/`path`/`url`/`file_size`） | 插件不编造也不推断时长 |
 
-  **C. 语音时长字段名**
-  - 找一条**语音**消息，看 `napcat_get_history` 返回的 `segments` 里 `kind:"voice"` 的
-    `duration` 是不是合理值（不是 `NaN`、不是巨大数值）
-  - 插件依次尝试 `seconds` / `duration` / `time` 三个字段名（`model/message.ts` 的 `normalizeSegment`），
-    **真实 NapCat 用的是哪一个待实测**
-  - 若三个候选字段名**都取不到**：`duration` 键在序列化结果里**直接不存在**
-    （`JSON.stringify` 会丢掉值为 `undefined` 的键，不会变成字符串 `"undefined"`），
-    且面板**从不展示时长** —— 只渲染 `[语音]` 占位符（`duration` 在 `src/panel/` 里根本没被引用）
+  **验收项（人工复核）**
 
-  → 结论记到 §13；这些是 M1 收尾计划里明确要实测确认的语义点。
+  - [ ] **5.12.1** `napcat_get_history` 取 `count=5`（最新 5 条）→ 记下返回里的 `nextBeforeTime`
+  - [ ] **5.12.2** 再调一次并带上 `beforeTime = nextBeforeTime` → 取到的 5 条**全部更早**，
+        且与前一页**无重叠**（比较两页的 `time`）
+  - [ ] **5.12.3** 反复调用 `beforeTime` 一直往前翻 → 一直到某次返回**空页**为止；
+        面板顶部提示「没有更早的消息了（服务端返回空页）」（= 历史耗尽）
+  - [ ] **5.12.4** 翻页途中若服务端报「消息<S>不存在」→ 面板提示
+        「历史锚点已失效，可能消息已过期或已被清理：…」（**不是**「没有更多了」）
+  - [ ] **5.12.5** `napcat_get_history` 带 `fromTime` / `toTime` → 返回的每条 `time` 都落在闭区间内
+  - [ ] **5.12.6** `napcat_export` 现拉一个时间段 → 导出条数与该区间内的真实消息数一致
+  - [ ] **5.12.7** `napcat_search_messages` 在消息多的群里能命中**首页之外**的关键词
+        （返回里的 `pages > 1`）
+  - [ ] **5.12.8** 语音消息的 `segments` 里 `kind:"voice"` **没有** `duration` 键
+        （实测 NapCat 的 record 段不带时长；插件不编造）
+
+  → 结论记到 §14；这些结论已写进 spec §5.3.1 与 README「NapCat 真实语义（实测）」。
 
 ---
 
@@ -359,12 +361,13 @@
 - [ ] **11.2 `napcat_list_chats`** —— `{kind:"group"}` → `{chats:[{kind,id,name,memberCount?}]}`；
       `{kind:"friend"}` 同理；`id` 是字符串
 - [ ] **11.3 `napcat_get_history`** —— `{chatKind:"group", chatId:"<群号>", count:100}` →
-      `{messages, nextBeforeSeq, exhausted}`，时间正序；
+      `{messages, nextBeforeTime, exhausted, stopReason, note}`，时间正序；
       `chatId` **传数字**也要能用
-- [ ] **11.4 `napcat_get_history` 翻页** —— 把上一步的 `nextBeforeSeq` 作为 `beforeSeq` 再调 →
-      拿到更早的一段；窗口不满时 `exhausted` 为 `true`
+- [ ] **11.4 `napcat_get_history` 翻页** —— 把上一步的 `nextBeforeTime` 作为 `beforeTime` 再调 →
+      拿到**更早**的一段（且与上一页无重叠）；`exhausted` 为 `true` 表示**历史耗尽**
+      （真的没有更早的消息了），不是「没取满」
 - [ ] **11.5 `napcat_search_messages`** —— `{chatKind:"group", chatId:"<群号>", query:"<正文中出现过的词>"}` →
-      `{hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}`；
+      `{hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}`；
       `note` 里明确说明这是**有限扫描**
 - [ ] **11.6 `napcat_format_selection`** —— `{messages: <上一步 messages>, chatName:"测试群"}` →
       `{text, count, truncated}`；`text` 首行是 §10 的声明；`count` 是实际渲染的条数
@@ -372,19 +375,19 @@
       messages: <消息数组>}` → `{mdPath, jsonPath, gitignoreUpdated}`；
       两个路径真实存在，`gitignoreUpdated` 是布尔
 - [ ] **11.8 `napcat_export` 现拉模式** —— 不传 `messages`，改传
-      `{chat, chatKind:"group", chatId:"<群号>", fromSeq:<小 seq>, toSeq:<大 seq>}` → 导出该区间；
-      `fromSeq > toSeq` → 报错；`chat` 与 `chatKind/chatId` 不一致 → 报错
-- [ ] **11.8.1 现拉模式的区间是闭区间** —— 用**一条已知消息的 seq** 同时当 `fromSeq` 与 `toSeq`
+      `{chat, chatKind:"group", chatId:"<群号>", fromTime:<早>, toTime:<晚>}` → 导出该时间区间；
+      `fromTime > toTime` → 报错；`chat` 与 `chatKind/chatId` 不一致 → 报错
+- [ ] **11.8.1 现拉模式的区间是闭区间** —— 用**一条已知消息的时间**同时当 `fromTime` 与 `toTime`
       → 导出的 `.json` 里**有且只有这一条**（区间两端都含）
-- [ ] **11.8.2 现拉模式是「响亮失败」** —— 把 `toSeq` 设成一个 NapCat 不认的 seq，
-      或让区间跨到没有 `message_seq` 的页 → 返回 `isError: true` + `{error}`，
-      错误文案形如 `history pagination made no progress at cursor N; the server ignored message_seq` /
-      `history pagination exceeded page limit (1000)`；
+- [ ] **11.8.2 现拉模式是「响亮失败」** —— 让区间跨到服务端查不到锚点（消息已被清理），
+      或让区间大到翻页预算用尽 → 返回 `isError: true` + `{error}`，
+      错误文案形如 `历史锚点已失效，可能消息已过期或已被清理：消息<S>不存在` /
+      `history pagination exceeded page limit (1000); the requested time range may be incomplete`；
       **不会**静默写出一份「看着像成功、其实是残缺区间」的导出
-      （对比：`napcat_get_history` 取不满是**正常返回**，靠 `exhausted` 表达，不是错误）
-- [ ] **11.8.3 拉到历史开头的区间** —— 用一个很小的 `fromSeq`（早于该会话最早的消息）导出 →
+      （对比：`napcat_get_history` 取不满是**正常返回**，靠 `exhausted` / `stopReason` 表达，不是错误）
+- [ ] **11.8.3 拉到历史开头的区间** —— 用一个很早的 `fromTime`（早于该会话最早的消息）导出 →
       要么成功导出一份完整区间，要么**响亮报错**；
-      **不能**静默少掉第一条（这条是 §5.12-B 的实测落点）
+      **不能**静默少掉第一条
 - [ ] **11.9 `napcat_get_config`** —— 无入参 → 返回当前配置；
       **token 设了时显示为 `***`、未设置时是空串**，
       端点是脱敏形态（去掉 query 与 userinfo）

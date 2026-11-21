@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeMessage, segmentsText } from '../src/server/model/message.js';
+import {
+  compareMessages,
+  messageDedupKey,
+  messageShortId,
+  normalizeMessage,
+  segmentsText,
+  sortMessages,
+} from '../src/server/model/message.js';
 import type { OB11Message } from '../src/server/onebot/types.js';
 
 describe('normalizeMessage', () => {
@@ -241,7 +248,7 @@ describe('normalizeMessage', () => {
         { type: 'image', data: { file: 'i.png', width: '0', height: 'abc' } },
         { type: 'record', data: { file: 'a.amr', duration: '5' } },
         { type: 'record', data: { file: 'b.amr', seconds: '3' } },
-        { type: 'record', data: { file: 'c.amr', time: '7' } },
+        { type: 'record', data: { file: 'c.amr', time: '1700000000' } },
         { type: 'file', data: { name: 'r.pdf', size: '1024' } },
       ],
     };
@@ -249,7 +256,8 @@ describe('normalizeMessage', () => {
     expect(m.segments[0]).toEqual({ kind: 'image', fileId: 'i.png', width: 0, height: undefined });
     expect(m.segments[1]).toEqual({ kind: 'voice', duration: 5 });
     expect(m.segments[2]).toEqual({ kind: 'voice', duration: 3 });
-    expect(m.segments[3]).toEqual({ kind: 'voice', duration: 7 });
+    // `time` **不是**时长字段（实测 NapCat 的 record 段根本不带时长）→ 不编造、不推断
+    expect(m.segments[3]).toEqual({ kind: 'voice', duration: undefined });
     expect(m.segments[4]).toEqual({ kind: 'file', fileName: 'r.pdf', size: 1024 });
   });
 
@@ -297,25 +305,24 @@ describe('normalizeMessage', () => {
     expect(noTime.time).toBeUndefined();
   });
 
-  // M1.1-4：record 段的 `time` 字段可能装的是**绝对时间戳**（epoch 秒），
-  // 那样算出来的「时长」是几百万秒 —— 一眼假的数字。
-  it('only treats a record time below one hour as a duration', () => {
+  // M1.2（2026-11-21 实测）：NapCat 的 OB11 `record` 段只有 file/path/url/file_size，
+  // **根本不带时长** → 插件不编造也不推断时长（`time` 更不能当时长：它是绝对时间戳）。
+  it('never infers a voice duration from a record time field', () => {
     const base = {
       message_id: 16,
       message_seq: 79,
       time: 1700000012,
       sender: { user_id: 16, nickname: 'Paul' },
     };
-    const short = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '7' } }] });
-    expect(short.segments[0]).toEqual({ kind: 'voice', duration: 7 });
-
-    const exactly = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '3600' } }] });
-    expect(exactly.segments[0]).toEqual({ kind: 'voice', duration: undefined });
-
+    // `time` 是绝对时间戳（epoch 秒）→ 绝不能被当成「7 秒的语音」
     const timestamp = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '1700000000' } }] });
     expect(timestamp.segments[0]).toEqual({ kind: 'voice', duration: undefined });
 
-    // seconds / duration 是明确的时长字段名 → 不受这个上限影响
+    // 即使看起来像个时长（7 < 一小时），也不推断 —— 没有明确的时长字段就是没有时长
+    const short = normalizeMessage({ ...base, message: [{ type: 'record', data: { time: '7' } }] });
+    expect(short.segments[0]).toEqual({ kind: 'voice', duration: undefined });
+
+    // seconds / duration 是**明确的**时长字段名 → 照收
     const explicit = normalizeMessage({ ...base, message: [{ type: 'record', data: { seconds: '7200' } }] });
     expect(explicit.segments[0]).toEqual({ kind: 'voice', duration: 7200 });
   });
@@ -342,5 +349,61 @@ describe('normalizeMessage', () => {
       message: 'AT&amp;T &#91;括号&#93; &#44;',
     });
     expect(asCq.text).toBe(asSegments.text);
+  });
+});
+
+// —— M1.2：排序键与去重键（按真实 NapCat 语义重做）——
+describe('排序与去重键（真实语义）', () => {
+  const msg = (over: Partial<OB11Message>): OB11Message => ({
+    message_id: 1,
+    message_seq: 100,
+    real_id: 100,
+    time: 1700000000,
+    sender: { user_id: 1, nickname: 'u' },
+    message: [{ type: 'text', data: { text: 'x' } }],
+    ...over,
+  });
+
+  it('排序键：time 升序 → 同秒用 real_seq 升序', () => {
+    const list = [
+      msg({ message_seq: 3, real_seq: 3, time: 1700000002 }),
+      msg({ message_seq: 2, real_seq: 2, time: 1700000001 }),
+      msg({ message_seq: 9, real_seq: 9, time: 1700000001 }), // 与上一条同秒
+    ];
+    const sorted = sortMessages(list);
+    // 同秒内按 real_seq 升序（不是 message_seq —— 那是随机短 id）
+    expect(sorted.map((m) => m.real_seq)).toEqual([2, 9, 3]);
+  });
+
+  it('排序键：real_seq 也相同 → 保持服务端顺序（稳定排序）', () => {
+    const a = msg({ message_seq: 1, real_seq: 5, time: 1700000000 });
+    const b = msg({ message_seq: 2, real_seq: 5, time: 1700000000 });
+    const c = msg({ message_seq: 3, real_seq: 5, time: 1700000000 });
+    expect(sortMessages([a, b, c]).map((m) => m.message_seq)).toEqual([1, 2, 3]);
+    expect(compareMessages(a, b)).toBe(0);
+  });
+
+  it('排序键：没有有效时间的排在最后（排不进时间轴）', () => {
+    const withTime = msg({ message_seq: 1, time: 1700000000 });
+    const noTime = msg({ message_seq: 2, time: undefined });
+    expect(sortMessages([noTime, withTime]).map((m) => m.message_seq)).toEqual([1, 2]);
+  });
+
+  it('去重键：message_seq → message_id → real_id', () => {
+    expect(messageDedupKey(msg({ message_seq: 7, message_id: 9, real_id: 11 }))).toBe('s7');
+    expect(messageDedupKey(msg({ message_seq: undefined, message_id: 9, real_id: 11 }))).toBe('i9');
+    expect(messageDedupKey(msg({ message_seq: undefined, message_id: undefined, real_id: 11 }))).toBe('i11');
+    expect(messageDedupKey(msg({ message_seq: undefined, message_id: undefined, real_id: undefined }))).toBeUndefined();
+  });
+
+  it('锚点短 id 只认 message_seq（real_seq 查不到）', () => {
+    expect(messageShortId(msg({ message_seq: 7 }))).toBe('7');
+    expect(messageShortId(msg({ message_seq: undefined, message_id: 9 }))).toBeUndefined();
+  });
+
+  it('normalizeMessage 带上 realSeq（同秒内的定序键）', () => {
+    const m = normalizeMessage(msg({ message_seq: 7, real_seq: 42, time: 1700000000 }));
+    expect(m.realSeq).toBe(42);
+    expect(m.seq).toBe(7); // seq 仍是短 id（不是序号）
   });
 });
