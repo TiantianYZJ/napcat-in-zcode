@@ -21576,90 +21576,6 @@ var OneBotError = class extends Error {
   }
 };
 
-// src/server/onebot/actions.ts
-var MAX_PAGES = 1e3;
-async function getLoginInfo(c) {
-  const data = await c.call("get_login_info");
-  if (!data) throw new OneBotError(-1, "get_login_info returned no data");
-  return data;
-}
-async function getGroupList(c) {
-  const data = await c.call("get_group_list");
-  if (Array.isArray(data)) return data;
-  return data?.groups ?? [];
-}
-async function getFriendList(c) {
-  const data = await c.call("get_friend_list");
-  if (Array.isArray(data)) return data;
-  return data?.friends ?? [];
-}
-async function fetchHistoryPage(c, kind, id, beforeSeq, count = 50) {
-  if (!Number.isFinite(count) || count <= 0) {
-    throw new OneBotError(-1, `invalid count: ${count}`);
-  }
-  const params = count !== void 0 ? { count } : {};
-  if (kind === "group") {
-    params.group_id = id;
-    if (beforeSeq !== void 0) params.message_seq = String(beforeSeq);
-    const data2 = await c.call("get_group_msg_history", params);
-    return data2?.messages ?? [];
-  }
-  params.user_id = id;
-  if (beforeSeq !== void 0) params.message_seq = String(beforeSeq);
-  const data = await c.call("get_friend_msg_history", params);
-  return data?.messages ?? [];
-}
-async function fetchMessagesBetween(c, kind, id, fromSeq, toSeq, pageSize = 100) {
-  const bySeq = /* @__PURE__ */ new Map();
-  let cursor = toSeq;
-  let pages = 0;
-  let failure;
-  for (; pages < MAX_PAGES; pages++) {
-    const prevCursor = cursor;
-    const msgs = await fetchHistoryPage(c, kind, id, cursor + 1, pageSize);
-    if (msgs.length === 0) break;
-    for (const m of msgs) {
-      const s = m.message_seq;
-      if (s === void 0) continue;
-      if (s >= fromSeq && s <= toSeq && !bySeq.has(s)) bySeq.set(s, m);
-    }
-    const seqs = msgs.map((m) => m.message_seq).filter((s) => s !== void 0);
-    if (seqs.length === 0) {
-      failure = "history page contained no message_seq values; cannot advance cursor";
-      break;
-    }
-    const minSeq = Math.min(...seqs);
-    if (minSeq <= fromSeq) break;
-    if (minSeq >= prevCursor) {
-      const probe = await fetchHistoryPage(c, kind, id, minSeq, pageSize);
-      const probeSeqs = probe.map((m) => m.message_seq).filter((s) => s !== void 0);
-      if (probeSeqs.some((s) => s < minSeq)) {
-        failure = `history pagination made no progress at cursor ${prevCursor}; earlier history exists but the cursor cannot advance`;
-        break;
-      }
-      if (probeSeqs.some((s) => s > minSeq)) {
-        failure = `history pagination made no progress at cursor ${prevCursor}; the server ignored message_seq`;
-        break;
-      }
-      if (probe.length === 0) break;
-      if (probeSeqs.length === 0) {
-        failure = `history probe at cursor ${prevCursor} returned no message_seq values; cannot verify whether history is exhausted`;
-        break;
-      }
-      const deeper = await fetchHistoryPage(c, kind, id, minSeq - 1, pageSize);
-      if (deeper.length === 0) break;
-      failure = `history pagination made no progress at cursor ${prevCursor}; earlier history exists but the cursor cannot advance`;
-      break;
-    }
-    cursor = minSeq;
-  }
-  if (failure) throw new OneBotError(-1, failure);
-  if (pages >= MAX_PAGES) {
-    throw new OneBotError(-1, `history pagination exceeded page limit (${MAX_PAGES})`);
-  }
-  return [...bySeq.values()].sort((a, b) => (a.message_seq ?? 0) - (b.message_seq ?? 0));
-}
-
 // src/server/model/message.ts
 var PLACEHOLDERS = {
   image: "[\u56FE\u7247]",
@@ -21701,10 +21617,36 @@ function toNum(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : void 0;
 }
-var MAX_DURATION_SECONDS = 3600;
-function durationFromTime(v) {
-  const t = toNum(v);
-  return t !== void 0 && t < MAX_DURATION_SECONDS ? t : void 0;
+function compareMessages(a, b) {
+  const ta = toNum(a.time);
+  const tb = toNum(b.time);
+  if (ta !== tb) {
+    if (ta === void 0) return 1;
+    if (tb === void 0) return -1;
+    return ta - tb;
+  }
+  const ra = toNum(a.real_seq);
+  const rb = toNum(b.real_seq);
+  if (ra !== rb) {
+    if (ra === void 0) return 1;
+    if (rb === void 0) return -1;
+    return ra - rb;
+  }
+  return 0;
+}
+function sortMessages(messages) {
+  return [...messages].sort(compareMessages);
+}
+function messageDedupKey(m) {
+  const seq = toNum(m.message_seq);
+  if (seq !== void 0) return `s${seq}`;
+  const id = toNum(m.message_id) ?? toNum(m.real_id);
+  if (id !== void 0) return `i${id}`;
+  return void 0;
+}
+function messageShortId(m) {
+  const seq = toNum(m.message_seq);
+  return seq === void 0 ? void 0 : String(seq);
 }
 function normalizeSegment(seg) {
   const d = seg.data ?? {};
@@ -21722,9 +21664,10 @@ function normalizeSegment(seg) {
       return { kind: "reply", messageId: String(d.id ?? "") };
     case "image":
       return { kind: "image", url: d.url ? String(d.url) : void 0, fileId: d.file ? String(d.file) : void 0, width: toNum(d.width), height: toNum(d.height) };
-    // 语音时长字段名各实现不一（seconds/duration/time），三种都吃；真实字段名待 NapCat 实测确认。
+    // 时长只认**明确的时长字段名**（seconds / duration）。
+    // 实测 NapCat 的 record 段**不带任何时长字段** → duration 会是 undefined（不编造）。
     case "record":
-      return { kind: "voice", url: d.url ? String(d.url) : void 0, duration: toNum(d.seconds) ?? toNum(d.duration) ?? durationFromTime(d.time) };
+      return { kind: "voice", url: d.url ? String(d.url) : void 0, duration: toNum(d.seconds) ?? toNum(d.duration) };
     case "video":
       return { kind: "video", url: d.url ? String(d.url) : void 0, fileName: d.file ? String(d.file) : void 0 };
     case "file":
@@ -21776,16 +21719,26 @@ function normalizeMessage(raw) {
   return {
     id: String(raw.message_id ?? raw.real_id ?? raw.message_seq ?? ""),
     /**
-     * `seq` **只**是 `message_seq`（spec §5.4：`seq: number; // message_seq 游标`）。
+     * `seq` **只**是 `message_seq`（spec §5.4）。
+     *
+     * 注意：实测（2026-11-21）`message_seq` 是**随机 32 位短 id**（=== `message_id` === `real_id`），
+     * **不是**单调游标 —— 它只能当**锚点**（「从这条开始」），不能拿来做大小比较、
+     * 不能 `cursor + 1`。会话内单调递增的是 `real_seq`（见 `realSeq`）。
      *
      * 以前缺 `message_seq` 时会回退成 `message_id` —— 两个不同的编号空间混在一个字段里，
      * 导致「按 seq 去重」可能把两条不同的消息判成同一条（面板与服务端的去重键因此不一致）。
-     * 没有 `message_seq` 就是没有游标：`seq = 0`，去重改用消息 id（`i` 前缀）。
+     * 没有 `message_seq` 就是没有锚点：`seq = 0`，去重改用消息 id（`i` 前缀）。
      *
      * 取值走 `toNum`：`message_seq` 是非数值字符串时**不能**得到 `NaN`
-     * （`NaN` 会一路传染到排序、游标比较与去重键），按「没有游标」处理（0）。
+     * （`NaN` 会一路传染到排序、游标比较与去重键），按「没有锚点」处理（0）。
      */
     seq: toNum(raw.message_seq) ?? 0,
+    /**
+     * `real_seq`：会话内单调递增的序号 —— **同一秒内多条消息的定序键**。
+     *
+     * 缺失 = 上游没给（不是 0）。排序口径见 `compareMessages`：`time` → `real_seq` → 服务端顺序。
+     */
+    realSeq: toNum(raw.real_seq),
     /**
      * `time` 走 `toNum`：缺失或非数值 → `undefined`（**没有有效时间**），
      * 不用 0 兜底（0 是 1970-01-01，是看起来正常的错误时间戳）。
@@ -21800,6 +21753,210 @@ function normalizeMessage(raw) {
     // 取不到原文时用 '[引用]' 占位；调用方拿到 messageId 后可再调 get_msg 补正文。
     replyTo: replySeg ? { messageId: replySeg.messageId, preview: "[\u5F15\u7528]" } : void 0
   };
+}
+
+// src/server/onebot/actions.ts
+var MAX_PAGES = 1e3;
+async function getLoginInfo(c) {
+  const data = await c.call("get_login_info");
+  if (!data) throw new OneBotError(-1, "get_login_info returned no data");
+  return data;
+}
+async function getGroupList(c) {
+  const data = await c.call("get_group_list");
+  if (Array.isArray(data)) return data;
+  return data?.groups ?? [];
+}
+async function getFriendList(c) {
+  const data = await c.call("get_friend_list");
+  if (Array.isArray(data)) return data;
+  return data?.friends ?? [];
+}
+function isAnchorInvalidError(e) {
+  return e instanceof OneBotError && e.message.includes("\u4E0D\u5B58\u5728");
+}
+function translateAnchorError(e) {
+  if (!isAnchorInvalidError(e)) return e;
+  const err = e;
+  return new OneBotError(
+    err.retcode,
+    `\u5386\u53F2\u951A\u70B9\u5DF2\u5931\u6548\uFF0C\u53EF\u80FD\u6D88\u606F\u5DF2\u8FC7\u671F\u6216\u5DF2\u88AB\u6E05\u7406\uFF1A${err.message}`
+  );
+}
+async function fetchHistoryPage(c, kind, id, opts = {}) {
+  const count = opts.count ?? 50;
+  if (!Number.isFinite(count) || count <= 0) {
+    throw new OneBotError(-1, `invalid count: ${count}`);
+  }
+  const params = { count };
+  if (kind === "group") params.group_id = id;
+  else params.user_id = id;
+  if (opts.anchor !== void 0) params.message_seq = opts.anchor.shortId;
+  if (opts.backward === true) params.reverse_order = true;
+  const action = kind === "group" ? "get_group_msg_history" : "get_friend_msg_history";
+  let data;
+  try {
+    data = await c.call(action, params);
+  } catch (e) {
+    throw translateAnchorError(e);
+  }
+  return data?.messages ?? [];
+}
+function timeOf(m) {
+  const t = m.time;
+  if (t === null || t === void 0 || t === "") return void 0;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : void 0;
+}
+function inTimeRange(m, fromTime, toTime) {
+  const t = timeOf(m);
+  if (t === void 0) return true;
+  if (fromTime !== void 0 && t < fromTime) return false;
+  if (toTime !== void 0 && t > toTime) return false;
+  return true;
+}
+function timeRange(list) {
+  let minTime;
+  let maxTime;
+  for (const m of list) {
+    const t = timeOf(m);
+    if (t === void 0) continue;
+    if (minTime === void 0 || t < minTime) minTime = t;
+    if (maxTime === void 0 || t > maxTime) maxTime = t;
+  }
+  return { minTime, maxTime };
+}
+function firstAnchored(list) {
+  for (const m of list) {
+    if (messageShortId(m) !== void 0) return m;
+  }
+  return void 0;
+}
+function toScanOrder(batches) {
+  const out = [];
+  for (const batch of batches) {
+    for (let i = batch.length - 1; i >= 0; i--) out.push(batch[i]);
+  }
+  return out;
+}
+async function scanHistoryBackwards(c, kind, id, opts = {}) {
+  const pageSize = Math.max(2, opts.pageSize ?? 100);
+  const maxPages = opts.maxPages ?? MAX_PAGES;
+  if (!Number.isFinite(pageSize) || pageSize <= 0) {
+    throw new OneBotError(-1, `invalid pageSize: ${pageSize}`);
+  }
+  if (!Number.isFinite(maxPages) || maxPages <= 0) {
+    throw new OneBotError(-1, `invalid maxPages: ${maxPages}`);
+  }
+  if (opts.count !== void 0 && (!Number.isFinite(opts.count) || opts.count <= 0)) {
+    throw new OneBotError(-1, `invalid count: ${opts.count}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const batches = [];
+  let anchor;
+  let prevAnchorId;
+  let prevAnchorTime;
+  let pages = 0;
+  let exhausted = false;
+  let rangeCovered = false;
+  let budgetExhausted = false;
+  let stoppedEarly = false;
+  let collected = 0;
+  for (; ; ) {
+    if (pages >= maxPages) {
+      budgetExhausted = true;
+      break;
+    }
+    const page = await fetchHistoryPage(c, kind, id, {
+      anchor,
+      count: pageSize,
+      backward: anchor !== void 0
+    });
+    pages++;
+    if (page.length === 0) {
+      exhausted = true;
+      break;
+    }
+    const sorted = sortMessages(page);
+    const { minTime, maxTime } = timeRange(sorted);
+    const anchorMsg = firstAnchored(sorted);
+    const anchorId = anchorMsg === void 0 ? void 0 : messageShortId(anchorMsg);
+    const anchorTime = anchorMsg === void 0 ? void 0 : timeOf(anchorMsg);
+    if (anchorId === void 0) {
+      throw new OneBotError(
+        -1,
+        "history page contained no message_seq values; cannot locate an anchor to page further back"
+      );
+    }
+    const fresh = [];
+    let newKeyed = 0;
+    for (const m of sorted) {
+      const key = messageDedupKey(m);
+      if (key !== void 0) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        newKeyed++;
+      }
+      if (!inTimeRange(m, opts.fromTime, opts.toTime)) continue;
+      fresh.push(m);
+    }
+    if (fresh.length > 0) {
+      batches.push(fresh);
+      collected += fresh.length;
+    }
+    if (opts.fromTime !== void 0 && minTime !== void 0 && minTime < opts.fromTime) {
+      rangeCovered = true;
+      break;
+    }
+    if (opts.count !== void 0 && collected >= opts.count) break;
+    if (anchor !== void 0) {
+      const wentForward = maxTime !== void 0 && prevAnchorTime !== void 0 && maxTime > prevAnchorTime;
+      if (wentForward) {
+        throw new OneBotError(
+          -1,
+          `history pagination made no progress at anchor ${prevAnchorId}: the server returned newer messages instead of older ones (reverse_order may be ignored)`
+        );
+      }
+    }
+    if (newKeyed === 0) {
+      exhausted = true;
+      break;
+    }
+    anchor = { shortId: anchorId };
+    prevAnchorId = anchorId;
+    prevAnchorTime = anchorTime;
+    if (opts.shouldStop && opts.shouldStop(fresh)) {
+      stoppedEarly = true;
+      break;
+    }
+  }
+  const scanOrderAll = toScanOrder(batches);
+  const scanOrder = opts.count !== void 0 && scanOrderAll.length > opts.count ? scanOrderAll.slice(0, opts.count) : scanOrderAll;
+  const oldestFirst = scanOrder.slice().reverse();
+  return {
+    messages: sortMessages(oldestFirst),
+    scanOrder,
+    pages,
+    exhausted,
+    rangeCovered,
+    budgetExhausted,
+    stoppedEarly
+  };
+}
+async function fetchMessagesBetween(c, kind, id, range, opts = {}) {
+  const scan = await scanHistoryBackwards(c, kind, id, {
+    fromTime: range.fromTime,
+    toTime: range.toTime,
+    pageSize: opts.pageSize,
+    maxPages: MAX_PAGES
+  });
+  if (scan.budgetExhausted) {
+    throw new OneBotError(
+      -1,
+      `history pagination exceeded page limit (${MAX_PAGES}); the requested time range may be incomplete`
+    );
+  }
+  return { messages: scan.messages, pages: scan.pages, exhausted: scan.exhausted };
 }
 
 // src/server/model/notice.ts
@@ -23438,6 +23595,20 @@ function entryIsDir(entry, fullPath) {
   }
   return false;
 }
+function scanOfficialLayoutConfig(root) {
+  const onebot = [];
+  const webui = [];
+  const configDir = join3(root, "napcat", "config");
+  const entries = safeReaddir(configDir);
+  if (!entries) return { onebot, webui };
+  for (const entry of entries) {
+    if (entry.isDirectory()) continue;
+    const full = join3(configDir, entry.name);
+    if (ONEBOT_CONFIG_RE.test(entry.name)) onebot.push({ path: full, dir: configDir, depth: 3 });
+    else if (WEBUI_CONFIG_RE.test(entry.name)) webui.push({ path: full, dir: configDir, depth: 3 });
+  }
+  return { onebot, webui };
+}
 function scanRoot(root) {
   const onebot = [];
   const webui = [];
@@ -23458,6 +23629,9 @@ function scanRoot(root) {
     }
   };
   visit(root, level1, 1);
+  const official = scanOfficialLayoutConfig(root);
+  onebot.push(...official.onebot);
+  webui.push(...official.webui);
   const byDepthThenPath = (a, b) => a.depth - b.depth || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   onebot.sort(byDepthThenPath);
   webui.sort(byDepthThenPath);
@@ -24003,6 +24177,7 @@ function detectLocalOnce(state, opts = {}) {
 // src/server/tools.ts
 var MAX_PAGES2 = 40;
 var MAX_COUNT = 200;
+var DEFAULT_COUNT = 50;
 var SEARCH_PAGE_SIZE = 100;
 var SEARCH_DEFAULT_MAX_PAGES = 20;
 var SEARCH_MAX_PAGES = 100;
@@ -24017,58 +24192,54 @@ function fail(state, e) {
     isError: true
   };
 }
-function rawSeqOf(raw) {
-  const s = raw.message_seq;
-  return typeof s === "number" && Number.isFinite(s) ? s : void 0;
-}
-function dedupKey(raw) {
-  const seq = rawSeqOf(raw);
-  if (seq !== void 0) return `s${seq}`;
-  const id = raw.message_id ?? raw.real_id;
-  if (typeof id === "number" && Number.isFinite(id)) return `i${id}`;
-  return void 0;
-}
-async function fetchHistory(client, chatKind, chatId, beforeSeq, want, since, until) {
-  const out = [];
-  const outSeqs = [];
-  const seen = /* @__PURE__ */ new Set();
-  let cursor = beforeSeq;
-  let exhausted = false;
-  for (let guard = 0; guard < MAX_PAGES2 && out.length < want; guard++) {
-    const page = await fetchHistoryPage(client, chatKind, chatId, cursor, want);
-    if (page.length === 0) {
-      break;
-    }
-    const norm = page.map((raw) => ({ raw, msg: normalizeMessage(raw) })).sort((a, b) => a.msg.seq - b.msg.seq);
-    let belowSince = false;
-    for (const item of [...norm].reverse()) {
-      const key = dedupKey(item.raw);
-      if (key !== void 0) {
-        if (seen.has(key)) continue;
-        seen.add(key);
-      }
-      if (until !== void 0 && item.msg.time !== void 0 && item.msg.time > until) continue;
-      if (since !== void 0 && item.msg.time !== void 0 && item.msg.time < since) {
-        belowSince = true;
-        continue;
-      }
-      if (out.length < want) {
-        out.push(item.msg);
-        const rawSeq = rawSeqOf(item.raw);
-        if (rawSeq !== void 0) outSeqs.push(rawSeq);
-      }
-    }
-    if (belowSince) break;
-    const pageSeqs = norm.map((x) => rawSeqOf(x.raw)).filter((s) => s !== void 0);
-    if (pageSeqs.length === 0) break;
-    const minSeq = Math.min(...pageSeqs);
-    if (cursor !== void 0 && minSeq >= cursor) break;
-    cursor = minSeq;
+function earliestTimeOf(messages) {
+  let min;
+  for (const m of messages) {
+    if (m.time === void 0 || !Number.isFinite(m.time)) continue;
+    if (min === void 0 || m.time < min) min = m.time;
   }
-  if (out.length < want) exhausted = true;
-  out.sort((a, b) => a.seq - b.seq);
-  const nextBeforeSeq = outSeqs.length > 0 ? Math.min(...outSeqs) : null;
-  return { messages: out, nextBeforeSeq, exhausted };
+  return min;
+}
+async function fetchHistory(client, chatKind, chatId, opts) {
+  let lo = opts.fromTime;
+  let hi = opts.toTime;
+  if (opts.beforeTime !== void 0) {
+    const exclusive = opts.beforeTime - 1;
+    hi = hi === void 0 ? exclusive : Math.min(hi, exclusive);
+  }
+  const scan = await scanHistoryBackwards(client, chatKind, chatId, {
+    count: opts.count,
+    fromTime: lo,
+    toTime: hi,
+    pageSize: opts.count,
+    maxPages: MAX_PAGES2
+  });
+  const messages = scan.messages.map(normalizeMessage);
+  const nextBeforeTime = earliestTimeOf(messages) ?? null;
+  const stopReason = scan.budgetExhausted ? "page_budget_exhausted" : scan.rangeCovered ? "range_covered" : scan.exhausted ? "history_exhausted" : "count_reached";
+  const notes = [];
+  switch (stopReason) {
+    case "history_exhausted":
+      notes.push("\u5DF2\u7FFB\u5230\u4F1A\u8BDD\u6700\u5F00\u59CB\uFF1A\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u3002");
+      break;
+    case "page_budget_exhausted":
+      notes.push(
+        `\u7FFB\u9875\u9884\u7B97\u7528\u5C3D\uFF08\u5355\u6B21\u6700\u591A ${MAX_PAGES2} \u9875\uFF09\uFF1A\u53EF\u80FD\u8FD8\u6709\u66F4\u65E9\u7684\u6D88\u606F\u6CA1\u53D6\u5230\uFF0C\u8BF7\u8C03\u5927 count \u6216\u7F29\u5C0F\u65F6\u95F4\u8303\u56F4\u3002`
+      );
+      break;
+    case "range_covered":
+      notes.push("\u65F6\u95F4\u533A\u95F4\u5DF2\u5B8C\u6574\u8986\u76D6\uFF08\u5DF2\u7FFB\u8FC7\u533A\u95F4\u4E0B\u754C\uFF09\u3002");
+      break;
+    case "count_reached":
+      notes.push(
+        nextBeforeTime === null ? `\u5DF2\u8FD4\u56DE ${messages.length} \u6761\uFF08\u7A97\u53E3\u5185\u6CA1\u6709\u6709\u6548\u65F6\u95F4\uFF0C\u65E0\u6CD5\u7EE7\u7EED\u5F80\u524D\u7FFB\uFF09\u3002` : `\u5DF2\u8FD4\u56DE ${messages.length} \u6761\uFF08\u8FBE\u5230 count \u4E0A\u9650\uFF09\uFF1B\u628A nextBeforeTime \u4F5C\u4E3A beforeTime \u4F20\u56DE\u5373\u53EF\u7EE7\u7EED\u53D6\u66F4\u65E9\u7684\u6D88\u606F\u3002`
+      );
+      break;
+  }
+  if (stopReason === "range_covered" && nextBeforeTime !== null) {
+    notes.push(`\u66F4\u65E9\u7684\u6D88\u606F\u4ECE ${nextBeforeTime}\uFF08epoch \u79D2\uFF09\u4E4B\u524D\u7EE7\u7EED\u53D6\u3002`);
+  }
+  return { messages, nextBeforeTime, exhausted: scan.exhausted, stopReason, note: notes.join(" ") };
 }
 function refreshConfig(state) {
   state.config = loadConfigData();
@@ -24116,59 +24287,42 @@ function coerceChat(v) {
   const name = o.name === void 0 || o.name === null ? "" : String(o.name);
   return { kind: o.kind, id, name };
 }
-async function searchMessages(client, chatKind, chatId, query, startSeq, maxPages) {
+async function searchMessages(client, chatKind, chatId, query, maxPages) {
   const q = query.trim().toLowerCase();
+  const matches = (m) => m.text.toLowerCase().includes(q);
+  let hitCount = 0;
+  const scan = await scanHistoryBackwards(client, chatKind, chatId, {
+    pageSize: SEARCH_PAGE_SIZE,
+    maxPages,
+    shouldStop: (fresh) => {
+      hitCount += fresh.filter((raw) => matches(normalizeMessage(raw))).length;
+      return hitCount >= SEARCH_MAX_HITS;
+    }
+  });
+  const order = scan.scanOrder.map(normalizeMessage);
   const hits = [];
-  const seen = /* @__PURE__ */ new Set();
-  let scanned = 0;
-  let pages = 0;
-  let exhausted = false;
   let hitsTruncated = false;
-  let cursor = startSeq;
-  let pending = null;
-  for (let i = 0; i < maxPages; i++) {
-    const page = await fetchHistoryPage(client, chatKind, chatId, cursor, SEARCH_PAGE_SIZE);
-    pages++;
-    if (page.length === 0) {
-      exhausted = true;
+  for (let i = 0; i < order.length; i++) {
+    if (!matches(order[i])) continue;
+    if (hits.length >= SEARCH_MAX_HITS) {
+      hitsTruncated = true;
       break;
     }
-    const norm = page.map((raw) => ({ raw, msg: normalizeMessage(raw) })).sort((a, b) => b.msg.seq - a.msg.seq);
-    for (const item of norm) {
-      const key = dedupKey(item.raw);
-      if (key !== void 0) {
-        if (seen.has(key)) continue;
-        seen.add(key);
-      }
-      scanned++;
-      if (pending) {
-        hits.push({ message: pending, contextBefore: item.msg });
-        pending = null;
-      }
-      if (!item.msg.text.toLowerCase().includes(q)) continue;
-      if (hits.length >= SEARCH_MAX_HITS) {
-        hitsTruncated = true;
-        break;
-      }
-      pending = item.msg;
-    }
-    if (hitsTruncated) break;
-    const pageSeqs = norm.map((x) => rawSeqOf(x.raw)).filter((s) => s !== void 0);
-    if (pageSeqs.length === 0) {
-      exhausted = true;
-      break;
-    }
-    const minSeq = Math.min(...pageSeqs);
-    if (cursor !== void 0 && minSeq >= cursor) {
-      exhausted = true;
-      break;
-    }
-    cursor = minSeq;
+    hits.push({ message: order[i], contextBefore: i + 1 < order.length ? order[i + 1] : null });
   }
-  if (!hitsTruncated && pages >= maxPages) exhausted = true;
-  if (pending) hits.push({ message: pending, contextBefore: null });
-  const note = `\u641C\u7D22\u4E3A\u6709\u9650\u626B\u63CF\uFF08OneBot 11 \u6CA1\u6709\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u53EA\u80FD\u5411\u66F4\u65E9\u7FFB\u9875\u540E\u8FC7\u6EE4\uFF09\uFF1A\u672C\u6B21\u7FFB\u9875 ${pages} \u9875\u3001\u626B\u63CF ${scanned} \u6761\u6D88\u606F\u3001\u547D\u4E2D ${hits.length} \u6761\u3002exhausted \u4E3A\u4E09\u5408\u4E00\u8BED\u4E49\uFF08\u5386\u53F2\u8017\u5C3D / \u6E38\u6807\u63A8\u4E0D\u52A8 / \u7FFB\u9875\u89E6\u9876 maxPages \u4E0A\u9650\uFF09\uFF0C\u4E0D\u7B49\u4E8E\u300C\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u300D\u2014\u2014\u5224\u65AD\u8FD8\u6709\u66F4\u65E9\u6D88\u606F\u8BF7\u770B\u300C\u518D\u7FFB\u4E00\u9875\u662F\u5426\u8FD4\u56DE\u7A7A\u300D\u3002` + (hitsTruncated ? `\u547D\u4E2D\u6570\u8FBE\u5230\u4E0A\u9650\uFF08${SEARCH_MAX_HITS}\uFF09\uFF0C\u626B\u63CF\u63D0\u524D\u505C\u6B62\u3002` : "") + `\u672A\u547D\u4E2D\u65F6\u53EF\u63D0\u9AD8 maxPages\uFF0C\u6216\u5148\u7528 napcat_get_history \u6309\u65F6\u95F4\u8303\u56F4\u53D6\u4E00\u6BB5\u518D\u641C\u3002`;
-  return { hits, scanned, pages, exhausted, hitsTruncated, note };
+  if (scan.stoppedEarly) hitsTruncated = true;
+  const stopReason = hitsTruncated ? "hits_limit" : scan.budgetExhausted ? "page_budget_exhausted" : "history_exhausted";
+  const tail = stopReason === "hits_limit" ? `\u547D\u4E2D\u6570\u8FBE\u5230\u4E0A\u9650\uFF08${SEARCH_MAX_HITS}\uFF09\uFF0C\u626B\u63CF\u63D0\u524D\u505C\u6B62\u3002` : stopReason === "page_budget_exhausted" ? `\u7FFB\u9875\u9884\u7B97\u7528\u5C3D\uFF08\u6700\u591A ${maxPages} \u9875\uFF09\uFF1A\u53EF\u80FD\u8FD8\u6709\u66F4\u65E9\u7684\u6D88\u606F\u6CA1\u626B\u5230\uFF0C\u8BF7\u8C03\u5927 maxPages\u3002` : "\u5DF2\u7FFB\u5230\u4F1A\u8BDD\u6700\u5F00\u59CB\uFF08\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\uFF09\u3002";
+  const note = `\u641C\u7D22\u4E3A\u6709\u9650\u626B\u63CF\uFF08OneBot 11 \u6CA1\u6709\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u53EA\u80FD\u5411\u66F4\u65E9\u7FFB\u9875\u540E\u8FC7\u6EE4\uFF09\uFF1A\u672C\u6B21\u7FFB\u9875 ${scan.pages} \u9875\u3001\u626B\u63CF ${order.length} \u6761\u6D88\u606F\u3001\u547D\u4E2D ${hits.length} \u6761\u3002${tail}\u672A\u547D\u4E2D\u65F6\u53EF\u63D0\u9AD8 maxPages\uFF0C\u6216\u5148\u7528 napcat_get_history \u6309\u65F6\u95F4\u8303\u56F4\u53D6\u4E00\u6BB5\u518D\u641C\u3002`;
+  return {
+    hits,
+    scanned: order.length,
+    pages: scan.pages,
+    exhausted: scan.exhausted,
+    hitsTruncated,
+    stopReason,
+    note
+  };
 }
 function registerTools(server2, state) {
   server2.registerTool(
@@ -24305,21 +24459,26 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_get_history",
     {
-      description: "\u62C9\u53D6\u4F1A\u8BDD\u5386\u53F2\u6D88\u606F\uFF08\u6E38\u6807\u5206\u9875\uFF0C\u65F6\u95F4\u6B63\u5E8F\u8FD4\u56DE\uFF09",
+      description: "\u62C9\u53D6\u4F1A\u8BDD\u5386\u53F2\u6D88\u606F\uFF08**\u6309\u65F6\u95F4\u7FFB\u9875**\uFF0C\u65F6\u95F4\u6B63\u5E8F\u8FD4\u56DE\uFF09\u3002count=\u8981\u591A\u5C11\u6761\uFF08\u9ED8\u8BA4 50\uFF0C\u4E0A\u9650 200\uFF09\uFF1BbeforeTime=**\u6392\u4ED6**\u4E0A\u754C\uFF08\u53EA\u53D6\u8BE5\u65F6\u95F4**\u4E4B\u524D**\u7684\u6D88\u606F\uFF09\uFF1A\u628A\u4E0A\u4E00\u6B21\u8FD4\u56DE\u7684 nextBeforeTime \u4F20\u56DE\u6765\u5373\u53EF\u7EE7\u7EED\u5F80\u524D\u7FFB\uFF1BfromTime / toTime=**\u95ED**\u533A\u95F4\uFF08epoch \u79D2\uFF09\u3002\u533A\u95F4\u4E0E\u7FFB\u9875\u4E00\u5F8B\u6309**\u65F6\u95F4**\uFF08epoch \u79D2\uFF09\u8868\u8FBE \u2014\u2014 \u670D\u52A1\u7AEF\u7684 message_seq \u662F\u968F\u673A\u77ED id\uFF0C\u4E0D\u80FD\u5F53\u6E38\u6807\u7528\u3002\u8FD4\u56DE {messages, nextBeforeTime, exhausted, stopReason, note}\uFF1AnextBeforeTime=\u66F4\u65E9\u6D88\u606F\u7684\u65F6\u95F4\u6E38\u6807\uFF08\u4F20\u56DE beforeTime \u7EE7\u7EED\u7FFB\uFF09\uFF1Bexhausted=true \u8868\u793A**\u5386\u53F2\u8017\u5C3D**\uFF08\u771F\u7684\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\uFF09\uFF1BstopReason \u8BF4\u660E\u672C\u6B21\u4E3A\u4EC0\u4E48\u505C\uFF08count_reached / range_covered / history_exhausted / page_budget_exhausted\uFF09\uFF1Bnote \u662F\u4E2D\u6587\u8BF4\u660E\uFF08\u533A\u5206\u5386\u53F2\u8017\u5C3D\u3001\u951A\u70B9\u5931\u6548\u3001\u7FFB\u9875\u9884\u7B97\u7528\u5C3D\uFF09\u3002",
       inputSchema: {
         chatKind: external_exports.enum(["group", "friend"]),
         chatId: external_exports.union([external_exports.string(), external_exports.number()]).describe("\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
-        beforeSeq: external_exports.number().optional().describe("\u4F20\u5165\u4E0A\u4E00\u9875\u8FD4\u56DE\u7684 nextBeforeSeq \u83B7\u53D6\u66F4\u65E9\u6D88\u606F"),
-        count: external_exports.number().optional().default(100).describe("1-200"),
-        since: external_exports.number().optional().describe("\u8D77\u59CB\u65F6\u95F4 epoch \u79D2\uFF08\u542B\uFF09"),
-        until: external_exports.number().optional().describe("\u7ED3\u675F\u65F6\u95F4 epoch \u79D2\uFF08\u542B\uFF09")
+        count: external_exports.number().optional().default(DEFAULT_COUNT).describe("1-200\uFF0C\u9ED8\u8BA4 50"),
+        beforeTime: external_exports.number().optional().describe("\u53EA\u53D6\u8BE5\u65F6\u95F4**\u4E4B\u524D**\u7684\u6D88\u606F\uFF08epoch \u79D2\uFF0C\u6392\u4ED6\uFF09\uFF1B\u4F20\u4E0A\u4E00\u9875\u8FD4\u56DE\u7684 nextBeforeTime \u53EF\u53D6\u66F4\u65E9\u7684\u6D88\u606F"),
+        fromTime: external_exports.number().optional().describe("\u533A\u95F4\u4E0B\u754C\uFF08epoch \u79D2\uFF0C\u542B\uFF09"),
+        toTime: external_exports.number().optional().describe("\u533A\u95F4\u4E0A\u754C\uFF08epoch \u79D2\uFF0C\u542B\uFF09")
       }
     },
-    async ({ chatKind, chatId, beforeSeq, count, since, until }) => {
+    async ({ chatKind, chatId, count, beforeTime, fromTime, toTime }) => {
       try {
         const c = await state.ensureClient();
-        const want = Math.min(Math.max(Math.floor(count ?? 100), 1), MAX_COUNT);
-        const result = await fetchHistory(c, chatKind, String(chatId), beforeSeq, want, since, until);
+        const want = Math.min(Math.max(Math.floor(count ?? DEFAULT_COUNT), 1), MAX_COUNT);
+        const result = await fetchHistory(c, chatKind, String(chatId), {
+          count: want,
+          beforeTime,
+          fromTime,
+          toTime
+        });
         return ok(result);
       } catch (e) {
         return fail(state, e);
@@ -24329,22 +24488,21 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_search_messages",
     {
-      description: "\u4F1A\u8BDD\u5185\u5173\u952E\u8BCD\u641C\u7D22\uFF1A\u5411\u66F4\u65E9\u7FFB\u9875\u626B\u63CF\u540E\u6309\u6B63\u6587\u8FC7\u6EE4\uFF08OneBot 11 \u65E0\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u626B\u63CF\u8303\u56F4\u6709\u9650\uFF09\u3002\u8FD4\u56DE {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, note}\uFF1Bscanned = \u626B\u8FC7\u7684\u4E0D\u540C\u6D88\u606F\u6761\u6570\uFF1Bpages = \u7FFB\u8FC7\u7684\u9875\u6570\uFF08\u542B\u53EF\u80FD\u7684\u6700\u540E\u4E00\u7A7A\u9875\uFF09\uFF1BcontextBefore \u662F\u547D\u4E2D\u6D88\u606F\u5728\u65F6\u95F4\u4E0A\u7D27\u90BB\u5176\u524D\uFF08\u66F4\u65E9\uFF09\u7684\u90A3\u6761\uFF1Bexhausted \u4E3A\u4E09\u5408\u4E00\u8BED\u4E49\uFF08\u5386\u53F2\u8017\u5C3D / \u6E38\u6807\u63A8\u4E0D\u52A8 / \u7FFB\u9875\u89E6\u9876 maxPages \u4E0A\u9650\uFF09\uFF0C\u4E0D\u7B49\u4E8E\u300C\u6CA1\u6709\u66F4\u65E9\u7684\u6D88\u606F\u4E86\u300D\u2014\u2014\u5224\u65AD\u8FD8\u6709\u66F4\u65E9\u6D88\u606F\u8BF7\u770B\u300C\u518D\u7FFB\u4E00\u9875\u662F\u5426\u8FD4\u56DE\u7A7A\u300D\uFF1B\u547D\u4E2D\u6570\u8FBE\u4E0A\u9650\u800C\u63D0\u524D\u505C\u6B62\u65F6 exhausted \u4E3A false\uFF08\u90A3\u65F6\u662F hitsTruncated \u5728\u8BF4\u660E\uFF09\u3002",
+      description: "\u4F1A\u8BDD\u5185\u5173\u952E\u8BCD\u641C\u7D22\uFF1A\u4ECE\u6700\u65B0\u5F80**\u66F4\u65E9**\u7FFB\u9875\u626B\u63CF\u540E\u6309\u6B63\u6587\u8FC7\u6EE4\uFF08OneBot 11 \u65E0\u670D\u52A1\u7AEF\u641C\u7D22\u52A8\u4F5C\uFF0C\u626B\u63CF\u8303\u56F4\u6709\u9650\uFF09\u3002\u8FD4\u56DE {hits:[{message,contextBefore}], scanned, pages, exhausted, hitsTruncated, stopReason, note}\uFF1Bscanned = \u626B\u8FC7\u7684\u4E0D\u540C\u6D88\u606F\u6761\u6570\uFF1Bpages = \u7FFB\u8FC7\u7684\u9875\u6570\uFF08\u542B\u53EF\u80FD\u7684\u6700\u540E\u4E00\u7A7A\u9875\uFF09\uFF1BcontextBefore \u662F\u547D\u4E2D\u6D88\u606F\u5728\u65F6\u95F4\u4E0A\u7D27\u90BB\u5176\u524D\uFF08\u66F4\u65E9\uFF09\u7684\u90A3\u6761\uFF1Bexhausted=true \u8868\u793A**\u5386\u53F2\u8017\u5C3D**\uFF08\u771F\u7684\u7FFB\u5230\u4F1A\u8BDD\u6700\u5F00\u59CB\uFF09\uFF1BstopReason \u8BF4\u660E\u672C\u6B21\u4E3A\u4EC0\u4E48\u505C\uFF08history_exhausted / page_budget_exhausted / hits_limit\uFF09\uFF1BhitsTruncated=true \u8868\u793A\u547D\u4E2D\u6570\u8FBE\u4E0A\u9650\u3001\u626B\u63CF\u63D0\u524D\u505C\u6B62\u3002note \u662F\u4E2D\u6587\u8BF4\u660E\uFF1A\u641C\u7D22\u662F**\u6709\u9650\u626B\u63CF**\uFF0C\u522B\u628A\u5B83\u5F53\u6210\u641C\u5168\u4E86\u3002",
       inputSchema: {
         chatKind: external_exports.enum(["group", "friend"]),
         chatId: external_exports.union([external_exports.string(), external_exports.number()]).describe("\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
         query: external_exports.string().describe("\u5173\u952E\u8BCD\uFF08\u5927\u5C0F\u5199\u4E0D\u654F\u611F\uFF0C\u6309\u6D88\u606F\u6B63\u6587\u5339\u914D\uFF09"),
-        startSeq: external_exports.number().optional().describe("\u8D77\u59CB\u6E38\u6807\uFF1A\u53EA\u626B\u63CF message_seq \u5C0F\u4E8E\u5B83\u7684\u6D88\u606F\uFF1B\u7F3A\u7701\u4ECE\u6700\u65B0\u4E00\u6761\u5F00\u59CB"),
         maxPages: external_exports.number().optional().default(SEARCH_DEFAULT_MAX_PAGES).describe(`\u6700\u591A\u7FFB\u591A\u5C11\u9875\uFF081-${SEARCH_MAX_PAGES}\uFF0C\u9ED8\u8BA4 ${SEARCH_DEFAULT_MAX_PAGES}\uFF09`)
       }
     },
-    async ({ chatKind, chatId, query, startSeq, maxPages }) => {
+    async ({ chatKind, chatId, query, maxPages }) => {
       try {
         const q = (query ?? "").trim();
         if (!q) return fail(state, new Error("\u641C\u7D22\u5173\u952E\u8BCD\u4E0D\u80FD\u4E3A\u7A7A"));
         const pages = Math.min(Math.max(Math.floor(maxPages ?? SEARCH_DEFAULT_MAX_PAGES), 1), SEARCH_MAX_PAGES);
         const c = await state.ensureClient();
-        return ok(await searchMessages(c, chatKind, String(chatId), q, startSeq, pages));
+        return ok(await searchMessages(c, chatKind, String(chatId), q, pages));
       } catch (e) {
         return fail(state, e);
       }
@@ -24374,17 +24532,19 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_export",
     {
-      description: "\u5BFC\u51FA\u9009\u5B9A\u6D88\u606F\u4E3A Markdown + JSON \u6587\u4EF6\u5BF9\uFF1A\u9ED8\u8BA4\u843D\u5728 ~/.zcode/napcat/exports\uFF0Cdir=workspace \u65F6\u843D\u5728 <\u5DE5\u4F5C\u533A>/.zcode/napcat/exports \u5E76\u81EA\u52A8\u8865 .gitignore \u89C4\u5219\u3002gitignoreUpdated=false \u8868\u793A\u300C.gitignore \u5DF2\u8986\u76D6\u8BE5\u76EE\u5F55\u300D\u6216\u300C\u7528\u6237\u5199\u4E86\u53D6\u53CD\u89C4\u5219\u800C\u8DF3\u8FC7\u300D\u3002includeImages \u76EE\u524D\u4E0D\u4E0B\u8F7D\u56FE\u7247\u6587\u4EF6\uFF08\u5BFC\u51FA\u91CC\u56FE\u7247\u4E3A\u5360\u4F4D\u7B26 + URL \u8BB0\u5F55\uFF09\uFF0C\u5A92\u4F53\u4E0B\u8F7D\u968F M1.1 \u589E\u5F3A\u3002\u8FD4\u56DE {mdPath, jsonPath, gitignoreUpdated}\u3002",
+      description: "\u5BFC\u51FA\u9009\u5B9A\u6D88\u606F\u4E3A Markdown + JSON \u6587\u4EF6\u5BF9\uFF1A\u9ED8\u8BA4\u843D\u5728 ~/.zcode/napcat/exports\uFF0Cdir=workspace \u65F6\u843D\u5728 <\u5DE5\u4F5C\u533A>/.zcode/napcat/exports \u5E76\u81EA\u52A8\u8865 .gitignore \u89C4\u5219\u3002messages \u7F3A\u7701\uFF08\u6216\u4E3A\u7A7A\u6570\u7EC4\uFF09\u65F6\u7528 chatKind + chatId + fromTime + toTime **\u73B0\u62C9**\u8BE5\u65F6\u95F4\u533A\u95F4\uFF08epoch \u79D2\uFF0C\u95ED\u533A\u95F4\uFF0C\u56DB\u4E2A\u53C2\u6570\u7F3A\u4E00\u4E0D\u53EF\uFF1B\u533A\u95F4\u53CD\u4E86\u76F4\u63A5\u62A5\u9519\uFF09\u3002\u73B0\u62C9\u5931\u8D25\u662F**\u54CD\u4EAE\u5931\u8D25**\uFF08isError\uFF09\uFF1A\u533A\u95F4\u53D6\u4E0D\u5168\uFF08\u7FFB\u9875\u9884\u7B97\u7528\u5C3D / \u951A\u70B9\u5931\u6548\uFF09\u65F6\u76F4\u63A5\u62A5\u9519\uFF0C\u4E0D\u4F1A\u9759\u9ED8\u5BFC\u51FA\u4E00\u6BB5\u7F3A\u6D88\u606F\u7684\u533A\u95F4\u3002gitignoreUpdated=false \u8868\u793A\u300C.gitignore \u5DF2\u8986\u76D6\u8BE5\u76EE\u5F55\u300D\u6216\u300C\u7528\u6237\u5199\u4E86\u53D6\u53CD\u89C4\u5219\u800C\u8DF3\u8FC7\u300D\u3002includeImages \u76EE\u524D\u4E0D\u4E0B\u8F7D\u56FE\u7247\u6587\u4EF6\uFF08\u5BFC\u51FA\u91CC\u56FE\u7247\u4E3A\u5360\u4F4D\u7B26 + URL \u8BB0\u5F55\uFF09\uFF0C\u5A92\u4F53\u4E0B\u8F7D\u968F M1.1 \u589E\u5F3A\u3002\u8FD4\u56DE {mdPath, jsonPath, gitignoreUpdated}\u3002",
       inputSchema: {
-        messages: external_exports.any().optional().describe("\u8981\u5BFC\u51FA\u7684\u6D88\u606F\uFF08Message \u5BF9\u8C61\u6570\u7EC4\uFF1B\u5143\u7D20\u987B\u5E26 time \u5B57\u6BB5\uFF09\uFF1B\u7F3A\u7701\u65F6\u7528 chatKind/chatId/fromSeq/toSeq \u73B0\u62C9\u8BE5 seq \u533A\u95F4"),
+        messages: external_exports.any().optional().describe(
+          "\u8981\u5BFC\u51FA\u7684\u6D88\u606F\uFF08Message \u5BF9\u8C61\u6570\u7EC4\uFF1B\u5143\u7D20\u987B\u5E26 time \u5B57\u6BB5\uFF09\uFF1B\u7F3A\u7701\u65F6\u7528 chatKind/chatId/fromTime/toTime \u73B0\u62C9\u8BE5\u65F6\u95F4\u533A\u95F4"
+        ),
         // 结构留在发布的 JSON Schema 里（面板可据此提示），取值校验交给 coerceChat → isError
         // id 允许数字：QQ 群号/好友号本来就是数字型，面板与 agent 很可能就这么传
         // （归一化成字符串仍在 coerceChat 里做，比较时统一用归一后的字符串）。
         chat: external_exports.object({ kind: external_exports.string(), id: external_exports.union([external_exports.string(), external_exports.number()]), name: external_exports.string() }).partial().describe('\u4F1A\u8BDD\u5F15\u7528 {kind:"group"|"friend", id:string|number, name:string}'),
         chatKind: external_exports.enum(["group", "friend"]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD\u7C7B\u578B"),
         chatId: external_exports.union([external_exports.string(), external_exports.number()]).optional().describe("\u73B0\u62C9\u65F6\u7684\u4F1A\u8BDD id\uFF08QQ \u7FA4\u53F7/\u597D\u53CB\u53F7\u662F\u6570\u5B57\u578B\uFF0C\u5141\u8BB8\u4F20\u6570\u5B57\uFF09"),
-        fromSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u8D77\u59CB message_seq\uFF08\u542B\uFF09"),
-        toSeq: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u7ED3\u675F message_seq\uFF08\u542B\uFF09"),
+        fromTime: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u8D77\u59CB\u65F6\u95F4\uFF08epoch \u79D2\uFF0C\u542B\uFF09"),
+        toTime: external_exports.number().optional().describe("\u73B0\u62C9\u65F6\u7684\u7ED3\u675F\u65F6\u95F4\uFF08epoch \u79D2\uFF0C\u542B\uFF09"),
         dir: external_exports.enum(["user", "workspace"]).optional().describe("\u5BFC\u51FA\u76EE\u5F55\uFF1B\u7F3A\u7701\u53D6\u914D\u7F6E export.dir"),
         includeImages: external_exports.boolean().optional().describe("\u662F\u5426\u4E0B\u8F7D\u56FE\u7247\uFF08M1 \u5C1A\u672A\u5B9E\u73B0\u5A92\u4F53\u4E0B\u8F7D\uFF0C\u672C\u53C2\u6570\u4E0D\u5F71\u54CD\u4EA7\u7269\uFF09"),
         workspaceDir: external_exports.string().optional().describe("\u5DE5\u4F5C\u533A\u5BFC\u51FA\u65F6\u7684\u76EE\u5F55\u6839\uFF1B\u7F3A\u7701\u53D6 ZCODE_PROJECT_DIR")
@@ -24396,12 +24556,12 @@ function registerTools(server2, state) {
         const chat = coerceChat(a.chat);
         let msgs;
         if (a.messages === void 0 || a.messages.length === 0) {
-          if (a.chatKind === void 0 || a.chatId === void 0 || a.fromSeq === void 0 || a.toSeq === void 0) {
-            throw new Error("\u7F3A\u5C11 messages \u65F6\u9700\u8981\u540C\u65F6\u7ED9\u51FA chatKind\u3001chatId\u3001fromSeq\u3001toSeq\uFF08\u73B0\u62C9\u8BE5 seq \u533A\u95F4\uFF09");
+          if (a.chatKind === void 0 || a.chatId === void 0 || a.fromTime === void 0 || a.toTime === void 0) {
+            throw new Error("\u7F3A\u5C11 messages \u65F6\u9700\u8981\u540C\u65F6\u7ED9\u51FA chatKind\u3001chatId\u3001fromTime\u3001toTime\uFF08\u73B0\u62C9\u8BE5\u65F6\u95F4\u533A\u95F4\uFF09");
           }
           const fetchId = String(a.chatId);
-          if (a.fromSeq > a.toSeq) {
-            throw new Error(`fromSeq\uFF08${a.fromSeq}\uFF09\u4E0D\u80FD\u5927\u4E8E toSeq\uFF08${a.toSeq}\uFF09`);
+          if (a.fromTime > a.toTime) {
+            throw new Error(`fromTime\uFF08${a.fromTime}\uFF09\u4E0D\u80FD\u5927\u4E8E toTime\uFF08${a.toTime}\uFF09`);
           }
           if (chat.kind !== a.chatKind || chat.id !== fetchId) {
             throw new Error(
@@ -24409,7 +24569,11 @@ function registerTools(server2, state) {
             );
           }
           const c = await state.ensureClient();
-          msgs = (await fetchMessagesBetween(c, a.chatKind, fetchId, a.fromSeq, a.toSeq)).map(normalizeMessage);
+          const fetched = await fetchMessagesBetween(c, a.chatKind, fetchId, {
+            fromTime: a.fromTime,
+            toTime: a.toTime
+          });
+          msgs = fetched.messages.map(normalizeMessage);
         } else {
           msgs = coerceMessages(a.messages);
         }
