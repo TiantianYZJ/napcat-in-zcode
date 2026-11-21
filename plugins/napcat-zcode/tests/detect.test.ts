@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 import { WebSocketServer, type WebSocket as WsConn } from 'ws';
 import {
   detectLocal,
+  MAX_CONCURRENT_PROBES,
   normalizeEndpoint,
   probeEndpoint,
   type DetectCandidate,
@@ -24,6 +25,8 @@ interface FakeHttp {
   requests: { url: string; auth?: string }[];
   /** 服务端侧仍存活的 TCP 连接 */
   openSockets: Set<Socket>;
+  /** 观察到的最大并发请求数（用来验证并发闸门） */
+  maxConcurrent: number;
   close(): Promise<void>;
 }
 
@@ -31,21 +34,26 @@ type FakeMode = 'ok' | 'unauthorized' | 'auth-body' | 'slow';
 
 interface FakeHttpOptions {
   mode?: FakeMode;
-  /** slow 模式下响应延迟多久（默认 5s，远大于探测超时） */
+  /** 每个响应的延迟（ms）；0/未给 = 立即响应。`slow` 模式默认 5s。 */
   delayMs?: number;
 }
 
 async function startFakeHttp(opts: FakeHttpOptions = {}): Promise<FakeHttp> {
   const mode = opts.mode ?? 'ok';
-  const delayMs = opts.delayMs ?? 5000;
+  const delayMs = opts.delayMs ?? (mode === 'slow' ? 5000 : 0);
   const requests: { url: string; auth?: string }[] = [];
   const openSockets = new Set<Socket>();
+  let inFlight = 0;
+  let maxConcurrent = 0;
 
   const server = createServer((req, res) => {
     requests.push({ url: req.url ?? '', auth: req.headers.authorization });
+    inFlight += 1;
+    maxConcurrent = Math.max(maxConcurrent, inFlight);
     const action = (req.url ?? '').replace(/^\//, '').split('?')[0];
 
     const respond = (): void => {
+      inFlight -= 1;
       if (res.writableEnded || res.destroyed) return;
       try {
         if (mode === 'unauthorized') {
@@ -94,7 +102,7 @@ async function startFakeHttp(opts: FakeHttpOptions = {}): Promise<FakeHttp> {
       }
     };
 
-    if (mode === 'slow') {
+    if (delayMs > 0) {
       // 不 unref 会让用例结束后仍挂着定时器；unref 后即使没触发也不阻塞退出
       const timer = setTimeout(respond, delayMs);
       timer.unref?.();
@@ -119,6 +127,9 @@ async function startFakeHttp(opts: FakeHttpOptions = {}): Promise<FakeHttp> {
     port,
     requests,
     openSockets,
+    get maxConcurrent() {
+      return maxConcurrent;
+    },
     close: () =>
       new Promise<void>((r) => {
         server.closeAllConnections?.();
@@ -336,6 +347,17 @@ describe('detectLocal', () => {
     expect(result.live).toHaveLength(0);
   });
 
+  it('never throws when ports or installCandidates are not arrays', async () => {
+    const result = await detectLocal({
+      ports: 123 as unknown as number[],
+      extraEndpoints: [],
+      installCandidates: 'nope' as unknown as DetectCandidate[],
+      timeoutMs: 300,
+    });
+    expect(result.found).toBe(false);
+    expect(result.live).toHaveLength(0);
+  });
+
   it('probes the same endpoint only once even when it is written differently', async () => {
     const fake = track(await startFakeHttp());
     const result = await detectLocal({
@@ -380,6 +402,91 @@ describe('detectLocal', () => {
     expect(result.live).toHaveLength(0);
     expect(result.tokenRequired.map((c) => c.endpoint)).toContain(`http://127.0.0.1:${fake.port}`);
     expect(result.tokenRequired[0].needsToken).toBe(true);
+  });
+
+  it('keeps a token-protected websocket endpoint visible instead of dropping it', async () => {
+    const fake = track(await startFakeHttp({ mode: 'unauthorized' }));
+    const result = await detectLocal({ ports: [fake.port], extraEndpoints: [], timeoutMs: 800 });
+    const wsCandidate = result.tokenRequired.find((c) => c.transport === 'ws');
+    expect(wsCandidate?.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
+    expect(wsCandidate?.needsToken).toBe(true);
+    // 失败原因也要留着，面板才能解释「为什么这个端点不行」
+    const failedWs = result.failed.find((c) => c.endpoint === `ws://127.0.0.1:${fake.port}`);
+    expect(failedWs).toBeDefined();
+    expect(failedWs?.error).toBeTruthy();
+  });
+
+  it('does not claim that a dead websocket port needs a token', async () => {
+    const port = await deadPort();
+    const result = await detectLocal({ ports: [port], extraEndpoints: [], timeoutMs: 500 });
+    expect(result.tokenRequired).toHaveLength(0);
+    expect(result.failed.some((c) => c.transport === 'ws')).toBe(true);
+  });
+
+  it('does not report a false negative when timeoutMs exceeds budgetMs', async () => {
+    const fake = track(await startFakeHttp());
+    const result = await detectLocal({
+      ports: [fake.port],
+      extraEndpoints: [],
+      timeoutMs: 5000,
+      budgetMs: 500,
+    });
+    expect(result.found).toBe(true);
+    expect(result.live[0].endpoint).toBe(`http://127.0.0.1:${fake.port}`);
+  });
+
+  it('flags budgetExhausted when the budget runs out before all candidates finish', async () => {
+    const fast = track(await startFakeHttp()); // 立刻应答
+    const slow = track(await startFakeHttp({ delayMs: 5000 })); // 挂住
+    const install = Array.from({ length: 20 }, (_, i) => ({
+      endpoint: `http://127.0.0.1:${slow.port}/p${i}`,
+      transport: 'http' as const,
+      source: 'install' as const,
+    }));
+    const started = Date.now();
+    const result = await detectLocal({
+      ports: [fast.port],
+      extraEndpoints: [],
+      timeoutMs: 5000, // > budgetMs
+      budgetMs: 600,
+      installCandidates: install,
+    });
+    const elapsed = Date.now() - started;
+    // 快端点照常被发现（不能因为预算短就报「没找到」）
+    expect(result.found).toBe(true);
+    expect(result.live.some((c) => c.endpoint === `http://127.0.0.1:${fast.port}`)).toBe(true);
+    // 已经开跑的慢候选要拿到「超时」结论，而不是被预算到点静默丢掉
+    const timedOut = result.failed.find((c) => c.endpoint === `http://127.0.0.1:${slow.port}/p0`);
+    expect(timedOut).toBeDefined();
+    expect(timedOut?.error).toMatch(/timeout|超时|abort/i);
+    // 慢端点没探完 → 明确标出来，而不是静默丢掉
+    expect(result.budgetExhausted).toBe(true);
+    expect(elapsed).toBeLessThan(1200);
+  });
+
+  it('probes every candidate even when there are more candidates than the concurrency gate', async () => {
+    const fake = track(await startFakeHttp({ delayMs: 30 }));
+    const install = Array.from({ length: 40 }, (_, i) => ({
+      endpoint: `http://127.0.0.1:${fake.port}/p${i}`,
+      transport: 'http' as const,
+      source: 'install' as const,
+    }));
+    const started = Date.now();
+    const result = await detectLocal({
+      ports: [],
+      extraEndpoints: [],
+      timeoutMs: 2000,
+      budgetMs: 4000,
+      installCandidates: install,
+    });
+    const elapsed = Date.now() - started;
+    // 全部候选都被探到了（没有因为闸门被丢掉）
+    expect(fake.requests.length).toBe(40);
+    expect(result.candidates.length).toBe(41); // 40 个 install + 1 个 webui
+    // 并发没有超过闸门
+    expect(fake.maxConcurrent).toBeLessThanOrEqual(MAX_CONCURRENT_PROBES);
+    expect(fake.maxConcurrent).toBeGreaterThan(1);
+    expect(elapsed).toBeLessThan(4000);
   });
 
   it('detects the NapCat webui by any http response', async () => {

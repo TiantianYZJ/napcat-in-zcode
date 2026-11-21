@@ -12,6 +12,7 @@
  * 若端点返回鉴权类失败，标记 `needsToken`，由面板提示「该端点可能需要 token」。
  */
 
+import { connect } from 'node:net';
 import { getLoginInfo } from './actions.js';
 import { createClient, safeEndpointLabel, type OneBotClient } from './client.js';
 import { OneBotError } from './errors.js';
@@ -51,7 +52,15 @@ export interface DetectResult {
   /** 探测成功的端点。 */
   live: (DetectCandidate & { login?: DetectLogin; error?: string; needsToken?: boolean })[];
   /**
-   * 探测失败但**疑似需要 token** 的端点。
+   * **探测失败**的全部端点（含错误原因）。
+   *
+   * 有了它，面板才能解释「为什么这个端点不行」——
+   * 否则受 token 保护的端点（尤其 OneBot WebSocket Server）
+   * 会从结果里彻底消失，用户只看到一句「未检测到本机 NapCat」。
+   */
+  failed: (DetectCandidate & { error?: string; needsToken?: boolean })[];
+  /**
+   * 探测失败但**疑似需要 token** 的端点（`failed` 的子集）。
    *
    * 单列出来是因为它们不在 `live` 里（没连上），但面板仍要提示用户
    * 「该端点可能需要 token」——否则用户只会看到一句「没找到」。
@@ -61,6 +70,13 @@ export interface DetectResult {
   napcatRunning: boolean;
   /** 探测到的 WebUI 端口（NapCat 在跑时才有）。 */
   webuiPort?: number;
+  /**
+   * 整体预算到点时仍有候选没探完（或没探）→ true。
+   *
+   * 有了它，面板才能区分「扫过了但没找到」与「根本没扫完」——
+   * 后者不能报成「未检测到本机 NapCat」（那是假阴性）。
+   */
+  budgetExhausted?: boolean;
   scanned: {
     /** 扫描的本机端口（去重后的用户配置端口；NapCat WebUI 端口另见 `webuiPort`）。 */
     ports: number[];
@@ -76,9 +92,19 @@ export interface DetectOptions {
   ports: number[];
   /** 用户显式配置的额外端点（允许非回环——用户自己填的才算数）。 */
   extraEndpoints: string[];
-  /** 单候选超时（默认 1200ms）。 */
+  /**
+   * 单候选超时（默认 1200ms）。
+   *
+   * **约束：不得超过整体预算 `budgetMs`**（实现里会钳到 `budgetMs - 200ms`）：
+   * 否则预算到点时所有候选都还在跑，结果恒为空 → `found:false` 恒定（假阴性）。
+   */
   timeoutMs?: number;
-  /** 整体时间预算（默认 5000ms）。 */
+  /**
+   * 整体时间预算（默认 5000ms）。
+   *
+   * 到点即返回**已完成**的结果，并用 `budgetExhausted` 标出「没扫完」。
+   * 与并发闸门联动：闸门后面的排队也算在预算里。
+   */
   budgetMs?: number;
   /** NapCat WebUI 端口（默认 6099）。 */
   webuiPort?: number;
@@ -94,6 +120,20 @@ export const DEFAULT_PROBE_TIMEOUT_MS = 1200;
 export const DEFAULT_PROBE_BUDGET_MS = 5000;
 /** NapCat WebUI 默认端口。 */
 export const NAPCAT_WEBUI_PORT = 6099;
+/**
+ * 并发探测闸门：同时最多打开这么多连接。
+ *
+ * 没有闸门时，几百个端口会一次开几千个 socket → fd 耗尽，
+ * 连接失败还会被误报成「没找到」。
+ */
+export const MAX_CONCURRENT_PROBES = 16;
+/**
+ * 预算余量（ms）：单候选超时最多占用 `budgetMs - 余量`。
+ *
+ * 留余量是为了让「跑完的候选」在预算到点前就拿到结论——
+ * 否则它们会被预算到点**静默丢掉**（面板上就成了「没找到」）。
+ */
+const BUDGET_MARGIN_MS = 200;
 
 const SUPPORTED_SCHEMES = new Set(['http:', 'https:', 'ws:', 'wss:']);
 
@@ -206,7 +246,60 @@ function errorMessage(err: unknown): string {
 function isAuthFailure(err: unknown, raw: string): boolean {
   const retcode = err instanceof OneBotError ? err.retcode : undefined;
   if (retcode !== undefined && AUTH_RETCODES.has(retcode)) return true;
+  /**
+   * WS 握手被拒也是鉴权类。
+   *
+   * `OneBot WebSocket Server` 配了 access token 时，客户端不带 token 握手会被拒，
+   * 抛的是 `OneBotError(-2, 'websocket connect failed' / 'websocket connect timeout')`——
+   * **文案里没有 token/鉴权 字样**，光靠文案匹配会漏掉，
+   * 于是这个端点既不在 `live` 也不在 `tokenRequired`，在面板上彻底消失。
+   */
+  if (isWsConnectFailure(err, raw)) return true;
   return AUTH_TEXT.test(raw);
+}
+
+/** 是不是「WS 握手失败」（连接建立阶段就挂了，不是动作被拒）。 */
+function isWsConnectFailure(err: unknown, raw: string): boolean {
+  const retcode = err instanceof OneBotError ? err.retcode : undefined;
+  return retcode === -2 && /websocket connect/i.test(raw);
+}
+
+/**
+ * 端口上有没有东西在监听（纯 TCP 探测）。
+ *
+ * 用来区分 WS 握手失败的两种截然不同的成因：
+ * - 端口根本没有服务（连接被拒）→ 与 token 无关，不该标「可能需要 token」；
+ * - 端口有服务但拒绝了握手 → 疑似 access token 保护（也可能是该端口压根不是 WS 服务）。
+ *
+ * 不区分的话，每个空端口都会进 `tokenRequired`，面板上的噪声会淹没真信号。
+ */
+function isPortListening(endpoint: string, timeoutMs: number): Promise<boolean> {
+  let host: string;
+  let port: number;
+  try {
+    const url = new URL(endpoint);
+    host = url.hostname.replace(/^\[/, '').replace(/\]$/, '');
+    const scheme = url.protocol;
+    const def = scheme === 'https:' || scheme === 'wss:' ? 443 : 80;
+    port = url.port ? Number(url.port) : def;
+  } catch {
+    return Promise.resolve(false);
+  }
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const socket = connect({ host, port });
+    let settled = false;
+    const done = (listening: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.once('timeout', () => done(false));
+  });
 }
 
 /**
@@ -239,10 +332,21 @@ export async function probeEndpoint(
     };
   } catch (err) {
     const raw = errorMessage(err);
-    const needsToken = isAuthFailure(err, raw);
+    let needsToken = isAuthFailure(err, raw);
+    let detail = raw;
+    if (needsToken && isWsConnectFailure(err, raw)) {
+      // WS 握手失败要分两种情况，否则每个空端口都会被标成「可能需要 token」
+      const listening = await isPortListening(c.endpoint, Math.min(timeoutMs, 500));
+      if (!listening) {
+        needsToken = false;
+        detail = `${raw}（该端口没有服务）`;
+      } else {
+        detail = `${raw}（该端口有服务但 WebSocket 握手被拒：可能是 access token 保护，也可能是该端口不是 WebSocket 服务）`;
+      }
+    }
     return {
       ok: false,
-      error: `${label}：${redactSecrets(raw, secrets)}`,
+      error: `${label}：${redactSecrets(detail, secrets)}`,
       needsToken,
     };
   } finally {
@@ -280,7 +384,8 @@ async function probeWebUi(port: number, timeoutMs: number): Promise<boolean> {
 function normalizePorts(ports: number[] | undefined): number[] {
   const out: number[] = [];
   const seen = new Set<number>();
-  for (const raw of ports ?? []) {
+  // 非数组（配置被写坏、调用方传错）不能让它抛出去——探测必须永远 resolve
+  for (const raw of Array.isArray(ports) ? ports : []) {
     const p = Number(raw);
     if (!Number.isInteger(p) || p < 1 || p > 65535) continue;
     if (seen.has(p)) continue;
@@ -326,13 +431,25 @@ function toCandidate(
  * 3. `install`：本机安装发现的结果（Task 2 接入；只允许回环）
  * 4. NapCat WebUI 端口（6099）：既当 WebUI 探针，也当 OneBot 候选
  *
- * 候选**并发**探测，单候选超时 `timeoutMs`，整体预算 `budgetMs`。
+ * 候选**并发**探测（闸门 `MAX_CONCURRENT_PROBES`），单候选超时 `timeoutMs`，整体预算 `budgetMs`。
  * **永远 resolve**：失败只体现在结果里。
  */
 export async function detectLocal(opts: DetectOptions): Promise<DetectResult> {
-  const timeoutMs = positiveInt(opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS);
+  const requestedTimeoutMs = positiveInt(opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS);
   const budgetMs = positiveInt(opts.budgetMs ?? DEFAULT_PROBE_BUDGET_MS, DEFAULT_PROBE_BUDGET_MS);
   const webuiPort = validPort(opts.webuiPort ?? NAPCAT_WEBUI_PORT) ?? NAPCAT_WEBUI_PORT;
+  /**
+   * 单候选超时不得超过整体预算。
+   *
+   * 不钳的话：`timeoutMs > budgetMs` 时预算到点所有候选都还在跑 →
+   * `outcomes` 为空 → `live` 空 → `found:false` 恒定（**假阴性**：
+   * 用户明明开着 NapCat，插件却说「没找到」）。
+   *
+   * 钳到 `budgetMs - 余量` 之后：能在预算内应答的候选一定会被记进结果，
+   * 已经开跑但来不及跑完的候选也会拿到「超时」结论（而不是静默丢掉）；
+   * 真正没轮到的那批由 `budgetExhausted` 标出来。
+   */
+  const timeoutMs = Math.min(requestedTimeoutMs, Math.max(50, budgetMs - BUDGET_MARGIN_MS));
 
   const candidates: DetectCandidate[] = [];
   const seen = new Set<string>();
@@ -362,7 +479,8 @@ export async function detectLocal(opts: DetectOptions): Promise<DetectResult> {
   }
 
   // 3) 本机安装发现（Task 2 接入）
-  for (const raw of opts.installCandidates ?? []) {
+  const installCandidates = Array.isArray(opts.installCandidates) ? opts.installCandidates : [];
+  for (const raw of installCandidates) {
     if (!raw) continue;
     addCandidate(toCandidate(raw.endpoint, 'install', raw.detail ?? '本机安装配置'));
   }
@@ -371,10 +489,29 @@ export async function detectLocal(opts: DetectOptions): Promise<DetectResult> {
   addCandidate(toCandidate(`http://127.0.0.1:${webuiPort}`, 'port', `NapCat WebUI 端口 ${webuiPort}`));
 
   const outcomes = new Map<string, DetectProbeResult>();
-  const probes = candidates.map(async (c) => {
-    const result = await probeEndpoint(c, timeoutMs);
-    outcomes.set(c.endpoint, result);
-  });
+  /**
+   * 并发闸门：固定数量的 worker 轮流取候选。
+   *
+   * 没有闸门时，几百个端口会一次开几千个 socket → fd 耗尽，
+   * 连接失败还会被误报成「没找到」。
+   * 闸门后面的排队也算在预算里：预算到点就不再开新探测（见 `budgetExhausted`）。
+   */
+  let next = 0;
+  let budgetFired = false;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (budgetFired) return; // 预算到点：不再开新连接
+      const index = next++;
+      if (index >= candidates.length) return;
+      const c = candidates[index];
+      const result = await probeEndpoint(c, timeoutMs);
+      outcomes.set(c.endpoint, result);
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(MAX_CONCURRENT_PROBES, Math.max(candidates.length, 1)) },
+    () => worker(),
+  );
 
   let napcatRunning = false;
   const webuiProbe = probeWebUi(webuiPort, timeoutMs).then((alive) => {
@@ -384,22 +521,29 @@ export async function detectLocal(opts: DetectOptions): Promise<DetectResult> {
   // 整体预算：到点就用已有结果返回，不无限等
   let timer: NodeJS.Timeout | undefined;
   const budget = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, budgetMs);
+    timer = setTimeout(() => {
+      budgetFired = true;
+      resolve();
+    }, budgetMs);
   });
   try {
-    await Promise.race([Promise.allSettled([...probes, webuiProbe]), budget]);
+    await Promise.race([Promise.allSettled([...workers, webuiProbe]), budget]);
   } finally {
     if (timer) clearTimeout(timer);
   }
 
   const live: DetectResult['live'] = [];
+  const failed: DetectResult['failed'] = [];
   const tokenRequired: DetectResult['tokenRequired'] = [];
   for (const c of candidates) {
     const outcome = outcomes.get(c.endpoint);
-    if (!outcome) continue;
+    if (!outcome) continue; // 预算耗尽：压根没探到（由 budgetExhausted 表达）
     if (outcome.ok) {
       live.push({ ...c, login: outcome.login });
-    } else if (outcome.needsToken) {
+      continue;
+    }
+    failed.push({ ...c, error: outcome.error, needsToken: outcome.needsToken === true });
+    if (outcome.needsToken) {
       tokenRequired.push({ ...c, error: outcome.error, needsToken: true });
     }
   }
@@ -408,9 +552,11 @@ export async function detectLocal(opts: DetectOptions): Promise<DetectResult> {
     found: live.length > 0,
     candidates,
     live,
+    failed,
     tokenRequired,
     napcatRunning,
     webuiPort: napcatRunning ? webuiPort : undefined,
+    budgetExhausted: budgetFired && outcomes.size < candidates.length,
     scanned: {
       ports,
       paths: Array.isArray(opts.installPaths) ? [...opts.installPaths] : [],
