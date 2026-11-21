@@ -34,17 +34,19 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
 
 - **M1（本 spec 的实现主体）**：OneBot 客户端（外部端点 HTTP/WS）+ 数据层 + 侧栏面板 + 注入 + 导出。
   **状态：已实现（2026-11-21）**——仅「外部端点」路径；交付说明见仓库根 `README.md`，
-  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 322 条（vitest）全绿。
+  实机验收清单见 `docs/acceptance-m1.md`。自动化测试 554 条（vitest）全绿。
 - **M1.1（增量）**：媒体下载（`includeImages` 真正生效、`media/` 子目录）与合并转发展开
   （`get_forward_msg` 懒加载）。**不在 M1 范围**：M1 的导出 JSON 已含全部媒体 URL，
   转发段以 `[合并转发]` 占位。详见 §5.8。
-- **M2**：本机已运行 NapCat 的自动探测与接入（复用路径）。**未开始。**
+- **M2**：本机已运行 NapCat 的自动探测与接入（复用路径）。**状态：已实现（2026-11-21）**——
+  面板「检测本机 NapCat」+ `napcat_detect_local` 工具；**只发现、不代改用户配置**（见 §3.1 第 14–17 条、§5.2）。
 - **M3**：自带宿主（NapCat Shell 下载、拉起、配置、扫码引导，Windows 优先）。**未开始。**
 - **M4（预留，不在本 spec）**：常驻守护进程、后台消息监听、主动推送。接口层面为其预留（见 §5.7）。**未开始。**
 
-### 3.1 M1 已知限制（实现期实测结论，2026-11-21）
+### 3.1 已知限制（实现期实测结论，2026-11-21 起持续追加）
 
-以下条目**不是待办**，是 M1 交付时已经确定的事实；M1.1/M2/M3 才改动其中一部分。
+以下条目**不是待办**，是交付时已经确定的事实；M1.1/M2/M3 才改动其中一部分。
+第 1–13 条是 M1 交付时的结论，第 14–17 条是 **M2（本机探测）** 落地时追加的。
 
 1. **宿主不回传另存路径。** `ui/download-file` 在协议层丢弃保存路径：成功返回 `{}`，
    失败与用户取消都返回 `{isError:true}`（宿主实测，见 `src/panel/protocol-notes.md` §6.1）。
@@ -74,6 +76,17 @@ NapCat 是 NTQQ 的无头协议端框架，对外暴露 OneBot 11 协议。本�
     CommonMark 把 CR 也当行结束符，只处理 `\r?\n` 时含孤立 CR 的会话名/昵称仍能伪造出一行。
 13. **「改用用户目录」退路捕获失败时刻的选区**：导出因「工作区目录不可用」失败后，若用户改了选区再点该退路，
     导出的仍是**旧选区**（语义为「重试刚才那次导出」，非「按当前选区重导」）。
+14. **探测只连回环，用户显式配置的端点除外。** 端口扫描与安装发现的端点**一律只允许回环**
+    （`127.0.0.1` / `::1` / `localhost`）；`autoDetect.endpoints` 与**当前已配置的连接端点**
+    是用户自己填的，允许任意地址。**不扫描局域网**——那是隐私问题，也是安全风险。
+15. **NapCat 未开 OneBot Server 时需要用户手动开启**（WebUI → 网络配置 → 开启 HTTP Server）。
+    **插件不代改用户配置**：不改 NapCat 的 `config.json`、不启停进程、不写 OneBot 配置；
+    探测只负责「发现」，接入由用户点「使用这个」完成。
+16. **`autoDetect.paths` 只接受绝对路径。** 相对路径按 CWD 解析，语义随宿主（面板 / MCP 客户端 / 终端）变化
+    → 面板保存与 `napcat_configure` 都**报错拒绝**，不静默丢弃（静默丢弃会制造假阴性：
+    用户以为配上了，探测范围其实没变）。
+17. **探测结论是缓存。** 结论只对**当时那份配置**成立：配置一变（端点、扫描路径）或重新配置后即失效，
+    面板显示「结论已过期，请重新检测」。结论**不是**实时状态，也不会自动重扫。
 
 ## 4. 仓库布局
 
@@ -149,10 +162,26 @@ interface OneBotClient {
 | 路径 | 模式名 | 行为 |
 |------|--------|------|
 | 外部端点 | `external` | 用户配置 `http(s)://` 或 `ws(s)://` 地址 + 可选 token |
-| 复用已运行 | `local`（M2） | 探测 `127.0.0.1:{3000,3001,6099}` 等候选端口；读取用户配置的额外候选端点列表；尝试识别本机常见 NapCat 安装（含 `D:\QQChatExporter` 这类捆绑安装）及其 `config/onebot11_<uin>.json` |
+| 复用已运行 | `local`（M2，**已实现**） | 见下方「M2 已实现的细节」 |
 | 自带宿主 | `managed`（M3） | 平台检查 → 下载 NapCat Shell → 解压至 `${ZCODE_PLUGIN_DATA}/napcat/` → 写入 OneBot HTTP Server 配置 → detached 拉起 → 引导扫码（WebUI 链接） |
 
 `mode: auto`（默认）按 `local → external → managed` 顺序探测，面板状态条始终显示当前生效模式。
+
+**M2 已实现的细节**（`local` 路径，2026-11-21）：
+
+| 项 | 实现 |
+|----|------|
+| 探测范围 | ① **回环地址**（`127.0.0.1` / `::1` / `localhost`，端口取 `autoDetect.ports`，默认 `{3000,3001,6099}`，每个端口各试 `http://` 与 `ws://`）；② **用户显式配置的端点**（`autoDetect.endpoints` + **当前已配置的连接端点**，允许非回环）；③ **本机安装发现**（默认安装位置 + 盘根枚举 + `autoDetect.paths` 指定的绝对路径；上游 `config/onebot11_<uin>.json` 里的端点只取回环的）。**不扫描局域网** |
+| 凭据口径 | 探测**一律不带 token**（多数本机实例没设 token，带上反而可能被拒）——探测只回答「这个端点活着吗 / 需要 token 吗」；疑似需要 token 的端点进 `tokenRequired` 桶 |
+| 只读 | 不改用户配置、不启停进程、不写 NapCat 的 `config.json` |
+| 出参裁剪 | 候选端点与扫描端口各最多展示 **20** 条；失败候选**每来源 5** 条；其余只给计数（计数写在 `notes`） |
+| `budgetExhausted` | `true` = **扫描没扫完**（整体时间预算耗尽），结果可能不全 → **不得**读作「没找到本机 NapCat」；面板显示「探测未完成（扫描预算耗尽）」而不是「未检测到」 |
+| 结论缓存 | 结论是**缓存**（`napcat_status` 的 `detection` 字段只读缓存、不触发扫描）；配置一变即失效 |
+
+> **M2 与上表 `mode: auto` 的差异**：M2 的本机探测是**显式触发**的（面板「检测本机 NapCat」按钮
+> 或 `napcat_detect_local` 工具），**只列候选**，由用户点「使用这个」才写入端点并连接
+> ——此时仍按 `external` 模式接入，状态条显示「外部端点」。
+> `connection.mode` 的**自动切换**（`local → external → managed`）**尚未实现**。
 
 局域网安全约束（写入 M2 探测逻辑与文档）：远程 NapCat 的 `host` 必须监听 `0.0.0.0` 且**必须设置 token**；插件对无 token 的非回环端点给出明确警告。
 
@@ -214,7 +243,8 @@ type Message = {
 | 工具 | 作用 |
 |------|------|
 | `napcat_status` | 连接状态、当前模式、登录账号 |
-| `napcat_configure` | 配置 OneBot 端点与 token（校验通过才落盘）；返回 `{configured, connected, login}` |
+| `napcat_configure` | 配置 OneBot 端点与 token（校验通过才落盘）；返回 `{configured, connected, login}`。M2 追加可选 `paths`（本机扫描路径，**只接受绝对路径**；不传 = 不改，传 `[]` = 清空，传 `[...]` = 整体替换；`endpoint` 传空串 = 只改路径、不动连接） |
+| `napcat_detect_local` | **M2**：本机 NapCat 探测（无入参，范围完全由配置决定）。返回 `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`；探测**不带 token**、**只读**、**不扫局域网**；`budgetExhausted: true` = 扫描没扫完（**不得**读作「没找到」）。结论进 `napcat_status` 的 `detection` 字段（缓存） |
 | `napcat_list_chats` | 群列表 / 好友列表（`kind: 'group'|'friend'`） |
 | `napcat_get_history` | 拉取会话历史消息：`chatKind`、`chatId`、`beforeSeq?`、`count?`（默认 100、上限 200）、`since?/until?`（时间过滤由插件 server 侧完成——OneBot 无时间过滤参数，仍按游标翻页后过滤）。返回 `{messages, nextBeforeSeq, exhausted}`；取窗按**最新优先**（页内配额用满时保留较新的消息，被挤出的更旧消息由下一次向前翻页取回） |
 | `napcat_search_messages` | 会话内关键词搜索：`chatKind`、`chatId`、`query`、`startSeq?`、`maxPages?`（默认 20 页）。OneBot 无服务端搜索，只能向更早翻页后过滤，因此扫描量有限；返回 `{hits: [{message, contextBefore}], scanned, exhausted}` |

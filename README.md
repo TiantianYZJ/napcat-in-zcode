@@ -13,9 +13,10 @@
 NapCat 与 QQ 始终是插件之外的独立进程。
 （NapCat 官方仓库已归档，可用发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release —— 见[已知限制](#已知限制与路线图)第 7 条。）
 
-> **M1 状态**：外部 OneBot 端点（HTTP / WebSocket）路径已实现并有 376 条自动化测试覆盖。
-> 本机 NapCat 自动探测（M2）、插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）
-> **尚未实现**，详见[已知限制与路线图](#已知限制与路线图)。
+> **当前状态（M2 已落地）**：外部 OneBot 端点（HTTP / WebSocket）路径与**本机 NapCat 自动探测**
+> （面板里的「检测本机 NapCat」）均已实现，有 554 条自动化测试覆盖。
+> 插件自带宿主（M3）、媒体下载（M1.1）、后台常驻监听与主动推送（M4）**尚未实现**，
+> 详见[已知限制与路线图](#已知限制与路线图)。
 
 ---
 
@@ -25,6 +26,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 - [截图](#截图)
 - [安装](#安装)
 - [配置 NapCat](#配置-napcat)
+  - [自动探测本机 NapCat](#3-自动探测本机-napcat)
 - [使用](#使用)
 - [配置项](#配置项)
 - [MCP 工具参考](#mcp-工具参考)
@@ -47,7 +49,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 面向的场景：复盘一段群里的技术讨论、把客户的原话喂给模型写纪要、导出一段聊天记录进
 版本库之外的个人归档。
 
-**它不做什么**：不发送消息、不加群退群、不做任何写操作；M1 也不常驻后台监听。
+**它不做什么**：不发送消息、不加群退群、不做任何写操作；也不常驻后台监听（M4 才做）。
 
 ---
 
@@ -74,9 +76,9 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 |------|------|
 | ZCode 桌面版 | 本插件的 UI 是**侧栏面板**（清单里的 `ui.surfaces`），需要 ZCode 桌面端承载 |
 | Node.js ≥ 20 | 插件的 MCP server 以 `node` 启动（见 `.mcp.json` 的 `command: "node"`） |
-| 一个已登录的 NapCat | M1 只支持「外部 OneBot 端点」，需要你自己准备一个正在跑、且 QQ 已登录的 NapCat |
+| 一个已登录的 NapCat | 需要一个正在跑、且 QQ 已登录的 NapCat。**M2 起**，插件可以帮你「检测本机 NapCat」并把端点填好，但 NapCat 本体仍然要你自己准备 |
 
-**M1 不提供 NapCat 本体。** 插件不会下载、安装或拉起 NapCat。
+**插件不提供 NapCat 本体。** 它不会下载、安装或拉起 NapCat —— 那是 M3「自带宿主」才做的事。
 
 ### 方式一：GitHub 市场（跨设备推荐）
 
@@ -150,7 +152,65 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 > （`0.0.0.0` 也算非回环 —— 它表示「监听所有网卡」）且没填 token 时，状态条与表单上会出现
 > 黄色警告：同网段的其他人可能读到你的聊天记录。
 
-### 3. 之后怎么改
+### 3. 自动探测本机 NapCat
+
+面板处于「未配置」（或「连接失败 → 重新配置端点」）时，表单上方有一个 **「检测本机 NapCat」** 按钮：
+点一下，插件会在本机找出**已经在跑的** NapCat，把可用的 OneBot 端点列出来，
+你点候选行的 **「使用这个」** 即可接上。
+
+> **检测不会自动连接。** 它只列候选 —— 由你决定用哪个端点、自己填 token、自己点「连接」。
+> 不想用探测也可以，直接手填端点（见上一节），两条路径完全等价。
+
+#### 探测范围
+
+| 来源 | 说明 |
+|------|------|
+| **回环地址** | `127.0.0.1` / `::1` / `localhost` 上的端口；默认扫 `3000`、`3001`、`6099`（`autoDetect.ports`），每个端口各试 `http://` 与 `ws://` |
+| **你显式配置的端点** | `autoDetect.endpoints` 里的端点，外加**当前已配置的连接端点**。**这一类允许非回环** —— 是你自己填的才算数 |
+| **本机安装发现** | 默认安装位置（`~/.napcat`、`%APPDATA%\NapCat` 等）+ **盘根枚举**（各盘一级子目录里像 NapCat 安装的，如 `D:\NapCat`、`D:\QQChatExporter`）+ 你在面板「设置 → 扫描路径」里配的路径 |
+
+**不扫描局域网**：探测只连回环地址与**你显式配置**的端点，绝不会去扫同网段的其它机器。
+（安装配置里发现的**非回环**端点会被跳过，面板上会列出「已跳过 …（不是回环地址）」。）
+
+#### 探测不带 token
+
+探测只回答两个问题：「这个端点活着吗」「它需不需要 token」。
+它**不携带** access token（多数本机实例没设 token，带上反而可能被拒），
+所以疑似受保护的端点会作为 **「该端点可能需要 access token」** 的候选出现，由你自己判断要不要填 token。
+
+**探测是只读的**：不改你的 NapCat 配置（连只读的 `config.json` 都不写）、不启停任何进程。
+
+#### 面板的三种状态
+
+| 状态 | 面板显示 |
+|------|----------|
+| 还没探过 | `尚未检测` |
+| NapCat 在跑，但没开 OneBot Server | `检测到 NapCat（未开启 OneBot Server）` + WebUI 地址 + 开启指引 |
+| 什么都没探到 | `未检测到本机 NapCat` |
+
+> ⚠️ **插件不会替你开启 NapCat 的 OneBot Server。**
+> 需要你自己进 **NapCat WebUI → 网络配置 → 开启 HTTP Server**，然后再点一次「检测本机 NapCat」。
+> 插件只负责**发现**与**连接**，不改你的 NapCat 配置、不启停进程（M3 的「自带宿主」才是另一回事）。
+
+#### 结论是缓存，配置一变就过期
+
+「检测到 / 未检测到」这个结论是**缓存**，不是实时状态：
+
+- 配置一变（改了端点、改了扫描路径），或你**重新配置**之后，旧结论立刻失效；
+- 面板此时显示 **`结论已过期，请重新检测`**（而不是拿旧结论说「检测到了」）；
+- 结论失效后**必须重新点一次**「检测本机 NapCat」。
+
+#### 扫描没扫完 ≠ 本机没有 NapCat
+
+扫描有整体时间预算。**预算耗尽**时（`napcat_detect_local` 返回里 `budgetExhausted: true`），
+面板显示「探测未完成（扫描预算耗尽），结果可能不全 —— 不能据此判断本机没有 NapCat」，
+**不会**显示「未检测到本机 NapCat」：那轮扫描根本没扫完，下结论就是假阴性。
+遇到这种情况可以调大 `autoDetect.probeTimeoutMs` 或减少扫描端口后重试。
+
+> **数量以面板显示的提示为准**：候选端点与扫描端口都会被截断展示（各最多 20 条），
+> **完整计数写在提示（`notes`）里**，不在列表长度上。
+
+### 4. 之后怎么改
 
 连接失败时，**右栏的错误占位块**里会出现 **「重试」** 和 **「重新配置端点」** 两个按钮
 （不在状态条上 —— 状态条只负责显示状态）；点后者可以重新填端点
@@ -370,9 +430,13 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 |--------|--------|----------|
 | `connection.endpoint` | `""`（空 = 未配置） | 面板的端点表单 / `napcat_configure` 工具写入 |
 | `connection.token` | `""` | 同上；只存本地，权限 `0600`。**重新配置时留空 = 保留已保存的 token**（清除要显式 `clearToken: true`） |
-| `connection.mode` | `"auto"` | **M1 只会用 `external`**：连接成功后状态一律报 `external`。`auto`（自动探测）是 M2 的事 |
-| `autoDetect.ports` | `[3000, 3001, 6099]` | **M1 不生效**（自动探测是 M2） |
-| `autoDetect.endpoints` | `[]` | **M1 不生效** |
+| `connection.mode` | `"auto"` | 实际生效的连接模式是 `external`（外部 OneBot 端点）：M2 的自动探测**只列候选**，点「使用这个」之后仍按 `external` 接入，状态条显示「外部端点」 |
+| `autoDetect.ports` | `[3000, 3001, 6099]` | **M2 生效**：本机回环端口扫描清单（每个端口各试 `http://` 与 `ws://`） |
+| `autoDetect.endpoints` | `[]` | **M2 生效**：额外探测的端点（**允许非回环** —— 你自己填的才算数） |
+| `autoDetect.paths` | `[]` | 本机 NapCat 扫描路径（**只接受绝对路径**，相对路径会被拒绝）；面板「设置 → 扫描路径」可编辑；面板保存时**整体替换**（不是追加） |
+| `autoDetect.probeTimeoutMs` | `1200` | 单个候选端点的探测超时（100–10000） |
+| `autoDetect.scanDrives` | `true` | 是否自动做盘根枚举（关掉后只扫你指定的路径与默认位置） |
+| `autoDetect.maxRoots` | `32` | 盘根发现的候选根上限（生效值 = min(maxRoots, 64)；0 = 禁用盘根发现） |
 | `managed.napcatVersion` | `"4.18.42"` | **M1 不生效**（自带宿主是 M3） |
 | `managed.downloadMirror` | `"auto"` | **M1 不生效** |
 | `export.dir` | `"user"` | 决定「保存为附件…」与「导出」的默认目的地（`user` / `workspace`）；面板「导出▾」里显式选的目标优先 |
@@ -400,13 +464,14 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 
 ## MCP 工具参考
 
-agent 可以直接调用这 8 个工具（面板走的是同一组工具、同一个 server 进程）。
+agent 可以直接调用这 9 个工具（面板走的是同一组工具、同一个 server 进程）。
 返回值一律是**一段 JSON 文本**；出错时 `isError: true` + `{"error": "..."}`。
 
 | 工具 | 入参 | 返回 |
 |------|------|------|
-| `napcat_status` | 无 | `{configured, connected, mode, login?, error?, warning?}`。**连接失败时 `isError` 仍是 `false`** —— 那是状态，不是工具错误。`warning` 是安全警告（如非回环端点没设 token），有它不代表连接失败 |
-| `napcat_configure` | `{endpoint, token?, clearToken?}` | `{configured: true, connected: true, login, warning?}`。校验不过 → `isError`。**token 留空 = 保留已保存的 token**；清除要显式 `clearToken: true` |
+| `napcat_status` | 无 | `{configured, connected, mode, login?, error?, warning?, detection?}`。**连接失败时 `isError` 仍是 `false`** —— 那是状态，不是工具错误。`warning` 是安全警告（如非回环端点没设 token），有它不代表连接失败。`detection` 是**最近一次 `napcat_detect_local` 的结论缓存**（没探测过就没有这个键；读它**不会**触发任何扫描） |
+| `napcat_configure` | `{endpoint, token?, clearToken?, paths?}` | `{configured: true, connected: true, login, warning?, pathsSaved?, paths?}`。校验不过 → `isError`。**token 留空 = 保留已保存的 token**；清除要显式 `clearToken: true`。`paths`（本机扫描路径）的语义：**不传 = 不改**；传 `[]` = **清空**扫描路径；传 `[...]` = **整体替换**（不是追加）；**相对路径会被拒绝**（直接报错，不静默丢弃）。`endpoint` 传**空串** = 只更新扫描路径、**不动已有连接**（这样不会把你 WS URL 里的 `?access_token=` 抹掉） |
+| `napcat_detect_local` | 无 | `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`。探测**不带 token**（只回答「这个端点活着吗、需要 token 吗」），疑似需要 token 的端点在 `tokenRequired` 里。`budgetExhausted: true` = 扫描**没扫完**，结果可能不全，**不能**据此判断「本机没有 NapCat」。结论会带进 `napcat_status` 的 `detection` 字段（缓存，不重复扫描）。`installs[].configDir` 与 `scanned.paths` 是**本机绝对路径**，只用于解释「这个端点是从哪来的」 |
 | `napcat_list_chats` | `{kind: "group" \| "friend"}` | `{chats: [{kind, id, name, memberCount?}]}`；`id` 一律是字符串 |
 | `napcat_get_history` | `{chatKind, chatId, beforeSeq?, count?, since?, until?}` | `{messages, nextBeforeSeq, exhausted}`。`count` 1–200，默认 100；`chatId` 接受数字或字符串；`since` / `until` 是 epoch 秒（含），在服务端本地过滤 |
 | `napcat_search_messages` | `{chatKind, chatId, query, startSeq?, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
@@ -430,6 +495,18 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
   `history pagination exceeded page limit (1000)`。
   也就是说：**要么拿到完整区间，要么拿到错误**，不会把一段不完整的区间当成功导出。
   （`napcat_get_history` 不一样 —— 它的「取不满」是**正常返回**，靠 `exhausted` 表达。）
+
+`napcat_detect_local` 的细则：
+
+- **探测范围**：回环地址（`127.0.0.1` / `::1` / `localhost`）+ **你显式配置**的端点
+  （`autoDetect.endpoints` 与当前已配置的连接端点）+ **本机安装发现**
+  （默认安装位置 + 盘根枚举 + `autoDetect.paths` 指定的路径）；**不扫描局域网**；
+- **只读**：不改你的 NapCat 配置、不启停进程；探测**不带 token**；
+- **出参有上界**：候选端点与扫描端口各最多展示 **20** 条，**完整计数写在 `notes` 里**；
+- **失败桶按来源裁剪**：每个来源最多展示 **5** 条失败候选，其余只给计数；
+- **超时 ≠ 连不上**：超时的候选/失败条目标「目标无响应（超时）」，与「连不上或被拒绝」分开说；
+- `notes` 是人类可读说明（预算耗尽、被丢弃的非回环端点、多个 WebUI 端口、裁剪计数…），
+  **原样读即可**，不要自己按数组长度重算数量。
 
 ---
 
@@ -455,16 +532,15 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
 
 ## 已知限制与路线图
 
-### M1 不支持（明确写出来，不含糊）
+### 当前版本不支持（明确写出来，不含糊）
 
 | 不支持的事 | 说明 | 归属 |
 |------------|------|------|
-| 本机 NapCat 自动探测 | 不会去扫 `3000/3001/6099` 或找本机 NapCat 安装；必须手填端点 | **M2** |
 | 插件自带宿主 | 不会下载 / 安装 / 拉起 NapCat，不会引导扫码 | **M3** |
 | 媒体下载 | 「包含图片」在 M1 不下载任何媒体文件，只在导出里记 URL（Markdown 是占位符或链接，JSON 里是完整 URL） | **M1.1** |
 | 合并转发展开 | 合并转发消息只渲染成 `[合并转发]` 占位符，不懒加载子消息 | **M1.1** |
 | 后台常驻监听 / 主动推送 | 面板只在打开时拉取；不驻留、不推送新消息 | **M4** |
-| 连接断开后自动重连 | **M1 没有自动重连**：WebSocket 只在**下一次调用**时懒建连，没有指数退避重连循环；面板在连接失败态给一个手动「重试」按钮，恢复要靠你点它（或重新打开面板） | 未排期 |
+| 连接断开后自动重连 | **当前没有自动重连**：WebSocket 只在**下一次调用**时懒建连，没有指数退避重连循环；面板在连接失败态给一个手动「重试」按钮，恢复要靠你点它（或重新打开面板） | 未排期 |
 | 消息发送 / 群管理 | 一律不做写操作 | 非目标 |
 
 ### 实测得出的坑（都是本项目验证过的事实，不是猜测）
@@ -489,7 +565,7 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
 6. **「包含图片」在 M1 不下载媒体**（只记 URL），面板上的开关是禁用状态。标为 M1.1。
 7. **NapCat 上游已归档。** 官方仓库 `NapNeko/NapCatQQ` 主分支只剩一个 README，
    npm 上的 `napcat` 包也已注销；可用的发行物在镜像仓库 `XingYunStar/NapCatQQ` 的 release
-   （v4.18.42）。**本插件本身不下载 NapCat** —— 那是 M2 / M3 的事。
+   （v4.18.42）。**本插件本身不下载 NapCat** —— 那是 M3 的事。
 8. **配置优先级**：`config.json` 与清单 `userConfig`（经 env 注入）之间 **env 合法值优先**；
    清单两项 `userConfig` 的 default 是**空串**，所以用户没动过设置时文件保持权威。
 9. **渲染上限 2000 条**：超出后只渲染最近 2000 条（导出与搜索不受影响）。
@@ -502,6 +578,15 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
 13. **「改用用户目录」退路导出的是失败时刻的选区。** 工作区导出失败后如果你改了选区
     再点那个「改用用户目录」按钮，导出的仍是**失败那一刻的旧选区**（退路按钮捕获的是当时的
     选区快照）。想导出新的选区，直接重新点一次「保存为附件…」。
+14. **探测结论是缓存。** 「检测到本机 NapCat」这个结论只对**当时那份配置**成立：
+    配置一变（改端点、改扫描路径）或你重新配置之后，它立刻失效，面板显示「结论已过期，请重新检测」。
+    它**不是**实时状态，也不会自动重扫。
+15. **探测从不带 token，也从不改你的 NapCat。** 疑似受保护的端点只能靠「可能需要 access token」
+    的措辞提示你；插件**不会**替你开启 OneBot Server、不会写 NapCat 的 `config.json`。
+    要用受保护的端点，得你自己填 token、自己在 WebUI 里开 OneBot Server。
+16. **盘根枚举是有界的。** 每个盘最多取 `autoDetect.maxRoots` 个候选根、跨盘总量上限 64，
+    触顶时面板会提示「可能漏掉某些 NapCat 安装目录」。装在**自定义目录**里的 NapCat，
+    靠 `autoDetect.paths` 指定绝对路径最可靠。
 
 ### 路线图
 
@@ -509,7 +594,7 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
 |--------|------|------|
 | **M1** | 外部 OneBot 端点（HTTP / WS）+ 侧栏面板 + 注入 + 导出 | ✅ 已实现 |
 | **M1.1** | 媒体下载（`includeImages` 真正生效、`media/` 子目录）、合并转发展开 | ⬜ 未开始 |
-| **M2** | 本机已运行 NapCat 的自动探测与接入（复用路径，`connection.mode = auto`） | ⬜ 未开始 |
+| **M2** | 本机已运行 NapCat 的自动探测与接入（面板「检测本机 NapCat」+ `napcat_detect_local`） | ✅ 已实现 |
 | **M3** | 自带宿主：下载 / 安装 / 拉起 NapCat，扫码引导（Windows 优先） | ⬜ 未开始 |
 | **M4** | 常驻守护、后台监听、主动推送 | ⬜ 预留 |
 
@@ -535,6 +620,30 @@ agent 可以直接调用这 8 个工具（面板走的是同一组工具、同�
 4. **端口 / 防火墙** —— 远程端点要能路由到；本机回环不受防火墙影响。
 5. **URL 形状错误** —— `http://`（空主机）、端口越界、畸形写法都会被直接拒绝，
    且**不会写进配置文件**（提示里会给出脱敏后的端点）。
+
+### 「检测本机 NapCat」说没检测到
+
+先按面板的措辞分清三种情况：
+
+| 面板显示 | 含义 | 怎么办 |
+|----------|------|--------|
+| `尚未检测` | 压根没探过 | 点「检测本机 NapCat」 |
+| `检测到 NapCat（未开启 OneBot Server）` | NapCat 在跑，但 OneBot 服务没开 | 进 WebUI → **网络配置** → 开启 **HTTP Server**，再检测一次 |
+| `未检测到本机 NapCat` | 这一轮扫完了，确实没找到 | 见下面的排查顺序 |
+
+`未检测到本机 NapCat` 时的排查顺序：
+
+1. **OneBot Server 开了吗？** —— 多数情况是这一条（上一行就是它的提示）；
+2. **端口不在默认清单里？** —— 默认只扫 `3000` / `3001` / `6099`（`autoDetect.ports`）；
+   把端口加进配置，或干脆手填端点；
+3. **装在自定义目录？** —— 盘根枚举只找盘根**一级子目录**里名字像 NapCat、或其下有 `config` 目录的
+   （如 `D:\NapCat`、`D:\QQChatExporter`）；装得更深的要在面板「设置 → 扫描路径」里写**绝对路径**；
+4. **这一轮没扫完？** —— 面板提示「探测未完成（扫描预算耗尽）」时**不能**下结论，
+   调大 `autoDetect.probeTimeoutMs` 或减少扫描端口后重试；
+5. **端点需要 token？** —— 候选行上带「该端点可能需要 access token」角标，
+   在下方填入 access token 再连接（探测本身从不带 token）。
+
+> 探测**只读**：它不会替你开启 OneBot Server，也不会写你的 NapCat 配置 —— 那两件事只能你自己做。
 
 ### 找不到消息 / 消息流是空的
 
@@ -606,16 +715,17 @@ D:/Develop/Napcat in ZCode/
 │     │  │  ├─ state.ts             # 运行期状态 / 端点校验 / 落盘
 │     │  │  ├─ config.ts            # 配置读写（config.json，0600，原子写）
 │     │  │  ├─ uiresource.ts        # ui://napcat-zcode/panel.html 资源
-│     │  │  ├─ onebot/              # OneBot 客户端（HTTP | WS）+ 动作封装
+│     │  │  ├─ onebot/              # OneBot 客户端（HTTP | WS）+ 动作封装 + 探测内核
+│     │  │  ├─ host/                # 本机 NapCat 安装发现 + 探测编排（M2）
 │     │  │  ├─ model/               # 消息规范化 + 注入体格式化
 │     │  │  └─ export/              # Markdown / JSON 导出器 + .gitignore 防护
 │     │  └─ panel/                  # React 面板源码（含 protocol-notes.md）
 │     ├─ dist/                      # 构建产物（随插件分发）
 │     │  ├─ server.mjs
 │     │  └─ ui/panel.html
-│     └─ tests/                     # vitest（376 条）
+│     └─ tests/                     # vitest（554 条）
 ├─ docs/
-│  ├─ acceptance-m1.md              # M1 实机验收清单
+│  ├─ acceptance-m1.md              # M1 实机验收清单（+ M2 验收项）
 │  └─ superpowers/{plans,specs}/    # 计划与设计文档
 ```
 
@@ -627,7 +737,7 @@ D:/Develop/Napcat in ZCode/
 cd plugins/napcat-zcode
 npm install          # 首次
 npm run typecheck    # tsc --noEmit
-npm test             # vitest run（376 条）
+npm test             # vitest run（554 条）
 npm run build        # = build:server + build:panel
 npm run smoke        # 端到端冒烟：真实 stdio + 真实构建产物 + 面板产物在 DOM 中渲染
 npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只能推断的 NapCat 语义
@@ -637,7 +747,7 @@ npm run verify:live  # 真机验证：连真实 NapCat，实测三条此前只�
 
 | 脚本 | 检查什么 |
 |------|----------|
-| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：8 个工具的出入参契约、游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
+| `scripts/smoke-stdio.mjs` | 真实子进程 + 真实 MCP JSON-RPC over stdio + 假 OneBot 服务端：9 个工具的出入参契约、本机探测与结论缓存、游标翻页、注入声明首行、真实落盘导出（导出落在临时 HOME，不污染用户目录） |
 | `scripts/smoke-panel.mjs` | 把构建出的 `dist/ui/panel.html` 装进 DOM，由一个说 MCP-UI 协议的模拟宿主驱动：握手、会话列表、消息流、选择状态机（未打开会话 → 未选择消息 → 可点） |
 
 两个脚本都不连真实 QQ，跑完即退出（退出码 0 = 全通过）。
