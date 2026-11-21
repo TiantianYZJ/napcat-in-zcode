@@ -64,17 +64,55 @@ const friends = await ob('get_friend_list');
 record('get_group_list / get_friend_list', Array.isArray(groups) && Array.isArray(friends),
   `群 ${groups.length} 个 / 好友 ${friends.length} 个`);
 
-const chat = groups[0] || friends[0];
+// 选一个**消息足够多**的会话：只含 1 条消息的会话无法构造 message_seq 锚点，
+// 边界语义与游标翻页两项都测不出来（2026-11-21 真机首跑就是踩了这个坑）。
+const MIN_MESSAGES = 3;
+const PROBE_LIMIT = 15;
+
+async function probe(chat, isGroup) {
+  const idKey = isGroup ? 'group_id' : 'user_id';
+  const id = String(isGroup ? chat.group_id : chat.user_id);
+  const action = isGroup ? 'get_group_msg_history' : 'get_friend_msg_history';
+  let count = 0;
+  try {
+    const r = await ob(action, { [idKey]: id, count: 5 });
+    count = (r && r.messages ? r.messages.length : 0);
+  } catch {
+    count = 0;
+  }
+  return {
+    id,
+    idKey,
+    action,
+    name: isGroup ? chat.group_name : chat.nickname,
+    count,
+  };
+}
+
+const candidates = [];
+for (const g of groups.slice(0, PROBE_LIMIT)) {
+  const p = await probe(g, true);
+  candidates.push(p);
+  if (p.count >= MIN_MESSAGES) break;
+}
+if (!candidates.some((c) => c.count >= MIN_MESSAGES)) {
+  for (const f of friends.slice(0, PROBE_LIMIT)) {
+    const p = await probe(f, false);
+    candidates.push(p);
+    if (p.count >= MIN_MESSAGES) break;
+  }
+}
+
+const chat = candidates.find((c) => c.count >= MIN_MESSAGES) || candidates[0];
 if (!chat) {
   record('存在可读取的会话', false, '该账号没有任何群或好友，无法继续');
   process.exit(1);
 }
-const isGroup = groups.length > 0;
-const chatId = String(isGroup ? chat.group_id : chat.user_id);
-const chatName = isGroup ? chat.group_name : chat.nickname;
-const histAction = isGroup ? 'get_group_msg_history' : 'get_friend_msg_history';
-const idKey = isGroup ? 'group_id' : 'user_id';
-record('选定会话', true, `${chatName}（${histAction} ${chatId}）`);
+const chatId = chat.id;
+const chatName = chat.name;
+const histAction = chat.action;
+const idKey = chat.idKey;
+record('选定会话', true, `${chatName}（${histAction} ${chatId}，首页 ${chat.count} 条）`);
 
 // ── 1. 实测 message_seq 的边界语义 ──────────────────────────────────
 info('1. 实测 message_seq 边界语义（独占 vs 包含）');
