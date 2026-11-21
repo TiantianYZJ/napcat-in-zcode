@@ -45,6 +45,15 @@
 
 5. **Node 没有内置 ZIP 解包**：`zlib` 只有 deflate/inflate（raw），ZIP 需要自己解析中央目录。本项目**不引入运行时依赖**，故自带最小实现。
 
+6. **插件面板的入口只有右侧边栏，且「新建任务」区永远没有入口**（2026-11-21 对 `D:\ZCode` 逆向核实的结论，已写进 `src/panel/protocol-notes.md`）：
+   - 宿主把 `ui.surfaces` 一律开成**右侧 side pane tab**（tab id 形如 `plugin-ui:<workspace>:<parentSessionId>:<pluginId>:<server>:<resourceUri>:surface:<surfaceId>`）
+   - 渲染层 `listSurfaces` 只有 4 个调用点：侧栏「概览」页签的「应用插件」推荐区、插件市场条目「打开」、扩展槽位 `nav.primary`、文件扩展名分流 `file.viewer`
+   - `composer.status` / `composer.mention` 两个与输入框相关的扩展槽位 **targets 不接受 `surface`**；命令面板无 surface 条目；composer 区域代码里 `surface` 零命中
+   - `availability` 只有 `"session"` 一个合法值，写别的值该 surface 被整个丢弃
+   - **插件 manifest schema 里没有 `slotItems`**（GLM runtime `zcode.cjs` 里 `slotItems` 零命中）→ `nav.primary` / `file.viewer` 是**扩展（extension）**机制，**MCP 插件用不了**
+   - 侧栏推荐区数据来自服务端下发的 `uiPluginRecommendations`，插件自身无法把自己加进去
+   - → **唯一由插件自己控制、且不依赖插件市场的入口**：MCP 工具结果带 `_meta.ui.resourceUri` → 对话内嵌渲染面板 + 「在侧边面板打开」按钮（M3 新增，见 Task 4/5）
+
 ---
 
 ## Global Constraints
@@ -254,6 +263,7 @@ export async function probeManagedHost(install: ManagedInstall): Promise<HostSta
 | `napcat_start` | `id?`（默认最近一个受管安装） | 启动结果 + 风险提示 |
 | `napcat_stop` | `id?` | 停止结果 |
 | `napcat_uninstall` | `id` | 删目录（**需确认**，面板二次确认后才调用） |
+| `napcat_open_panel` | 无 | **对话内嵌打开面板**：结果带 `_meta.ui.resourceUri = ui://napcat-zcode/panel.html` |
 
 **修改**
 - `napcat_status` 增加 `host` 段（受管宿主状态摘要）
