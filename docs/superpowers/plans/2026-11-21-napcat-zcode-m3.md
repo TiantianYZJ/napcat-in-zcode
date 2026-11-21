@@ -190,6 +190,7 @@ export class ManagedHost {
 6. 独立模式的 `config/` 里要写好 `webui.json`（端口 6099、token 由插件生成并**只**存插件数据目录）与 `onebot11_<uin>.json`（若已知 uin）
    - **token 不进仓库、不进日志、不进工具返回值**；写进受管安装目录的 `webui.json` 是必要的（NapCat 要用），但**返回给用户/模型的一律是掩码**
 7. 独立模式**不依赖**桌面 QQ → 不需要 `qqnt.json` 改写；注入模式才需要
+8. **发现与台账不重叠**：受管安装由台账登记（插件自己知道）；外部安装仍靠 M2 的探测发现 —— 但 M2 的候选根要能命中**官方新布局** `<dir>/napcat/config/`（本机 `D:\NapCat-v4.18.42\napcat\config` 就是这个形态，现有探测命中不了）
 
 **测试**
 - 台账读写往返；`add` 同 id 幂等；`remove` 后重新读盘仍无
@@ -303,7 +304,7 @@ export async function probeManagedHost(install: ManagedInstall): Promise<HostSta
 - README 新增「受管宿主」小节：安装路径、模式说明、下载源与 sha256、代理配置、卸载方式
 - spec §5.2 补 M3 细节；§3.1 已知限制追加（本轮实测：QQ 9.9.36+ 完整性检查、注入模式不可用、直连被墙需代理、上游已清空只能用归档镜像）
 - `docs/acceptance-m1.md` 追加 §15（M3 验收项 + 文案红线表）
-- `plugin.json` / `marketplace.json` 版本 `0.3.0` → `0.4.0`
+- `plugin.json` / `marketplace.json` 版本 `0.4.0` → `0.5.0`（**0.4.0 已被 M1.2 翻页修复占用**，见 `docs/superpowers/plans/2026-11-21-napcat-zcode-m1-2-pagination.md`）
 - **重建 `dist/`**（`server.mjs` + `ui/panel.html`）并一并提交
 - `package.json` 的 `version` 同步（此前 M2 漏过）
 
