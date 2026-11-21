@@ -85,10 +85,18 @@
     configDir: string;             // 找到的 NapCat 配置目录
     onebotConfigs: string[];       // onebot11*.json 的绝对路径
     endpoints: { endpoint: string; transport: 'http'|'ws'; detail: string }[];  // 从配置里读到的端点
-    webui?: { port: number; token?: string };
+    webui?: { port: number; tokenRequired?: boolean; disabled?: boolean };
+    //   ⚠️ 故意**没有** token 字段：WebUI token 的明文不进返回值
+    //   （它不是 OneBot access token，两者不能混用）
+    truncated?: boolean;           // 端点数超限被截断
+    notes?: string[];              // 说明（截断原因等）
   }
   export function findLocalNapCat(roots: string[]): InstalledNapCat[];
   export function defaultNapCatRoots(homeDir: string, platform: NodeJS.Platform): string[];
+  export function discoverNapCatInstallRoots(platform?: NodeJS.Platform): string[];  // 盘根枚举 → 候选根
+  export function collectNapCatRoots(homeDir: string, platform?: NodeJS.Platform): string[];  // 默认根 + 盘根发现
+  export function toInstallCandidates(installed: InstalledNapCat[]): DetectCandidate[];  // source:'install'
+  export function installPathsOf(installed: InstalledNapCat[]): string[];
   ```
 - Consumes: `node:fs`（`readdirSync`/`readFileSync`，**不用**递归遍历整盘）
 
@@ -96,10 +104,16 @@
 1. **候选根目录**（`defaultNapCatRoots`）：
    - 全部平台：`<home>/.napcat`、`<home>/NapCat`、`<home>/.config/napcat`
    - Windows：`<APPDATA>/NapCat`、`<LOCALAPPDATA>/NapCat`、`<ProgramFiles>/NapCat`、`<ProgramFiles(x86)>/NapCat`、`<USERPROFILE>/AppData/Roaming/NapCatQQ`
-   - macOS/Linux：`<home>/Library/Application Support/NapCat`、`<home>/.local/share/NapCat`
+   - macOS/Linux：`<home>/Library/Application Support/QQ/NapCat`（上游实际路径）、`<home>/Library/Application Support/NapCat`、`<home>/.local/share/NapCat`
+   - **盘根枚举**（`discoverNapCatInstallRoots`）：上游 `writePath` 在 Windows/Linux 上**就是安装目录本身**
+     （用户可装在 `D:\NapCat`、`D:\QQChatExporter`…），默认根清单命中不了 →
+     枚举存在的盘根（`A:\`…`Z:\`，只 stat 判断存在），取其**一级子目录**里名字像 `*NapCat*`/`*NapCatQQ*`
+     或**其下有 `config` 目录**的，收为候选根。**不做全盘递归**。
+   - **调用方（Task 4）必须合并三类根**再传给 `findLocalNapCat`：`cfg.autoDetect.paths`（用户显式配置，优先级最高）
+     → `defaultNapCatRoots(...)` → `discoverNapCatInstallRoots(...)`。
 2. 在每个根目录下**最多两层**查找 `onebot11*.json`（NapCat 把每个账号的配置写成 `onebot11_<uin>.json`）与 `webui.json`；**不做**全盘递归。
 3. 从找到的 `onebot11*.json` 里读 `network.httpServers` / `network.websocketServers`，取 `enable:true` 的项 → 生成端点：`http://<host>:<port>` / `ws://<host>:<port>`；`host` 为 `0.0.0.0` 或 `::` 时**改写成回环**（`127.0.0.1` / `[::1]`），因为本机探测只连回环。
-4. 从 `webui.json` 读 `port` 与 `token`。
+4. 从 `webui.json` 读 `port`；`token` **只给「有没有」**（`tokenRequired`），**明文不进返回值**。
 5. 找不到任何 NapCat → 返回空数组，**不抛错**。
 6. 目录/文件不可读（权限、占用）→ 跳过，**不抛错**。
 

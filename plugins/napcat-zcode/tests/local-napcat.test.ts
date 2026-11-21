@@ -12,11 +12,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  collectNapCatRoots,
   defaultNapCatRoots,
+  discoverNapCatInstallRoots,
   findLocalNapCat,
   installPathsOf,
+  MAX_DISCOVERED_ROOTS,
   MAX_ENDPOINTS_PER_INSTALL,
   MAX_ENDPOINTS_TOTAL,
+  napCatCandidateDirs,
+  napCatDriveRoots,
   toInstallCandidates,
   type InstalledNapCat,
 } from '../src/server/host/local-napcat.js';
@@ -169,7 +174,8 @@ describe('findLocalNapCat', () => {
     expect(found[0].webui?.tokenRequired).toBe(true);
     // token 明文不进返回值
     expect(JSON.stringify(found[0])).not.toContain('webui-secret-token');
-    expect(found[0].webui?.token).toBeUndefined();
+    // 类型里没有 token 字段 → 运行时也不能有（`webui.token` 必须是编译错误，不是 undefined）
+    expect(Object.keys(found[0].webui ?? {})).not.toContain('token');
   });
 
   it('finds the configs of multiple accounts', () => {
@@ -306,6 +312,59 @@ describe('findLocalNapCat', () => {
     ]);
   });
 
+  it('treats a server without an enable field as enabled', () => {
+    const root = join(tmp, 'NapCat');
+    writeOnebotConfig(join(root, 'config'), 'onebot11_123.json', {
+      network: {
+        // 没有 enable 字段 → 按启用处理（少给一个候选 = 假阴性）
+        httpServers: [{ name: 'no-enable', host: '127.0.0.1', port: 3000 }],
+        websocketServers: [{ name: 'no-enable-ws', host: '127.0.0.1', port: 3001 }],
+      },
+    });
+
+    const found = findLocalNapCat([root]);
+
+    expect(found[0].endpoints.map((e) => e.endpoint)).toEqual([
+      'http://127.0.0.1:3000',
+      'ws://127.0.0.1:3001',
+    ]);
+  });
+
+  it('rewrites the string "0" host to loopback', () => {
+    const root = join(tmp, 'NapCat');
+    writeOnebotConfig(join(root, 'config'), 'onebot11_123.json', {
+      network: { httpServers: [httpServer(3000, '0')], websocketServers: [] },
+    });
+
+    const found = findLocalNapCat([root]);
+
+    expect(found[0].endpoints[0].endpoint).toBe('http://127.0.0.1:3000');
+    expect(found[0].endpoints[0].rewrittenToLoopback).toBe(true);
+  });
+
+  it('still reads a config that the user hand-edited with comments and trailing commas', () => {
+    const root = join(tmp, 'NapCat');
+    const configDir = join(root, 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'onebot11_123.json'),
+      [
+        '{',
+        '  // 用户手改过：加了注释',
+        '  "network": {',
+        '    "httpServers": [',
+        '      { "enable": true, "name": "http", "host": "127.0.0.1", "port": 3000, },',
+        '    ],',
+        '  },',
+        '}',
+      ].join('\n'),
+    );
+
+    const found = findLocalNapCat([root]);
+
+    expect(found[0].endpoints.map((e) => e.endpoint)).toEqual(['http://127.0.0.1:3000']);
+  });
+
   it('never throws on a garbage roots argument', () => {
     expect(() => findLocalNapCat(undefined as unknown as string[])).not.toThrow();
     expect(findLocalNapCat(undefined as unknown as string[])).toEqual([]);
@@ -357,6 +416,91 @@ describe('defaultNapCatRoots', () => {
       USERPROFILE: '/home/u',
     });
     expect(new Set(roots).size).toBe(roots.length);
+  });
+
+  it('lists the upstream macos path with the QQ level', () => {
+    for (const platform of ['darwin', 'linux'] as NodeJS.Platform[]) {
+      const roots = defaultNapCatRoots('/home/u', platform);
+      expect(roots).toContain(join('/home/u', 'Library', 'Application Support', 'QQ', 'NapCat'));
+    }
+  });
+});
+
+describe('drive root discovery', () => {
+  it('lists the windows drive letters and the posix root', () => {
+    const win = napCatDriveRoots('win32');
+    expect(win).toHaveLength(26);
+    expect(win[0]).toBe('A:\\');
+    expect(win[25]).toBe('Z:\\');
+    expect(napCatDriveRoots('linux')).toEqual(['/']);
+  });
+
+  it('collects the first level dirs that look like a napcat install', () => {
+    // 造一个「盘根」：上游 writePath 在 Windows/Linux 上就是安装目录本身
+    const drive = join(tmp, 'drive');
+    const bundled = join(drive, 'QQChatExporter'); // 名字里没有 NapCat，但其下有 config/
+    writeOnebotConfig(join(bundled, 'config'), 'onebot11_123.json', {
+      network: { httpServers: [httpServer(3000)], websocketServers: [] },
+    });
+    const named = join(drive, 'NapCat'); // 名字像 NapCat
+    writeOnebotConfig(join(named, 'config'), 'onebot11_456.json', {
+      network: { httpServers: [httpServer(3001)], websocketServers: [] },
+    });
+    // 名字像 NapCat、但**没有** config 子目录（只有名字这条规则能命中它）
+    const namedFlat = join(drive, 'NapCatFlat');
+    writeOnebotConfig(namedFlat, 'onebot11_789.json', {
+      network: { httpServers: [httpServer(3002)], websocketServers: [] },
+    });
+    const unrelated = join(drive, 'Photos'); // 不像 NapCat，也没有 config/
+    mkdirSync(unrelated, { recursive: true });
+    writeFileSync(join(unrelated, 'pic.jpg'), 'x');
+
+    const candidates = napCatCandidateDirs(drive);
+
+    expect(candidates).toContain(bundled);
+    expect(candidates).toContain(named);
+    expect(candidates).toContain(namedFlat);
+    expect(candidates).not.toContain(unrelated);
+  });
+
+  it('finds the onebot config of an install that lives in an arbitrary location', () => {
+    const drive = join(tmp, 'drive');
+    const bundled = join(drive, 'QQChatExporter');
+    writeOnebotConfig(join(bundled, 'config'), 'onebot11_123.json', {
+      network: { httpServers: [httpServer(3000)], websocketServers: [] },
+    });
+
+    // 候选根 → 复用两层扫描 → 命中 <root>/config/onebot11_*.json
+    const found = findLocalNapCat(napCatCandidateDirs(drive));
+
+    expect(found).toHaveLength(1);
+    expect(found[0].configDir).toBe(join(bundled, 'config'));
+    expect(found[0].endpoints.map((e) => e.endpoint)).toEqual(['http://127.0.0.1:3000']);
+  });
+
+  it('never throws while probing the real drive roots', () => {
+    expect(() => discoverNapCatInstallRoots('win32')).not.toThrow();
+    expect(() => discoverNapCatInstallRoots('linux')).not.toThrow();
+    expect(Array.isArray(discoverNapCatInstallRoots('win32'))).toBe(true);
+  });
+
+  it('collects the default roots together with the discovered ones', () => {
+    const roots = collectNapCatRoots('/home/u', 'linux');
+    expect(roots).toContain(join('/home/u', '.napcat'));
+    expect(new Set(roots).size).toBe(roots.length);
+  });
+
+  it('caps the number of discovered roots', () => {
+    const drive = join(tmp, 'drive');
+    for (let i = 0; i < 40; i++) mkdirSync(join(drive, `NapCat${i}`, 'config'), { recursive: true });
+
+    // 默认上限（MAX_DISCOVERED_ROOTS = 32）——故意写死数字，改上限必须同步改这里
+    const all = discoverNapCatInstallRoots('linux', { driveRoots: [drive] });
+    expect(all).toHaveLength(32);
+    expect(all.length).toBe(MAX_DISCOVERED_ROOTS);
+
+    const capped = discoverNapCatInstallRoots('linux', { driveRoots: [drive], maxRoots: 2 });
+    expect(capped).toHaveLength(2);
   });
 });
 

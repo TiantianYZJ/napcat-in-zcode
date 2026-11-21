@@ -17,6 +17,10 @@
  *
  * 数量上限：install 候选排在端口候选**之后**进 Task 1 的 16 槽位并发闸门，
  * 超预算的候选**根本没被探到**（静默消失）。故这里限量并在结果里说明「已截断」。
+ *
+ * 安装目录可能在**用户自选位置**（上游 `writePath` 在 Windows/Linux 上就是安装目录本身，
+ * 如 `D:\QQChatExporter`）→ 默认根清单命中不了，靠 `discoverNapCatInstallRoots()`
+ * 枚举盘根的一级子目录来补（**有界**，不做全盘递归）。
  */
 
 import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
@@ -65,14 +69,12 @@ export interface InstalledNapCatWebUi {
    *
    * ⚠️ 这是 **NapCat WebUI 的登录 token**，**不是** OneBot access token，两者不能混用，
    * 也不能拿它当端点凭据。
+   *
+   * 类型里**故意没有** `token` 字段：WebUI token 的明文不进返回值，
+   * 留一个恒为 `undefined` 的字段只会让 `webui.token ?? ''` 这类误用**静默通过**——
+   * 去掉后 `webui.token` 直接是编译错误，误用在类型系统里就被拦下了。
    */
   tokenRequired?: boolean;
-  /**
-   * 恒为 `undefined`：WebUI token 的**明文不进返回值**。
-   *
-   * 保留这个字段只是为了与 plan 的接口签名兼容；请用 `tokenRequired` 判断。
-   */
-  token?: string;
   /** `webui.json` 里 `disableWebUI: true` → WebUI 被关掉了。 */
   disabled?: boolean;
 }
@@ -112,10 +114,99 @@ function safeReaddir(dir: string): Dirent[] | undefined {
   }
 }
 
-/** 读并解析 JSON；文件缺失 / 不可读 / 占用 / 损坏 → undefined（跳过，不抛错）。 */
+/**
+ * 去掉 JSON5 风格的**行注释**与**块注释**（字符串感知）。
+ *
+ * 字符串里的 `//`（比如 `"http://x"`）不能当注释——所以必须跟踪引号状态。
+ */
+function stripJsonComments(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i++; // 跳过 '/'
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** 去掉**尾逗号**（`{"a":1,}` → `{"a":1}`），字符串感知。 */
+function stripTrailingCommas(text: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (j < text.length && (text[j] === '}' || text[j] === ']')) continue; // 尾逗号 → 丢掉
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * 读并解析 JSON；文件缺失 / 不可读 / 占用 / 损坏 → undefined（跳过，不抛错）。
+ *
+ * **兜底宽松解析**：NapCat 自己写盘是 `JSON.stringify`（严格 JSON）→ 正常无碍；
+ * 但**用户手改过**的配置（加了注释、留了尾逗号）会被严格解析整份跳过 → 假阴性。
+ * 严格解析**成功时完全不碰**（宽松兜底只在失败后触发），所以不会影响正常配置。
+ */
 function safeReadJson(file: string): unknown {
+  let text: string;
   try {
-    return JSON.parse(readFileSync(file, 'utf-8'));
+    text = readFileSync(file, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    /* 严格解析失败 → 宽松兜底 */
+  }
+  try {
+    return JSON.parse(stripTrailingCommas(stripJsonComments(text)));
   } catch {
     return undefined;
   }
@@ -183,14 +274,15 @@ function isEnabled(value: unknown): boolean {
 /**
  * 监听所有网卡的 host → 回环。
  *
- * - `0.0.0.0`（或空）→ `127.0.0.1`
+ * - `0.0.0.0`（或空、或 `'0'`）→ `127.0.0.1`
  * - `::` / `::0` → `::1`（拼进 URL 时加方括号）
  *
  * 其它 host 原样返回（**不**偷偷改成回环）。
  */
 function rewriteHost(raw: string): { host: string; rewritten: boolean } {
   const h = raw.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
-  if (h === '' || h === '0.0.0.0' || h === '*') return { host: '127.0.0.1', rewritten: true };
+  // `'0'` 是配置里写「监听所有网卡」的又一种写法；漏掉它会让 Task 1 的回环闸门丢弃该端点（假阴性）
+  if (h === '' || h === '0' || h === '0.0.0.0' || h === '*') return { host: '127.0.0.1', rewritten: true };
   if (h === '::' || h === '::0' || h === '0:0:0:0:0:0:0:0') return { host: '::1', rewritten: true };
   return { host: h, rewritten: false };
 }
@@ -301,6 +393,13 @@ function buildInstall(scan: { onebot: FoundFile[]; webui: FoundFile[] }): Instal
 /**
  * 在给定的根目录里找本机 NapCat 安装，读出它配置的 OneBot 端点。
  *
+ * **调用方应当把三类根合并后一起传进来**（顺序即优先级，端点预算先到先得）：
+ * 1. **用户显式配置的路径**（`cfg.autoDetect.paths`，只收绝对路径）——覆盖任意命名安装目录最可靠的途径；
+ * 2. `defaultNapCatRoots(homedir(), platform)`——默认安装位置；
+ * 3. `discoverNapCatInstallRoots(platform)`——盘根枚举（安装目录在 `D:\` 等用户自选位置时靠它命中）。
+ *
+ * 也可以直接用 `collectNapCatRoots(homedir(), platform)` 拿 2+3，再自行并入 1。
+ *
  * - 找不到任何 NapCat → 返回**空数组**（不抛错）。
  * - 目录/文件不可读、JSON 损坏 → **跳过**（不抛错）。
  * - 只找两层深，不做全盘递归。
@@ -385,13 +484,98 @@ export function installPathsOf(installed: InstalledNapCat[]): string[] {
   return [...out];
 }
 
+/** 盘根枚举得到的候选根上限（防止某个盘根下有成百上千个带 `config` 的目录）。 */
+export const MAX_DISCOVERED_ROOTS = 32;
+/** 安装目录名像 NapCat 的判定（`*NapCat*` / `*NapCatQQ*`，忽略大小写）。 */
+const NAPCAT_DIR_NAME_RE = /napcat/i;
+
+/** 路径存在且是目录。 */
+function dirExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 要枚举的盘根：Windows 是 `A:\` … `Z:\`（**只 stat 判断存在**，不枚举全部盘），其它平台是 `/`。
+ */
+export function napCatDriveRoots(platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return ['/'];
+  const out: string[] = [];
+  for (let i = 0; i < 26; i++) out.push(`${String.fromCharCode(65 + i)}:\\`);
+  return out;
+}
+
+/**
+ * 一个盘根下的**一级子目录**里，哪些像是 NapCat 安装目录。
+ *
+ * 判定两条（命中任一即可）：
+ * 1. 目录名像 NapCat（`*NapCat*` / `*NapCatQQ*`）；
+ * 2. 目录下有 `config` 子目录——上游 `packages/napcat-common/src/path.ts` 里
+ *    `configPath = join(writePath, 'config')`，而 Windows/Linux 的 `writePath` **就是安装目录本身**，
+ *    所以 `D:\QQChatExporter`（捆绑安装、名字里没有 NapCat）也得能命中。
+ *
+ * **只看一级子目录**，且对不认识的目录只做一次 `stat`（`<dir>/config` 是否存在）——
+ * 不枚举盘根下所有子目录的内容，避免扫到大量无关目录。
+ */
+export function napCatCandidateDirs(driveRoot: string): string[] {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(driveRoot, { withFileTypes: true });
+  } catch {
+    return []; // 盘根不可读 → 跳过
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const full = join(driveRoot, entry.name);
+    if (!dirExists(full)) continue;
+    if (NAPCAT_DIR_NAME_RE.test(entry.name) || dirExists(join(full, 'config'))) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * **盘根枚举 → 候选根**：找出「安装目录在用户自选位置」的安装。
+ *
+ * 上游的 `writePath` 在 Windows/Linux 上**就是安装目录本身**，用户可以装在 `D:\NapCat`、
+ * `D:\QQChatExporter`、`C:\Tools\NapCat`……默认根清单（`~`、APPDATA、ProgramFiles）**一个都命中不了**。
+ * 故这里枚举存在的盘根，取其一级子目录里像 NapCat 安装的（含「其下有 config 目录」的）。
+ *
+ * 成本有界：每个盘根一次 `readdir` + 每个一级子目录一次 `stat`；**不做**全盘递归。
+ *
+ * `opts.driveRoots` / `opts.maxRoots` 供测试注入（默认按平台推导）。
+ */
+export function discoverNapCatInstallRoots(
+  platform: NodeJS.Platform = process.platform,
+  opts: { maxRoots?: number; driveRoots?: string[] } = {},
+): string[] {
+  const maxRoots = Number.isInteger(opts.maxRoots) && (opts.maxRoots as number) > 0
+    ? (opts.maxRoots as number)
+    : MAX_DISCOVERED_ROOTS;
+  const drives = Array.isArray(opts.driveRoots) ? opts.driveRoots : napCatDriveRoots(platform);
+  const out: string[] = [];
+  for (const drive of drives) {
+    if (out.length >= maxRoots) return out;
+    if (!dirExists(drive)) continue;
+    for (const dir of napCatCandidateDirs(drive)) {
+      if (out.length >= maxRoots) return out;
+      out.push(dir);
+    }
+  }
+  return out;
+}
+
 /**
  * 候选根目录（默认安装位置）。
  *
  * - 全部平台：`<home>/.napcat`、`<home>/NapCat`、`<home>/.config/napcat`
  * - Windows：`<APPDATA>/NapCat`、`<LOCALAPPDATA>/NapCat`、`<ProgramFiles>/NapCat`、
  *   `<ProgramFiles(x86)>/NapCat`、`<USERPROFILE>/AppData/Roaming/NapCatQQ`
- * - macOS/Linux：`<home>/Library/Application Support/NapCat`、`<home>/.local/share/NapCat`
+ * - macOS/Linux：`<home>/Library/Application Support/QQ/NapCat`（上游实际路径，**QQ** 这层不能少）、
+ *   `<home>/Library/Application Support/NapCat`（兼容兜底）、`<home>/.local/share/NapCat`
  *
  * `env` 可注入（测试用）；不传时读 `process.env`。
  */
@@ -424,10 +608,29 @@ export function defaultNapCatRoots(
   } else {
     // macOS / Linux
     if (home) {
+      // 上游 macOS 的实际路径是 `~/Library/Application Support/QQ/NapCat`（**QQ** 这一层不能少）；
+      // 旧的 `.../Application Support/NapCat` 保留为兼容兜底。
+      add(join(home, 'Library', 'Application Support', 'QQ', 'NapCat'));
       add(join(home, 'Library', 'Application Support', 'NapCat'));
       add(join(home, '.local', 'share', 'NapCat'));
     }
   }
 
   return Array.from(new Set(out));
+}
+
+/**
+ * 「NapCat 可能装在哪」的完整清单 = 默认根 + 盘根枚举发现的候选根。
+ *
+ * 调用方（Task 4）还应当把**用户显式配置的路径**（`cfg.autoDetect.paths`）一起并进来——
+ * 用户自己填的路径是覆盖任意命名安装目录最可靠的途径。
+ */
+export function collectNapCatRoots(
+  homeDir: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return Array.from(
+    new Set([...defaultNapCatRoots(homeDir, platform, env), ...discoverNapCatInstallRoots(platform)]),
+  );
 }
