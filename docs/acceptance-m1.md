@@ -348,9 +348,9 @@
 
 ---
 
-## 11. agent 侧直接调用 8 个工具（冒烟）
+## 11. agent 侧直接调用 9 个工具（冒烟）
 
-在 ZCode 的对话里直接让 agent 调这 8 个工具，或用 MCP 客户端直连
+在 ZCode 的对话里直接让 agent 调这 9 个工具，或用 MCP 客户端直连
 （`command: node`，`args: ["<插件目录>/dist/server.mjs"]`）。
 
 - [ ] **11.1 `napcat_status`** —— 无入参 → 返回
@@ -394,6 +394,10 @@
 - [ ] **11.11 `napcat_configure` 不带 token** —— `{endpoint:"http://127.0.0.1:3000"}`（不带 `token`）→
       **已保存的 token 保留不变**（开 `config.json` 确认 `connection.token` 还是原值）；
       要清除必须显式 `{endpoint, clearToken:true}`
+- [ ] **11.12 `napcat_detect_local`** —— 无入参 → 返回
+      `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`；
+      探测**不带 token**，疑似需要 token 的端点在 `tokenRequired` 里；
+      **详见 §13.8**（本机探测的完整验收口径）
 
 ---
 
@@ -480,6 +484,11 @@
       之后 `config.json` 里的 `connection.token` **仍是原值**
 - [ ] **13.4.4** `ws://` 端点的角标额外带「（也可能该端口不是 WebSocket 服务）」
       （WebUI 自己的 token ≠ OneBot access token，别把两者混为一谈）
+- [ ] **13.4.5** 点「使用这个」**不会抹掉**已存端点里的凭据：
+      先把端点配成 `ws://127.0.0.1:3001?access_token=…`，
+      再点「使用这个」（候选显示的是**去掉 query** 的 `ws://127.0.0.1:3001`）→
+      `config.json` 里的 `connection.endpoint` **仍带** `?access_token=`；
+      换成**别的**端点时则不带（旧凭据不会被带过去）
 
 ### 13.5 探测不改动用户的 NapCat 配置
 
@@ -523,7 +532,8 @@
       `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`
 - [ ] **13.8.2** 探测结论会出现在 `napcat_status` 的 `detection` 字段里（**缓存**：
       `napcat_status` 自己**不会**触发扫描）
-- [ ] **13.8.3** `installs[].configDir` 与 `scanned.paths` 是**本机绝对路径**
+- [ ] **13.8.3** `installs[].configDir`、`scanned.paths`、`candidates[].detail`
+      与 `droppedEndpoints[].detail` 是**本机绝对路径**
       （只用于解释「这个端点是从哪来的」）
 - [ ] **13.8.4** 探测**不扫描局域网**：安装配置里发现的非回环端点出现在 `droppedEndpoints`
       里（`reason: "nonLoopback"`），而不是被悄悄丢掉
@@ -532,6 +542,11 @@
 - [ ] **13.8.6** `napcat_configure` 的 `endpoint` 传**空串** = 只更新扫描路径、
       **不动已有连接**（`connection.token` 保持不变 —— 这样不会把 WS URL 里的
       `?access_token=` 悄悄抹掉）
+- [ ] **13.8.7** 同一端口的 `http://` 端点**探测成功**时，它的 `ws://` 孪生端点
+      **不在候选里**（面板候选 = `live` + `tokenRequired`）：
+      端口上跑的是 HTTP 服务时，WS 变体必然不是 WebSocket 服务
+- [ ] **13.8.8** `notes` 里能看到**盘根发现的生效上限**（如「盘根发现生效上限 32 个候选根」）
+      与安装发现的截断说明 —— 面板只渲染 `notes`，写在里面才看得见
 
 ---
 

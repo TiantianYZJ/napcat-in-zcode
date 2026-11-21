@@ -22624,364 +22624,6 @@ function createClient(cfg) {
 
 // src/server/state.ts
 import { isAbsolute as isAbsolute2 } from "node:path";
-function endpointOf(cfg) {
-  return cfg.connection?.endpoint ?? "";
-}
-function errText2(e) {
-  return e instanceof Error ? e.message : String(e);
-}
-function isPlainObject3(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
-  if (isPlainObject3(value)) {
-    const keys = Object.keys(value).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-function configFingerprint(cfg) {
-  return stableStringify({ autoDetect: cfg.autoDetect, connection: cfg.connection });
-}
-function hasExplicitEmptyPort(endpoint) {
-  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
-  if (!m) return false;
-  const authority = m[1];
-  const at = authority.lastIndexOf("@");
-  const hostPort = at >= 0 ? authority.slice(at + 1) : authority;
-  return hostPort.endsWith(":");
-}
-function assertUsableEndpoint(endpoint) {
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    throw new Error(
-      `\u7AEF\u70B9\u4E0D\u662F\u5408\u6CD5\u7684 URL\uFF08\u9700\u8981 http(s)://\u4E3B\u673A:\u7AEF\u53E3 \u6216 ws(s)://\u4E3B\u673A:\u7AEF\u53E3 \u5F62\u5F0F\uFF09\uFF1A${safeEndpointLabel(endpoint)}`
-    );
-  }
-  if (!url.hostname) {
-    throw new Error(`\u7AEF\u70B9\u7F3A\u5C11\u4E3B\u673A\u540D\uFF1A${safeEndpointLabel(endpoint)}`);
-  }
-  if (hasExplicitEmptyPort(endpoint)) {
-    throw new Error(`\u7AEF\u70B9\u7AEF\u53E3\u4E3A\u7A7A\uFF08\u9700\u5728 1-65535 \u4E4B\u95F4\uFF09\uFF1A${safeEndpointLabel(endpoint)}`);
-  }
-  const port = url.port ? Number(url.port) : void 0;
-  if (port !== void 0 && (port < 1 || port > 65535)) {
-    throw new Error(`\u7AEF\u70B9\u7AEF\u53E3\u8D8A\u754C\uFF08\u9700\u5728 1-65535 \u4E4B\u95F4\uFF09\uFF1A${safeEndpointLabel(endpoint)}`);
-  }
-}
-function isLoopbackEndpoint(endpoint) {
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return false;
-  }
-  const host = url.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
-  if (host === "localhost") return true;
-  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
-  return false;
-}
-function endpointSecurityWarning(endpoint, token) {
-  if (!endpoint) return void 0;
-  if (token) return void 0;
-  if (isLoopbackEndpoint(endpoint)) return void 0;
-  return `\u7AEF\u70B9\u4E0D\u5728\u672C\u673A\uFF08${safeEndpointLabel(endpoint)}\uFF09\u4E14\u672A\u8BBE\u7F6E token\uFF1A\u540C\u7F51\u6BB5\u7684\u5176\u4ED6\u4EBA\u53EF\u80FD\u8BFB\u5230\u4F60\u7684 QQ \u804A\u5929\u8BB0\u5F55\u3002\u5EFA\u8BAE\u5728 NapCat \u91CC\u8BBE\u7F6E access token \u5E76\u586B\u5230\u8FD9\u91CC\u3002`;
-}
-var AppState = class {
-  /** 配置快照：`loadConfigData()` = 文件内容 + env 兜底覆盖。 */
-  config = loadConfigData();
-  /** 已建立的连接（懒建，失败时保持 null）。 */
-  client = null;
-  /** 当前连接是按哪个端点建的（配置变了要重建，否则会连到旧端点）。 */
-  clientEndpoint = "";
-  /** 测试注入用：优先于 endpoint 构造。 */
-  clientOverride = null;
-  /** 测试注入用：导出目录重定向（user 目录；也用作本机安装发现的 home 根）。 */
-  homeDirOverride;
-  /** 测试注入用：导出目录重定向（workspace 目录）。 */
-  workspaceDirOverride;
-  /**
-   * 最近一次本机探测的结论（**仅内存**，进程重启即失效）。
-   *
-   * `napcat_status` 读它来展示「探测到本机 NapCat」，
-   * 但**不会**为了拿它去触发一次端口扫描（那会让状态条每刷新一次就等几秒）。
-   * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
-   */
-  detection;
-  /** 本进程见过的所有凭据值（token 及其他片段，脱敏用，见 `redact`）。 */
-  knownSecrets = /* @__PURE__ */ new Set();
-  /**
-   * 上次加载到的配置指纹（`autoDetect` + `connection`）。
-   *
-   * 指纹变了 = 探测范围或探测目标变了 → 之前那次探测的结论不再适用 → 必须清缓存。
-   */
-  loadedFingerprint = configFingerprint(this.config);
-  constructor() {
-    this.rememberToken(this.config.connection?.token);
-  }
-  /** 是否已经「配置过」：注入了测试客户端，或填了端点。 */
-  get configured() {
-    return this.clientOverride !== null || endpointOf(this.config) !== "";
-  }
-  /**
-   * 出参脱敏：错误信息里可能夹带 token（例如上游把 token 原样回显在 wording 里）。
-   *
-   * token 明文只允许存在于 `config.json`；工具返回值、日志、面板都不许出现。
-   *
-   * 脱敏覆盖**本进程见过的所有凭据值**（`knownSecrets`：access token 与
-   * 端点里带出来的密码/token 片段），不只是「当前配置里那个」：
-   * 配置会在每次 `status()` 时重读（运行期外部改了 config.json 也要看得见），
-   * 重读会把内存里的 token 换成文件里的值——只按当前值脱敏就会出现
-   * 「换了配置就漏出旧 token」的窗口。记住见过的每个凭据值才能真正堵住。
-   */
-  redact(text) {
-    let out = text;
-    for (const t of this.knownSecrets) {
-      if (t) out = out.split(t).join("***");
-    }
-    const cur = this.config.connection?.token ?? "";
-    if (cur && !this.knownSecrets.has(cur)) out = out.split(cur).join("***");
-    return out;
-  }
-  /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
-  rememberToken(token) {
-    if (token) this.knownSecrets.add(token);
-  }
-  /**
-   * 记住一个见过的**凭据片段**（之后它出现在任何出参里都会被遮蔽）。
-   *
-   * 与 access token 共用同一个脱敏池：`redact` 的语义是「替换**本进程见过**的所有凭据值」。
-   *
-   * 典型来源：用户写在端点里的 userinfo 密码、query 里的 `?access_token=xxx`。
-   * 这些值在端点**规范化之后就没了**（`normalizeEndpoint` 会剥掉 userinfo 与 query），
-   * 所以必须从**原始串**里取出来登记——否则上游一旦把它们**裸回显**（没有 `token=` 前缀），
-   * 明文就会直接进工具返回值。
-   */
-  rememberSecret(secret) {
-    if (typeof secret !== "string") return;
-    const t = secret.trim();
-    if (t.length < 4) return;
-    this.knownSecrets.add(t);
-  }
-  /**
-   * 重读配置文件（运行期外部改了 `config.json` 也要看得见）。
-   *
-   * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
-   * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
-   *
-   * **配置变了就清掉探测结论**：探测结论是**针对某一份配置**得出的
-   * （扫哪些端口、探哪些端点都由 `autoDetect` / `connection` 决定）。
-   * 用户手改了 `config.json`（换了端口/路径/端点）之后，旧结论已经对不上当前配置——
-   * 不清的话，`napcat_status` 会继续拿旧结论说「检测到本机 NapCat」。
-   */
-  reloadConfig() {
-    this.rememberToken(this.config.connection?.token);
-    const next = loadConfigData();
-    this.rememberToken(next.connection?.token);
-    const fingerprint = configFingerprint(next);
-    if (fingerprint !== this.loadedFingerprint) {
-      this.loadedFingerprint = fingerprint;
-      this.clearDetection();
-    }
-    this.config = next;
-  }
-  /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
-  setDetection(detection) {
-    this.detection = detection;
-  }
-  /**
-   * 清除探测结论缓存。
-   *
-   * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
-   * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
-   *
-   * 两个触发点：
-   * - `setConnection`：配置**落盘**之后（端点合法但连不上时同样要清）；
-   * - `reloadConfig`：外部改了 `config.json`（`autoDetect` / `connection` 变了）。
-   */
-  clearDetection() {
-    this.detection = void 0;
-  }
-  /**
-   * 拿到可用的 OneBot 客户端（没有就按配置建一个）。
-   *
-   * 未配置端点时抛错——错误信息要能直接告诉用户下一步做什么。
-   *
-   * 端点变了就重建连接：`config.json` 被外部改过（面板设置页 / 用户手改）时，
-   * 继续用旧连接会「状态条报新端点、实际连旧端点」。
-   */
-  async ensureClient() {
-    if (this.clientOverride) return this.clientOverride;
-    const endpoint = endpointOf(this.config);
-    if (!endpoint) {
-      throw new Error("\u672A\u914D\u7F6E OneBot \u7AEF\u70B9\uFF1A\u8BF7\u5148\u8C03\u7528 napcat_configure \u586B\u5199\u5730\u5740\u4E0E token\uFF0C\u6216\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u914D\u7F6E");
-    }
-    if (this.client && this.clientEndpoint !== endpoint) {
-      const old = this.client;
-      this.client = null;
-      this.clientEndpoint = "";
-      await old.close();
-    }
-    if (!this.client) {
-      this.client = createClient({
-        endpoint,
-        token: this.config.connection.token || void 0
-      });
-      this.clientEndpoint = endpoint;
-    }
-    return this.client;
-  }
-  /**
-   * patch 式保存连接配置：**只**把本次变化的 connection 字段写进文件。
-   *
-   * 不能直接 `saveConfig(dataDir(), this.config)`：`this.config` 来自 `loadConfigData()`，
-   * 已被 env 兜底覆盖过，全量写会把 env 值固化进 `config.json`，
-   * 也会凭空写出 `export.*` 等段（把「文件里没设置」变成「文件里显式设置」）。
-   * 因此以文件原始内容为基底，只 patch `connection`。
-   *
-   * @param token **已解析好的** token（空 = 保留文件里的旧值，见 `setConnection`）。
-   */
-  saveConnection(endpoint, token) {
-    const dir = dataDir();
-    const { raw } = loadConfigWithRaw(dir);
-    const conn = isPlainObject3(raw.connection) ? raw.connection : {};
-    const patched = { ...raw, connection: { ...conn, endpoint, token } };
-    saveConfig(dir, patched);
-  }
-  /**
-   * 保存 `autoDetect.paths`（本机 NapCat 扫描根）。
-   *
-   * **patch 式**：以文件原始内容为基底，只改 `autoDetect.paths`——
-   * 全量写会把 env 兜底值固化进文件，也会凭空写出别的段（见 `saveConnection` 的同款理由）。
-   *
-   * 只收**绝对路径**（与 `config.ts` 的 `pickPaths` 同一口径）：相对路径会随宿主的工作目录
-   * 变化，语义含糊且不可复现。重复路径去重、空串丢弃。
-   *
-   * **落盘即失效**：路径变了 = 探测范围变了 → 之前那次探测的结论不再适用 → 清缓存
-   * （与 `setConnection` 同一口径：配置一变，旧结论就对不上了）。
-   */
-  setAutoDetectPaths(paths) {
-    const dir = dataDir();
-    const { raw } = loadConfigWithRaw(dir);
-    const auto = isPlainObject3(raw.autoDetect) ? raw.autoDetect : {};
-    const cleaned = [];
-    for (const p of paths) {
-      if (typeof p !== "string") continue;
-      const t = p.trim();
-      if (t === "") continue;
-      if (!isAbsolute2(t)) continue;
-      if (cleaned.includes(t)) continue;
-      cleaned.push(t);
-    }
-    const patched = { ...raw, autoDetect: { ...auto, paths: cleaned } };
-    saveConfig(dir, patched);
-    this.config.autoDetect = { ...this.config.autoDetect, paths: [...cleaned] };
-    this.clearDetection();
-    this.loadedFingerprint = configFingerprint(this.config);
-    return [...cleaned];
-  }
-  /**
-   * 保存端点/令牌并重连，返回登录信息。
-   *
-   * 顺序：**先校验端点 → 再解析 token → 再落盘 → 再换连接 → 最后取登录信息**。
-   * - 校验分两层：`createClient`（scheme 白名单）+ `assertUsableEndpoint`（URL 形状）。
-   *   `createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来；
-   *   URL 形状（空主机、越界端口、畸形写法）由第二层挡下。
-   *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
-   * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
-   * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
-   * - **落盘即失效**：配置一旦落盘，本机探测的结论缓存就被清掉（见 `clearDetection`）——
-   *   探测结论是针对某一份配置得出的，配置变了它就对不上了。
-   *
-   * **token 的解析规则（防误删凭据）**：
-   * - 传入非空 token → 用它（换 token）；
-   * - 传入空 token 且**没有** `clearToken` → **保留文件里已存的 token**。
-   *   空 token 不再等于「清除」：面板的「重新配置端点」表单无法回填 token
-   *   （服务端只回 `'***'`），agent 调 `napcat_configure` 也常常不带 token——
-   *   两种情况都会把用户已存的凭据无声擦掉。
-   * - `clearToken: true` → 显式清除（唯一能置空的入口）。
-   */
-  async setConnection(endpoint, token, opts = {}) {
-    const { raw } = loadConfigWithRaw(dataDir());
-    const conn = isPlainObject3(raw.connection) ? raw.connection : {};
-    const storedToken = typeof conn.token === "string" ? conn.token : "";
-    const effectiveToken = opts.clearToken ? "" : token !== "" ? token : storedToken;
-    this.rememberToken(effectiveToken);
-    const probed = createClient({ endpoint, token: effectiveToken || void 0 });
-    assertUsableEndpoint(endpoint);
-    this.saveConnection(endpoint, effectiveToken);
-    this.clearDetection();
-    const old = this.client;
-    this.client = null;
-    this.clientEndpoint = "";
-    await old?.close();
-    this.config.connection = { ...this.config.connection, endpoint, token: effectiveToken };
-    this.loadedFingerprint = configFingerprint(this.config);
-    this.client = this.clientOverride ? null : probed;
-    if (this.client) this.clientEndpoint = endpoint;
-    const c = await this.ensureClient();
-    return getLoginInfo(c);
-  }
-  /**
-   * 连接状态。
-   *
-   * 「连不上」是**状态**而不是工具错误：`get_login_info` 返回 null / 上游超时等
-   * 异常都在这里被吃掉，转成 `connected: false` + `error` 文案（错误信息脱敏）。
-   *
-   * 每次都**重读配置**：`AppState.config` 原本是进程启动时的一次快照，
-   * 运行期外部改了 `config.json`（面板设置页、用户手改文件）不会被感知，
-   * 状态条就会一直显示启动时的旧端点/旧状态。
-   */
-  async status() {
-    this.reloadConfig();
-    const detection = this.detection;
-    if (!this.configured) {
-      return {
-        configured: false,
-        connected: false,
-        mode: "unconfigured",
-        ...detection ? { detection } : {}
-      };
-    }
-    const endpoint = endpointOf(this.config);
-    const warning = endpointSecurityWarning(endpoint, this.config.connection?.token ?? "");
-    try {
-      const c = await this.ensureClient();
-      const login = await getLoginInfo(c);
-      return {
-        configured: true,
-        connected: true,
-        mode: "external",
-        login,
-        warning,
-        ...detection ? { detection } : {}
-      };
-    } catch (e) {
-      return {
-        configured: true,
-        connected: false,
-        mode: "external",
-        error: this.redact(errText2(e)),
-        warning,
-        ...detection ? { detection } : {}
-      };
-    }
-  }
-};
-var appState = new AppState();
-async function closeConnection(state) {
-  const client = state.client;
-  state.client = null;
-  state.clientEndpoint = "";
-  await client?.close();
-}
-
-// src/server/host/detect-local.ts
-import { homedir as homedir3 } from "node:os";
 
 // src/server/onebot/detect.ts
 import { connect } from "node:net";
@@ -23020,7 +22662,7 @@ function isLoopbackHost(hostname2) {
   if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
-function isLoopbackEndpoint2(endpoint) {
+function isLoopbackEndpoint(endpoint) {
   try {
     return isLoopbackHost(new URL(endpoint).hostname);
   } catch {
@@ -23177,7 +22819,7 @@ function validPort(value) {
 function toCandidate(raw, source, detail) {
   const endpoint = normalizeEndpoint(raw);
   if (!endpoint) return void 0;
-  if (source !== "config" && !isLoopbackEndpoint2(endpoint)) return void 0;
+  if (source !== "config" && !isLoopbackEndpoint(endpoint)) return void 0;
   return { endpoint, transport: transportOf(endpoint), source, detail };
 }
 async function detectLocal(opts) {
@@ -23277,6 +22919,417 @@ async function detectLocal(opts) {
     }
   };
 }
+
+// src/server/state.ts
+function endpointOf(cfg) {
+  return cfg.connection?.endpoint ?? "";
+}
+function errText2(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function isPlainObject3(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  if (isPlainObject3(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function configFingerprint(cfg) {
+  return stableStringify({ autoDetect: cfg.autoDetect, connection: cfg.connection });
+}
+function hasExplicitEmptyPort(endpoint) {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
+  if (!m) return false;
+  const authority = m[1];
+  const at = authority.lastIndexOf("@");
+  const hostPort = at >= 0 ? authority.slice(at + 1) : authority;
+  return hostPort.endsWith(":");
+}
+function assertUsableEndpoint(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error(
+      `\u7AEF\u70B9\u4E0D\u662F\u5408\u6CD5\u7684 URL\uFF08\u9700\u8981 http(s)://\u4E3B\u673A:\u7AEF\u53E3 \u6216 ws(s)://\u4E3B\u673A:\u7AEF\u53E3 \u5F62\u5F0F\uFF09\uFF1A${safeEndpointLabel(endpoint)}`
+    );
+  }
+  if (!url.hostname) {
+    throw new Error(`\u7AEF\u70B9\u7F3A\u5C11\u4E3B\u673A\u540D\uFF1A${safeEndpointLabel(endpoint)}`);
+  }
+  if (hasExplicitEmptyPort(endpoint)) {
+    throw new Error(`\u7AEF\u70B9\u7AEF\u53E3\u4E3A\u7A7A\uFF08\u9700\u5728 1-65535 \u4E4B\u95F4\uFF09\uFF1A${safeEndpointLabel(endpoint)}`);
+  }
+  const port = url.port ? Number(url.port) : void 0;
+  if (port !== void 0 && (port < 1 || port > 65535)) {
+    throw new Error(`\u7AEF\u70B9\u7AEF\u53E3\u8D8A\u754C\uFF08\u9700\u5728 1-65535 \u4E4B\u95F4\uFF09\uFF1A${safeEndpointLabel(endpoint)}`);
+  }
+}
+function queryOf(endpoint) {
+  const i = endpoint.indexOf("?");
+  return i < 0 ? "" : endpoint.slice(i);
+}
+function hasUserInfo(endpoint) {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
+  if (!m) return false;
+  return m[1].lastIndexOf("@") >= 0;
+}
+function preserveStoredQuery(incoming, stored) {
+  if (!stored) return incoming;
+  const a = normalizeEndpoint(incoming);
+  const b = normalizeEndpoint(stored);
+  if (!a || !b || a !== b) return incoming;
+  if (queryOf(incoming)) return incoming;
+  if (queryOf(stored)) return stored;
+  if (hasUserInfo(incoming)) return incoming;
+  if (hasUserInfo(stored)) return stored;
+  return incoming;
+}
+function isLoopbackEndpoint2(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (host === "localhost") return true;
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  return false;
+}
+function endpointSecurityWarning(endpoint, token) {
+  if (!endpoint) return void 0;
+  if (token) return void 0;
+  if (isLoopbackEndpoint2(endpoint)) return void 0;
+  return `\u7AEF\u70B9\u4E0D\u5728\u672C\u673A\uFF08${safeEndpointLabel(endpoint)}\uFF09\u4E14\u672A\u8BBE\u7F6E token\uFF1A\u540C\u7F51\u6BB5\u7684\u5176\u4ED6\u4EBA\u53EF\u80FD\u8BFB\u5230\u4F60\u7684 QQ \u804A\u5929\u8BB0\u5F55\u3002\u5EFA\u8BAE\u5728 NapCat \u91CC\u8BBE\u7F6E access token \u5E76\u586B\u5230\u8FD9\u91CC\u3002`;
+}
+var AppState = class {
+  /** 配置快照：`loadConfigData()` = 文件内容 + env 兜底覆盖。 */
+  config = loadConfigData();
+  /** 已建立的连接（懒建，失败时保持 null）。 */
+  client = null;
+  /** 当前连接是按哪个端点建的（配置变了要重建，否则会连到旧端点）。 */
+  clientEndpoint = "";
+  /** 测试注入用：优先于 endpoint 构造。 */
+  clientOverride = null;
+  /** 测试注入用：导出目录重定向（user 目录；也用作本机安装发现的 home 根）。 */
+  homeDirOverride;
+  /** 测试注入用：导出目录重定向（workspace 目录）。 */
+  workspaceDirOverride;
+  /**
+   * 最近一次本机探测的结论（**仅内存**，进程重启即失效）。
+   *
+   * `napcat_status` 读它来展示「探测到本机 NapCat」，
+   * 但**不会**为了拿它去触发一次端口扫描（那会让状态条每刷新一次就等几秒）。
+   * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
+   */
+  detection;
+  /** 本进程见过的所有凭据值（token 及其他片段，脱敏用，见 `redact`）。 */
+  knownSecrets = /* @__PURE__ */ new Set();
+  /**
+   * 上次加载到的配置指纹（`autoDetect` + `connection`）。
+   *
+   * 指纹变了 = 探测范围或探测目标变了 → 之前那次探测的结论不再适用 → 必须清缓存。
+   */
+  loadedFingerprint = configFingerprint(this.config);
+  constructor() {
+    this.rememberToken(this.config.connection?.token);
+  }
+  /** 是否已经「配置过」：注入了测试客户端，或填了端点。 */
+  get configured() {
+    return this.clientOverride !== null || endpointOf(this.config) !== "";
+  }
+  /**
+   * 出参脱敏：错误信息里可能夹带 token（例如上游把 token 原样回显在 wording 里）。
+   *
+   * token 明文只允许存在于 `config.json`；工具返回值、日志、面板都不许出现。
+   *
+   * 脱敏覆盖**本进程见过的所有凭据值**（`knownSecrets`：access token 与
+   * 端点里带出来的密码/token 片段），不只是「当前配置里那个」：
+   * 配置会在每次 `status()` 时重读（运行期外部改了 config.json 也要看得见），
+   * 重读会把内存里的 token 换成文件里的值——只按当前值脱敏就会出现
+   * 「换了配置就漏出旧 token」的窗口。记住见过的每个凭据值才能真正堵住。
+   */
+  redact(text) {
+    let out = text;
+    for (const t of this.knownSecrets) {
+      if (t) out = out.split(t).join("***");
+    }
+    const cur = this.config.connection?.token ?? "";
+    if (cur && !this.knownSecrets.has(cur)) out = out.split(cur).join("***");
+    return out;
+  }
+  /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
+  rememberToken(token) {
+    if (token) this.knownSecrets.add(token);
+  }
+  /**
+   * 记住一个见过的**凭据片段**（之后它出现在任何出参里都会被遮蔽）。
+   *
+   * 与 access token 共用同一个脱敏池：`redact` 的语义是「替换**本进程见过**的所有凭据值」。
+   *
+   * 典型来源：用户写在端点里的 userinfo 密码、query 里的 `?access_token=xxx`。
+   * 这些值在端点**规范化之后就没了**（`normalizeEndpoint` 会剥掉 userinfo 与 query），
+   * 所以必须从**原始串**里取出来登记——否则上游一旦把它们**裸回显**（没有 `token=` 前缀），
+   * 明文就会直接进工具返回值。
+   */
+  rememberSecret(secret) {
+    if (typeof secret !== "string") return;
+    const t = secret.trim();
+    if (t.length < 4) return;
+    this.knownSecrets.add(t);
+  }
+  /**
+   * 重读配置文件（运行期外部改了 `config.json` 也要看得见）。
+   *
+   * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
+   * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
+   *
+   * **配置变了就清掉探测结论**：探测结论是**针对某一份配置**得出的
+   * （扫哪些端口、探哪些端点都由 `autoDetect` / `connection` 决定）。
+   * 用户手改了 `config.json`（换了端口/路径/端点）之后，旧结论已经对不上当前配置——
+   * 不清的话，`napcat_status` 会继续拿旧结论说「检测到本机 NapCat」。
+   */
+  reloadConfig() {
+    this.rememberToken(this.config.connection?.token);
+    const next = loadConfigData();
+    this.rememberToken(next.connection?.token);
+    const fingerprint = configFingerprint(next);
+    if (fingerprint !== this.loadedFingerprint) {
+      this.loadedFingerprint = fingerprint;
+      this.clearDetection();
+    }
+    this.config = next;
+  }
+  /**
+   * 当前配置的**指纹**（探测结论的「适用范围」）。
+   *
+   * 探测开始时记下它、结束时比对：指纹变了 = 探测期间配置变了 →
+   * 那份结论是**按旧配置**算出来的，不能写回缓存（见 `setDetection`）。
+   */
+  currentFingerprint() {
+    return configFingerprint(this.config);
+  }
+  /**
+   * 记录最近一次本机探测的结论（供 `napcat_status` 读取）。
+   *
+   * @param fingerprint 探测**运行时**用的配置指纹（可选）：
+   *   传了就先跟当前指纹比对——不一致说明**探测期间配置变了**，
+   *   那份结论是针对旧配置的，**丢弃**（不能写回缓存，否则会拿旧结论说「检测到本机 NapCat」）。
+   *   不传 = 无条件写入（老调用方 / 手工塞结论的测试）。
+   * @returns 是否真的写入了（false = 已丢弃）
+   */
+  setDetection(detection, fingerprint) {
+    if (fingerprint !== void 0 && fingerprint !== this.currentFingerprint()) {
+      return false;
+    }
+    this.detection = detection;
+    return true;
+  }
+  /**
+   * 清除探测结论缓存。
+   *
+   * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
+   * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
+   *
+   * 两个触发点：
+   * - `setConnection`：配置**落盘**之后（端点合法但连不上时同样要清）；
+   * - `reloadConfig`：外部改了 `config.json`（`autoDetect` / `connection` 变了）。
+   */
+  clearDetection() {
+    this.detection = void 0;
+  }
+  /**
+   * 拿到可用的 OneBot 客户端（没有就按配置建一个）。
+   *
+   * 未配置端点时抛错——错误信息要能直接告诉用户下一步做什么。
+   *
+   * 端点变了就重建连接：`config.json` 被外部改过（面板设置页 / 用户手改）时，
+   * 继续用旧连接会「状态条报新端点、实际连旧端点」。
+   */
+  async ensureClient() {
+    if (this.clientOverride) return this.clientOverride;
+    const endpoint = endpointOf(this.config);
+    if (!endpoint) {
+      throw new Error("\u672A\u914D\u7F6E OneBot \u7AEF\u70B9\uFF1A\u8BF7\u5148\u8C03\u7528 napcat_configure \u586B\u5199\u5730\u5740\u4E0E token\uFF0C\u6216\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u914D\u7F6E");
+    }
+    if (this.client && this.clientEndpoint !== endpoint) {
+      const old = this.client;
+      this.client = null;
+      this.clientEndpoint = "";
+      await old.close();
+    }
+    if (!this.client) {
+      this.client = createClient({
+        endpoint,
+        token: this.config.connection.token || void 0
+      });
+      this.clientEndpoint = endpoint;
+    }
+    return this.client;
+  }
+  /**
+   * patch 式保存连接配置：**只**把本次变化的 connection 字段写进文件。
+   *
+   * 不能直接 `saveConfig(dataDir(), this.config)`：`this.config` 来自 `loadConfigData()`，
+   * 已被 env 兜底覆盖过，全量写会把 env 值固化进 `config.json`，
+   * 也会凭空写出 `export.*` 等段（把「文件里没设置」变成「文件里显式设置」）。
+   * 因此以文件原始内容为基底，只 patch `connection`。
+   *
+   * @param token **已解析好的** token（空 = 保留文件里的旧值，见 `setConnection`）。
+   */
+  saveConnection(endpoint, token) {
+    const dir = dataDir();
+    const { raw } = loadConfigWithRaw(dir);
+    const conn = isPlainObject3(raw.connection) ? raw.connection : {};
+    const patched = { ...raw, connection: { ...conn, endpoint, token } };
+    saveConfig(dir, patched);
+  }
+  /**
+   * 保存 `autoDetect.paths`（本机 NapCat 扫描根）。
+   *
+   * **patch 式**：以文件原始内容为基底，只改 `autoDetect.paths`——
+   * 全量写会把 env 兜底值固化进文件，也会凭空写出别的段（见 `saveConnection` 的同款理由）。
+   *
+   * 只收**绝对路径**（与 `config.ts` 的 `pickPaths` 同一口径）：相对路径会随宿主的工作目录
+   * 变化，语义含糊且不可复现。重复路径去重、空串丢弃。
+   *
+   * **落盘即失效**：路径变了 = 探测范围变了 → 之前那次探测的结论不再适用 → 清缓存
+   * （与 `setConnection` 同一口径：配置一变，旧结论就对不上了）。
+   */
+  setAutoDetectPaths(paths) {
+    const dir = dataDir();
+    const { raw } = loadConfigWithRaw(dir);
+    const auto = isPlainObject3(raw.autoDetect) ? raw.autoDetect : {};
+    const cleaned = [];
+    for (const p of paths) {
+      if (typeof p !== "string") continue;
+      const t = p.trim();
+      if (t === "") continue;
+      if (!isAbsolute2(t)) continue;
+      if (cleaned.includes(t)) continue;
+      cleaned.push(t);
+    }
+    const patched = { ...raw, autoDetect: { ...auto, paths: cleaned } };
+    saveConfig(dir, patched);
+    this.config.autoDetect = { ...this.config.autoDetect, paths: [...cleaned] };
+    this.clearDetection();
+    this.loadedFingerprint = configFingerprint(this.config);
+    return [...cleaned];
+  }
+  /**
+   * 保存端点/令牌并重连，返回登录信息。
+   *
+   * 顺序：**先校验端点 → 再解析 token → 再落盘 → 再换连接 → 最后取登录信息**。
+   * - 校验分两层：`createClient`（scheme 白名单）+ `assertUsableEndpoint`（URL 形状）。
+   *   `createClient` 只构造传输层（连接是懒的），但 scheme 不合法会在这一步抛出来；
+   *   URL 形状（空主机、越界端口、畸形写法）由第二层挡下。
+   *   校验不过就**不写文件、不改内存态、不动已有连接**——否则一个写错的端点会把插件卡在不可用状态。
+   * - 落盘失败：内存态与连接都不动（不会出现「内存已改、文件没改」的错位）。
+   * - 端点合法但连不上：配置已按用户意图保存，错误由工具层转成 `isError` 返回。
+   * - **落盘即失效**：配置一旦落盘，本机探测的结论缓存就被清掉（见 `clearDetection`）——
+   *   探测结论是针对某一份配置得出的，配置变了它就对不上了。
+   *
+   * **端点的解析规则（防误删凭据）**：
+   * 传入的端点是**规范化**形态时（面板的「使用这个」按钮传的就是它），
+   * 它已经**没有 query** 了——而凭据可能只存在于 query 里
+   * （OneBot 的 WS 约定：`ws://host:port?access_token=…`）。
+   * 因此：传入端点与**已存端点**规范化后相同、且已存的那个带 query 时，
+   * **沿用已存的完整端点串**（见 `preserveStoredQuery`）。
+   * 端点确实变了 → 一律用传入的。
+   *
+   * **token 的解析规则（防误删凭据）**：
+   * - 传入非空 token → 用它（换 token）；
+   * - 传入空 token 且**没有** `clearToken` → **保留文件里已存的 token**。
+   *   空 token 不再等于「清除」：面板的「重新配置端点」表单无法回填 token
+   *   （服务端只回 `'***'`），agent 调 `napcat_configure` 也常常不带 token——
+   *   两种情况都会把用户已存的凭据无声擦掉。
+   * - `clearToken: true` → 显式清除（唯一能置空的入口）。
+   */
+  async setConnection(endpoint, token, opts = {}) {
+    const { raw } = loadConfigWithRaw(dataDir());
+    const conn = isPlainObject3(raw.connection) ? raw.connection : {};
+    const storedToken = typeof conn.token === "string" ? conn.token : "";
+    const storedEndpoint = typeof conn.endpoint === "string" ? conn.endpoint : "";
+    const effectiveToken = opts.clearToken ? "" : token !== "" ? token : storedToken;
+    this.rememberToken(effectiveToken);
+    const effectiveEndpoint = preserveStoredQuery(endpoint, storedEndpoint);
+    const probed = createClient({ endpoint: effectiveEndpoint, token: effectiveToken || void 0 });
+    assertUsableEndpoint(effectiveEndpoint);
+    this.saveConnection(effectiveEndpoint, effectiveToken);
+    this.clearDetection();
+    const old = this.client;
+    this.client = null;
+    this.clientEndpoint = "";
+    await old?.close();
+    this.config.connection = { ...this.config.connection, endpoint: effectiveEndpoint, token: effectiveToken };
+    this.loadedFingerprint = configFingerprint(this.config);
+    this.client = this.clientOverride ? null : probed;
+    if (this.client) this.clientEndpoint = effectiveEndpoint;
+    const c = await this.ensureClient();
+    return getLoginInfo(c);
+  }
+  /**
+   * 连接状态。
+   *
+   * 「连不上」是**状态**而不是工具错误：`get_login_info` 返回 null / 上游超时等
+   * 异常都在这里被吃掉，转成 `connected: false` + `error` 文案（错误信息脱敏）。
+   *
+   * 每次都**重读配置**：`AppState.config` 原本是进程启动时的一次快照，
+   * 运行期外部改了 `config.json`（面板设置页、用户手改文件）不会被感知，
+   * 状态条就会一直显示启动时的旧端点/旧状态。
+   */
+  async status() {
+    this.reloadConfig();
+    const detection = this.detection;
+    if (!this.configured) {
+      return {
+        configured: false,
+        connected: false,
+        mode: "unconfigured",
+        ...detection ? { detection } : {}
+      };
+    }
+    const endpoint = endpointOf(this.config);
+    const warning = endpointSecurityWarning(endpoint, this.config.connection?.token ?? "");
+    try {
+      const c = await this.ensureClient();
+      const login = await getLoginInfo(c);
+      return {
+        configured: true,
+        connected: true,
+        mode: "external",
+        login,
+        warning,
+        ...detection ? { detection } : {}
+      };
+    } catch (e) {
+      return {
+        configured: true,
+        connected: false,
+        mode: "external",
+        error: this.redact(errText2(e)),
+        warning,
+        ...detection ? { detection } : {}
+      };
+    }
+  }
+};
+var appState = new AppState();
+async function closeConnection(state) {
+  const client = state.client;
+  state.client = null;
+  state.clientEndpoint = "";
+  await client?.close();
+}
+
+// src/server/host/detect-local.ts
+import { homedir as homedir3 } from "node:os";
 
 // src/server/host/local-napcat.ts
 import { readdirSync, readFileSync as readFileSync3, statSync as statSync2 } from "node:fs";
@@ -23649,6 +23702,7 @@ function defaultNapCatRoots(homeDir, platform, env = process.env) {
 // src/server/host/detect-local.ts
 var FAILED_PER_SOURCE_LIMIT = 5;
 var MAX_CANDIDATES = 20;
+var MAX_LIVE = 20;
 var MAX_SCANNED_PORTS = 20;
 var TIMEOUT_TEXT = /(timeout|timed out|超时|ETIMEDOUT|ECONNABORTED|aborted)/i;
 function mergeDetectionRoots(cfg, opts) {
@@ -23669,6 +23723,9 @@ function mergeDetectionRoots(cfg, opts) {
   } else if (maxRoots === 0) {
     notes.push("\u76D8\u6839\u81EA\u52A8\u53D1\u73B0\u5DF2\u7981\u7528\uFF08autoDetect.maxRoots=0\uFF09");
   } else {
+    notes.push(
+      `\u76D8\u6839\u53D1\u73B0\u751F\u6548\u4E0A\u9650 ${maxRoots} \u4E2A\u5019\u9009\u6839\uFF08autoDetect.maxRoots=${requested}\uFF0C\u8DE8\u76D8\u603B\u91CF\u95F8\u95E8 ${MAX_ROOTS_TOTAL}\uFF09`
+    );
     const disc = discoverNapCatInstallRootsDetailed(opts.platform, { maxRoots, driveRoots: opts.driveRoots });
     driveRoots = disc.roots;
     truncated = disc.truncated;
@@ -23773,6 +23830,17 @@ function trimFailedBySource(items, limit) {
 function isTimeoutText(text) {
   return typeof text === "string" && TIMEOUT_TEXT.test(text);
 }
+function hostPortKey(endpoint) {
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+    const port = url.port || (url.protocol === "https:" || url.protocol === "wss:" ? "443" : "80");
+    if (!host) return void 0;
+    return `${host}:${port}`;
+  } catch {
+    return void 0;
+  }
+}
 async function detectLocalWithInstalls(state, opts = {}) {
   const cfg = state.config.autoDetect;
   const platform = opts.platform ?? process.platform;
@@ -23804,7 +23872,22 @@ async function detectLocalWithInstalls(state, opts = {}) {
     const unresponsive = isTimeoutText(f.error);
     return unresponsive ? { ...f, unresponsive: true } : { ...f };
   });
-  const tokenAll = redacted.tokenRequired.map((f) => {
+  const liveHttpKeys = /* @__PURE__ */ new Set();
+  for (const l of redacted.live ?? []) {
+    if (l.transport !== "http") continue;
+    const key = hostPortKey(l.endpoint);
+    if (key) liveHttpKeys.add(key);
+  }
+  const notWebSocket = [];
+  const tokenAll = redacted.tokenRequired.filter((f) => {
+    if (f.transport !== "ws") return true;
+    const key = hostPortKey(f.endpoint);
+    if (key && liveHttpKeys.has(key)) {
+      notWebSocket.push(f.endpoint);
+      return false;
+    }
+    return true;
+  }).map((f) => {
     const unresponsive = isTimeoutText(f.error);
     return unresponsive ? { ...f, unresponsive: true } : { ...f };
   });
@@ -23822,6 +23905,11 @@ async function detectLocalWithInstalls(state, opts = {}) {
     }
   }
   const notes = [...merged.notes, ...webuiNotes];
+  for (const inst of installed) {
+    for (const n of inst.notes ?? []) {
+      notes.push(`\u672C\u673A\u5B89\u88C5\uFF08${inst.configDir}\uFF09\uFF1A${n}`);
+    }
+  }
   if (redacted.budgetExhausted) {
     notes.push(
       "\u626B\u63CF\u672A\u5B8C\u6210\uFF08\u9884\u7B97\u8017\u5C3D\uFF09\uFF0C\u7ED3\u679C\u53EF\u80FD\u4E0D\u5168\uFF1A\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u300C\u672C\u673A\u6CA1\u6709 NapCat\u300D\uFF0C\u8BF7\u8C03\u5927 autoDetect.probeTimeoutMs \u6216\u51CF\u5C11\u626B\u63CF\u7AEF\u53E3\u540E\u91CD\u8BD5"
@@ -23843,12 +23931,25 @@ async function detectLocalWithInstalls(state, opts = {}) {
   if (installed.length === 0) {
     notes.push("\u672A\u5728\u672C\u673A\u5E38\u89C1\u4F4D\u7F6E\u53D1\u73B0 NapCat \u5B89\u88C5\u76EE\u5F55\uFF08\u53EA\u626B\u4E86\u914D\u7F6E\u91CC\u7684\u8DEF\u5F84\u4E0E\u9ED8\u8BA4\u4F4D\u7F6E\uFF09");
   }
+  if (notWebSocket.length > 0) {
+    notes.push(
+      `\u540C\u4E00\u7AEF\u53E3\u7684 HTTP \u7AEF\u70B9\u53EF\u7528 \u2192 \u5176 WebSocket \u53D8\u4F53\u4E0D\u662F WebSocket \u670D\u52A1\uFF0C\u5DF2\u4ECE\u5019\u9009\u4E2D\u5254\u9664\uFF1A` + notWebSocket.join("\u3001")
+    );
+  }
   const candidatesAll = redacted.candidates ?? [];
   const candidatesKept = candidatesAll.slice(0, MAX_CANDIDATES);
   const candidatesDropped = candidatesAll.length - candidatesKept.length;
   if (candidatesDropped > 0) {
     notes.push(
       `\u5019\u9009\u7AEF\u70B9\u5171 ${candidatesAll.length} \u6761\uFF0C\u5DF2\u5C55\u793A\u524D ${MAX_CANDIDATES} \u6761\uFF0C\u5176\u4F59 ${candidatesDropped} \u6761\u4EC5\u8BA1\u6570`
+    );
+  }
+  const liveAll = redacted.live ?? [];
+  const liveKept = liveAll.slice(0, MAX_LIVE);
+  const liveDropped = liveAll.length - liveKept.length;
+  if (liveDropped > 0) {
+    notes.push(
+      `\u63A2\u6D4B\u6210\u529F\u7684\u7AEF\u70B9\u5171 ${liveAll.length} \u6761\uFF0C\u5DF2\u5C55\u793A\u524D ${MAX_LIVE} \u6761\uFF0C\u5176\u4F59 ${liveDropped} \u6761\u4EC5\u8BA1\u6570`
     );
   }
   const portsAll = redacted.scanned?.ports ?? [];
@@ -23862,7 +23963,7 @@ async function detectLocalWithInstalls(state, opts = {}) {
   return {
     found: redacted.found,
     candidates: candidatesKept,
-    live: redacted.live,
+    live: liveKept,
     failed: failedTrimmed.kept,
     tokenRequired: tokenTrimmed.kept,
     napcatRunning: redacted.napcatRunning,
@@ -23891,7 +23992,8 @@ async function detectLocalWithInstalls(state, opts = {}) {
 var detectionInFlight = null;
 function detectLocalOnce(state, opts = {}) {
   if (detectionInFlight) return detectionInFlight;
-  const wrapped = detectLocalWithInstalls(state, opts).finally(() => {
+  const fingerprint = state.currentFingerprint();
+  const wrapped = detectLocalWithInstalls(state, opts).then((payload) => ({ payload, fingerprint })).finally(() => {
     if (detectionInFlight === wrapped) detectionInFlight = null;
   });
   detectionInFlight = wrapped;
@@ -24142,19 +24244,25 @@ function registerTools(server2, state) {
   server2.registerTool(
     "napcat_detect_local",
     {
-      description: "\u672C\u673A NapCat \u63A2\u6D4B\uFF1A\u53EA\u63A2\u6D4B\u56DE\u73AF\u5730\u5740\u4E0E\u7528\u6237\u663E\u5F0F\u914D\u7F6E\u7684\u7AEF\u70B9\uFF0C\u4E0D\u626B\u63CF\u7F51\u7EDC\u3002\u628A autoDetect.{ports,endpoints,paths} \u4E0E\u672C\u673A\u5B89\u88C5\u53D1\u73B0\u7684\u7ED3\u679C\u5408\u5E76\u6210\u5019\u9009\u540E\u9010\u4E2A\u63A2\u6D4B\uFF08\u4E0D\u63A5\u53C2\u6570\uFF0C\u8303\u56F4\u5B8C\u5168\u7531\u914D\u7F6E\u51B3\u5B9A\uFF09\u3002\u8FD4\u56DE {found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort, budgetExhausted, scanned, notes, installs, droppedEndpoints}\uFF1A\u63A2\u6D4B**\u4E0D\u5E26 token**\uFF0C\u7591\u4F3C\u9700\u8981 token \u7684\u7AEF\u70B9\u5728 tokenRequired \u91CC\uFF1BbudgetExhausted=true \u8868\u793A\u626B\u63CF\u672A\u5B8C\u6210\uFF08\u9884\u7B97\u8017\u5C3D\uFF09\uFF0C\u7ED3\u679C\u53EF\u80FD\u4E0D\u5168\uFF0C**\u4E0D\u80FD**\u8BFB\u4F5C\u300C\u6CA1\u627E\u5230\u672C\u673A NapCat\u300D\uFF1Bnotes \u91CC\u6709\u4EBA\u7C7B\u53EF\u8BFB\u7684\u8BF4\u660E\uFF08\u5931\u8D25\u5019\u9009\u8BA1\u6570\u3001\u88AB\u4E22\u5F03\u7684\u975E\u56DE\u73AF\u7AEF\u70B9\u3001\u591A\u4E2A WebUI \u7AEF\u53E3\u7B49\uFF09\u3002\u63A2\u6D4B\u7ED3\u8BBA\u4F1A\u88AB napcat_status \u987A\u5E26\u8FD4\u56DE\uFF08\u7F13\u5B58\uFF0C\u4E0D\u91CD\u590D\u626B\u63CF\uFF09\u3002",
+      description: "\u672C\u673A NapCat \u63A2\u6D4B\uFF1A\u53EA\u63A2\u6D4B\u56DE\u73AF\u5730\u5740\u4E0E\u7528\u6237\u663E\u5F0F\u914D\u7F6E\u7684\u7AEF\u70B9\uFF0C\u4E0D\u626B\u63CF\u7F51\u7EDC\u3002\u628A autoDetect.{ports,endpoints,paths} \u4E0E\u672C\u673A\u5B89\u88C5\u53D1\u73B0\u7684\u7ED3\u679C\u5408\u5E76\u6210\u5019\u9009\u540E\u9010\u4E2A\u63A2\u6D4B\uFF08\u4E0D\u63A5\u53C2\u6570\uFF0C\u8303\u56F4\u5B8C\u5168\u7531\u914D\u7F6E\u51B3\u5B9A\uFF09\u3002\u8FD4\u56DE {found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort, budgetExhausted, scanned, notes, installs, droppedEndpoints}\uFF1A\u63A2\u6D4B**\u4E0D\u5E26 token**\uFF0C\u7591\u4F3C\u9700\u8981 token \u7684\u7AEF\u70B9\u5728 tokenRequired \u91CC\uFF1BbudgetExhausted=true \u8868\u793A\u626B\u63CF\u672A\u5B8C\u6210\uFF08\u9884\u7B97\u8017\u5C3D\uFF09\uFF0C\u7ED3\u679C\u53EF\u80FD\u4E0D\u5168\uFF0C**\u4E0D\u80FD**\u8BFB\u4F5C\u300C\u6CA1\u627E\u5230\u672C\u673A NapCat\u300D\uFF1Bnotes \u91CC\u6709\u4EBA\u7C7B\u53EF\u8BFB\u7684\u8BF4\u660E\uFF08\u5931\u8D25\u5019\u9009\u8BA1\u6570\u3001\u88AB\u4E22\u5F03\u7684\u975E\u56DE\u73AF\u7AEF\u70B9\u3001\u591A\u4E2A WebUI \u7AEF\u53E3\u3001\u76D8\u6839\u53D1\u73B0\u751F\u6548\u4E0A\u9650\u7B49\uFF09\u3002\u63A2\u6D4B\u7ED3\u8BBA\u4F1A\u88AB napcat_status \u987A\u5E26\u8FD4\u56DE\uFF08\u7F13\u5B58\uFF0C\u4E0D\u91CD\u590D\u626B\u63CF\uFF09\u3002\u26A0\uFE0F \u8FD4\u56DE\u4E2D\u542B**\u672C\u673A\u7EDD\u5BF9\u8DEF\u5F84**\uFF08installs[].configDir\u3001scanned.paths\u3001candidates[].detail\u3001droppedEndpoints[].detail\uFF09\uFF0C\u4EC5\u7528\u4E8E\u89E3\u91CA\u300C\u8FD9\u4E2A\u7AEF\u70B9\u662F\u4ECE\u54EA\u6765\u7684\u300D\uFF0C\u4E0D\u8981\u62FF\u5B83\u505A\u522B\u7684\u7528\u9014\u3002",
       inputSchema: {}
     },
     async () => {
       try {
         state.reloadConfig();
-        const payload = await detectLocalOnce(state);
-        state.setDetection({
-          found: payload.found,
-          napcatRunning: payload.napcatRunning,
-          endpoint: payload.live[0]?.endpoint,
-          budgetExhausted: payload.budgetExhausted
-        });
+        const { payload, fingerprint } = await detectLocalOnce(state);
+        const kept = state.setDetection(
+          {
+            found: payload.found,
+            napcatRunning: payload.napcatRunning,
+            endpoint: payload.live[0]?.endpoint,
+            budgetExhausted: payload.budgetExhausted
+          },
+          fingerprint
+        );
+        if (!kept) {
+          payload.notes.push("\u63A2\u6D4B\u671F\u95F4\u914D\u7F6E\u53D1\u751F\u4E86\u53D8\u5316\uFF0C\u8FD9\u4EFD\u7ED3\u8BBA\u5DF2\u6309\u300C\u8FC7\u671F\u300D\u5904\u7406\uFF08\u672A\u5199\u5165\u7F13\u5B58\uFF09\uFF0C\u8BF7\u91CD\u65B0\u68C0\u6D4B");
+        }
         return ok(payload);
       } catch (e) {
         return fail(state, e);
@@ -24378,7 +24486,7 @@ function registerPanelResource(server2, htmlPath) {
 
 // src/server/index.ts
 var here = dirname(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.1.0" });
+var server = new McpServer({ name: "napcat", version: "0.3.0" });
 registerTools(server, appState);
 registerPanelResource(server, join4(here, "ui", "panel.html"));
 await server.connect(new StdioServerTransport());

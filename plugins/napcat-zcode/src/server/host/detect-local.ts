@@ -50,6 +50,15 @@ export const FAILED_PER_SOURCE_LIMIT = 5;
  */
 export const MAX_CANDIDATES = 20;
 
+/**
+ * 探测成功的端点最多展示几条（其余只给计数，见「出参上界」）。
+ *
+ * `live` 之前**没有**裁剪：`live` 的条数 = 能连上的 OneBot 端点数，
+ * 端口配得多时（每个端口一个 http + 一个 ws）它也能上百条——
+ * 与 `candidates` / `scanned.ports` 一样必须封顶（spec §5.2 的出参上界）。
+ */
+export const MAX_LIVE = 20;
+
 /** 扫描端口最多展示几个（其余只给计数，见「出参上界」）。 */
 export const MAX_SCANNED_PORTS = 20;
 
@@ -173,6 +182,15 @@ export function mergeDetectionRoots(
   } else if (maxRoots === 0) {
     notes.push('盘根自动发现已禁用（autoDetect.maxRoots=0）');
   } else {
+    /**
+     * **生效上限**要写进 notes：台账要求「面板展示生效值」，
+     * 而 `autoDetect.maxRoots` 的**原始值**不等于生效值
+     * （生效值 = `min(maxRoots, 64)`，默认 `maxRoots=32` → 32 个候选根）。
+     * 面板只渲染 notes → 说明写在这里面板才看得见。
+     */
+    notes.push(
+      `盘根发现生效上限 ${maxRoots} 个候选根（autoDetect.maxRoots=${requested}，跨盘总量闸门 ${MAX_ROOTS_TOTAL}）`,
+    );
     const disc = discoverNapCatInstallRootsDetailed(opts.platform, { maxRoots, driveRoots: opts.driveRoots });
     driveRoots = disc.roots;
     truncated = disc.truncated;
@@ -354,6 +372,24 @@ function isTimeoutText(text: string | undefined): boolean {
   return typeof text === 'string' && TIMEOUT_TEXT.test(text);
 }
 
+/**
+ * 端点的 `host:port` 键（忽略 scheme 与路径）。
+ *
+ * 用来识别「同一台机器上的同一个端口」——`http://127.0.0.1:3000` 与 `ws://127.0.0.1:3000`
+ * 是同一个端口的两种协议视图。
+ */
+function hostPortKey(endpoint: string): string | undefined {
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+    const port = url.port || (url.protocol === 'https:' || url.protocol === 'wss:' ? '443' : '80');
+    if (!host) return undefined;
+    return `${host}:${port}`;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 一次探测的入参（`opts` 主要是测试注入位，生产路径不传）。 */
 export interface DetectLocalRunOptions {
   /** 整体时间预算（ms）。生产路径用默认值；测试用它把扫描压到毫秒级。 */
@@ -427,10 +463,42 @@ export async function detectLocalWithInstalls(
     const unresponsive = isTimeoutText(f.error);
     return unresponsive ? { ...f, unresponsive: true } : { ...f };
   });
-  const tokenAll = redacted.tokenRequired.map((f) => {
-    const unresponsive = isTimeoutText(f.error);
-    return unresponsive ? { ...f, unresponsive: true } : { ...f };
-  });
+  /**
+   * **降噪：活着的 HTTP 端口，它的 `ws://` 孪生端点不是候选。**
+   *
+   * 降噪层只做 TCP 可达性检查 → `ws://127.0.0.1:3000` 打到 HTTP 服务时端口**确实在监听**
+   * → 标成「可能需要 token」→ 进 `tokenRequired` → 面板把它列为带「使用这个」的候选。
+   * 在默认路径上（NapCat HTTP 在 3000、WebUI 在 6099）用户会看到 3 个候选、其中 2 个是假的。
+   *
+   * 判定（**确定性的，不需要额外网络往返**）：同一 `host:port` 上，
+   * `http://` 变体**探测成功**（在 `live` 里）→ 该端口是 HTTP 服务，
+   * 它的 `ws://` 变体不是 WebSocket 服务 → 从候选里剔除。
+   *
+   * **取舍**：同一个端口**同时**跑 HTTP 与 WS（NapCat 默认分两个端口）时，
+   * WS 变体会被一并剔除（假阴性）。这是刻意的：多一个假候选比少一个真候选更吵，
+   * 而被剔除的那条**仍留在失败列表里**（用户看得见它、也拿得到完整错误）。
+   */
+  const liveHttpKeys = new Set<string>();
+  for (const l of redacted.live ?? []) {
+    if (l.transport !== 'http') continue;
+    const key = hostPortKey(l.endpoint);
+    if (key) liveHttpKeys.add(key);
+  }
+  const notWebSocket: string[] = [];
+  const tokenAll = redacted.tokenRequired
+    .filter((f) => {
+      if (f.transport !== 'ws') return true;
+      const key = hostPortKey(f.endpoint);
+      if (key && liveHttpKeys.has(key)) {
+        notWebSocket.push(f.endpoint);
+        return false;
+      }
+      return true;
+    })
+    .map((f) => {
+      const unresponsive = isTimeoutText(f.error);
+      return unresponsive ? { ...f, unresponsive: true } : { ...f };
+    });
   const failedTrimmed = trimFailedBySource(failedAll, FAILED_PER_SOURCE_LIMIT);
   const tokenTrimmed = trimFailedBySource(tokenAll, FAILED_PER_SOURCE_LIMIT);
 
@@ -448,6 +516,20 @@ export async function detectLocalWithInstalls(
   }
 
   const notes: string[] = [...merged.notes, ...webuiNotes];
+
+  /**
+   * 安装发现自己的说明（截断等）**并入顶层 notes**。
+   *
+   * 面板只渲染 `installs[].configDir` 与 `webuiPort`——`installs[].notes` 里的
+   * 「端点数超过全局上限（10），已截断」这类信息**到不了面板**，
+   * spec 的「裁剪计数写在 notes」规则对这个桶就失效了。
+   * 顶层 notes 是面板唯一会渲染的地方 → 在这里汇合。
+   */
+  for (const inst of installed) {
+    for (const n of inst.notes ?? []) {
+      notes.push(`本机安装（${inst.configDir}）：${n}`);
+    }
+  }
 
   if (redacted.budgetExhausted) {
     notes.push(
@@ -473,9 +555,15 @@ export async function detectLocalWithInstalls(
   if (installed.length === 0) {
     notes.push('未在本机常见位置发现 NapCat 安装目录（只扫了配置里的路径与默认位置）');
   }
+  if (notWebSocket.length > 0) {
+    notes.push(
+      `同一端口的 HTTP 端点可用 → 其 WebSocket 变体不是 WebSocket 服务，已从候选中剔除：` +
+        notWebSocket.join('、'),
+    );
+  }
 
   /**
-   * 出参上界：候选端点与扫描端口都要截断（其余只给计数，计数写进 notes）。
+   * 出参上界：候选端点、探测成功的端点与扫描端口都要截断（其余只给计数，计数写进 notes）。
    *
    * 不截断的话，配置里写多端口（`pickPorts` 只过滤合法性、不限个数）时
    * 单次工具调用能产出 MB 级文本，直接撑爆模型上下文。
@@ -487,6 +575,15 @@ export async function detectLocalWithInstalls(
     notes.push(
       `候选端点共 ${candidatesAll.length} 条，已展示前 ${MAX_CANDIDATES} 条，` +
         `其余 ${candidatesDropped} 条仅计数`,
+    );
+  }
+  const liveAll = redacted.live ?? [];
+  const liveKept = liveAll.slice(0, MAX_LIVE);
+  const liveDropped = liveAll.length - liveKept.length;
+  if (liveDropped > 0) {
+    notes.push(
+      `探测成功的端点共 ${liveAll.length} 条，已展示前 ${MAX_LIVE} 条，` +
+        `其余 ${liveDropped} 条仅计数`,
     );
   }
   const portsAll = redacted.scanned?.ports ?? [];
@@ -502,7 +599,7 @@ export async function detectLocalWithInstalls(
   return {
     found: redacted.found,
     candidates: candidatesKept,
-    live: redacted.live,
+    live: liveKept,
     failed: failedTrimmed.kept,
     tokenRequired: tokenTrimmed.kept,
     napcatRunning: redacted.napcatRunning,
@@ -536,7 +633,20 @@ export async function detectLocalWithInstalls(
  * + 两次全量扫描（各自一份 5s 预算），缓存还会「后写覆盖先写」。
  * 这里让并发调用复用同一个探测。
  */
-let detectionInFlight: Promise<DetectLocalPayload> | null = null;
+let detectionInFlight: Promise<DetectLocalOutcome> | null = null;
+
+/**
+ * 一次探测的结论 + 它**运行时用的配置指纹**。
+ *
+ * 指纹的用处：探测期间（≤5s）用户改了配置 → 结论是**按旧配置**算出来的 →
+ * 写回缓存前比对指纹，不一致就丢弃（见 `AppState.setDetection`）。
+ */
+export interface DetectLocalOutcome {
+  /** 探测结论。 */
+  payload: DetectLocalPayload;
+  /** 探测运行时用的配置指纹。 */
+  fingerprint: string;
+}
 
 /**
  * 跑一次本机探测；**并发调用复用同一个 promise**。
@@ -550,12 +660,19 @@ let detectionInFlight: Promise<DetectLocalPayload> | null = null;
 export function detectLocalOnce(
   state: AppState,
   opts: DetectLocalRunOptions = {},
-): Promise<DetectLocalPayload> {
+): Promise<DetectLocalOutcome> {
   if (detectionInFlight) return detectionInFlight;
-  const wrapped: Promise<DetectLocalPayload> = detectLocalWithInstalls(state, opts).finally(() => {
-    // 只清自己发起的那次（期间若已有新的探测在跑，别把它清掉）
-    if (detectionInFlight === wrapped) detectionInFlight = null;
-  });
+  /**
+   * 指纹在**探测开始前**取（与 `detectLocalWithInstalls` 读 `state.config` 是同一时刻，
+   * 中间没有 await）→ 指纹就是这份结论真正依据的那份配置。
+   */
+  const fingerprint = state.currentFingerprint();
+  const wrapped: Promise<DetectLocalOutcome> = detectLocalWithInstalls(state, opts)
+    .then((payload) => ({ payload, fingerprint }))
+    .finally(() => {
+      // 只清自己发起的那次（期间若已有新的探测在跑，别把它清掉）
+      if (detectionInFlight === wrapped) detectionInFlight = null;
+    });
   detectionInFlight = wrapped;
   return wrapped;
 }

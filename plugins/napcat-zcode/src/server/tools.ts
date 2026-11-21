@@ -489,8 +489,10 @@ export function registerTools(server: McpServer, state: AppState): void {
         '返回 {found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort, budgetExhausted, scanned, notes, installs, droppedEndpoints}：' +
         '探测**不带 token**，疑似需要 token 的端点在 tokenRequired 里；' +
         'budgetExhausted=true 表示扫描未完成（预算耗尽），结果可能不全，**不能**读作「没找到本机 NapCat」；' +
-        'notes 里有人类可读的说明（失败候选计数、被丢弃的非回环端点、多个 WebUI 端口等）。' +
-        '探测结论会被 napcat_status 顺带返回（缓存，不重复扫描）。',
+        'notes 里有人类可读的说明（失败候选计数、被丢弃的非回环端点、多个 WebUI 端口、盘根发现生效上限等）。' +
+        '探测结论会被 napcat_status 顺带返回（缓存，不重复扫描）。' +
+        '⚠️ 返回中含**本机绝对路径**（installs[].configDir、scanned.paths、candidates[].detail、' +
+        'droppedEndpoints[].detail），仅用于解释「这个端点是从哪来的」，不要拿它做别的用途。',
       inputSchema: {},
     },
     async () => {
@@ -498,14 +500,21 @@ export function registerTools(server: McpServer, state: AppState): void {
         // 配置可能已被外部改过（面板设置页 / 用户手改文件）→ 刷新后再探
         state.reloadConfig();
         // 并发调用复用同一个探测（不重复扫盘）：MCP SDK 会并发处理请求
-        const payload = await detectLocalOnce(state);
+        const { payload, fingerprint } = await detectLocalOnce(state);
         // 结论缓存给 napcat_status 读（status 自己不会触发扫描）
-        state.setDetection({
-          found: payload.found,
-          napcatRunning: payload.napcatRunning,
-          endpoint: payload.live[0]?.endpoint,
-          budgetExhausted: payload.budgetExhausted,
-        });
+        // 指纹对不上 = 探测期间配置变了 → 这份结论是按旧配置算的 → 丢弃（不写缓存）
+        const kept = state.setDetection(
+          {
+            found: payload.found,
+            napcatRunning: payload.napcatRunning,
+            endpoint: payload.live[0]?.endpoint,
+            budgetExhausted: payload.budgetExhausted,
+          },
+          fingerprint,
+        );
+        if (!kept) {
+          payload.notes.push('探测期间配置发生了变化，这份结论已按「过期」处理（未写入缓存），请重新检测');
+        }
         return ok(payload);
       } catch (e) {
         return fail(state, e);

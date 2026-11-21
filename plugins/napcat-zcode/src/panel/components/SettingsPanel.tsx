@@ -37,6 +37,23 @@ export function SettingsPanel({
   const [pathsMsg, setPathsMsg] = useState('');
   const [pathsErr, setPathsErr] = useState('');
 
+  /**
+   * 拉一次配置（**最新**）。
+   *
+   * 挂载时拉的那一次只反映**打开设置面板那一刻**的配置；
+   * 保存扫描路径之后必须再拉一次——否则面板上会出现
+   * 「已保存 1 条扫描路径」紧挨着「当前已配置 0 条扫描路径」的自相矛盾
+   * （验收 §13.6.5 要求 N 随保存变化）。
+   */
+  const loadConfig = async (): Promise<void> => {
+    try {
+      const c = await api.getConfig();
+      setCfg(c);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     api
@@ -80,6 +97,13 @@ export function SettingsPanel({
           ? '已清空全部扫描路径（下次检测生效）'
           : `已保存 ${saved.length} 条扫描路径（下次检测生效）`,
       );
+      /**
+       * 计数要**立刻**跟着保存变（不等重新拉配置）：
+       * 否则「已保存 N 条」与「当前已配置 M 条」会并排出现在同一块面板上，自相矛盾。
+       */
+      setCfg((prev) => (prev ? withPathsCount(prev, saved.length) : prev));
+      // 再拉一次配置（服务端是权威值：去重、丢弃非法项后的真实条数）
+      await loadConfig();
     } catch (e) {
       setPathsErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -165,4 +189,14 @@ export function SettingsPanel({
       </p>
     </div>
   );
+}
+
+/**
+ * 把配置里的「扫描路径条数」改成给定值（其余字段原样保留）。
+ *
+ * `ConfigInfo` 的索引签名让 `autoDetect` 是 unknown → 这里收敛成本面板认识的形状。
+ */
+function withPathsCount(cfg: ConfigInfo, count: number): ConfigInfo {
+  const auto = (cfg.autoDetect ?? {}) as Record<string, unknown>;
+  return { ...cfg, autoDetect: { ...auto, pathsCount: count } };
 }

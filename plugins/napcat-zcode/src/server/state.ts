@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { createClient, safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import { getLoginInfo } from './onebot/actions.js';
+import { normalizeEndpoint } from './onebot/detect.js';
 import type { OB11LoginInfo } from './onebot/types.js';
 import { dataDir, loadConfigData, loadConfigWithRaw, saveConfig, type PluginConfig } from './config.js';
 
@@ -143,6 +144,58 @@ function assertUsableEndpoint(endpoint: string): void {
   if (port !== undefined && (port < 1 || port > 65535)) {
     throw new Error(`端点端口越界（需在 1-65535 之间）：${safeEndpointLabel(endpoint)}`);
   }
+}
+
+/**
+ * 端点里的 query 段（`?access_token=…`）；没有 query 时是空串。
+ *
+ * OneBot 的 WebSocket Server 约定把 access token 放在 URL 的 query 里，
+ * 所以这一段常常就是**唯一的凭据**。
+ */
+function queryOf(endpoint: string): string {
+  const i = endpoint.indexOf('?');
+  return i < 0 ? '' : endpoint.slice(i);
+}
+
+/**
+ * 端点里有没有 userinfo（`http://user:pass@host`）——同样是凭据。
+ *
+ * `normalizeEndpoint` 会把它剥掉，规范化候选里看不见。
+ */
+function hasUserInfo(endpoint: string): boolean {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint);
+  if (!m) return false;
+  return m[1].lastIndexOf('@') >= 0;
+}
+
+/**
+ * 保留「已存端点」里的凭据（query / userinfo）。
+ *
+ * **为什么需要它**：面板的「使用这个」按钮传的是**规范化**候选
+ * （`normalizeEndpoint` 会剥掉 query 与 userinfo）——
+ * 用户配的 `ws://127.0.0.1:3001?access_token=abc` 在候选里显示成 `ws://127.0.0.1:3001`，
+ * 点一下 `api.configure(ep, '')` 就会把**本来能用的**配置换成没有凭据的 URL：
+ * 凭据若只存在于 query（不在 `connection.token` 里），连接随即失败，**而原 URL 已经丢了**。
+ *
+ * **怎么修（服务端做，不把凭据暴露给面板）**：比较「传入端点的规范化形式」与
+ * 「已存端点的规范化形式」——
+ * - 两者**相同**（= 同一个端点）且**传入的没有 query 而已存的有** → 沿用**已存的完整端点串**；
+ * - 端点**确实变了**（规范化形式不同）→ 一律用传入的（用户明确要换端点，不该保留旧凭据）；
+ * - 传入的自己有 query → 用传入的（它自己带了凭据）。
+ *
+ * userinfo 走同一套口径（它是同一类凭据）：传入的没有 userinfo 而已存的有 → 沿用已存的。
+ */
+function preserveStoredQuery(incoming: string, stored: string): string {
+  if (!stored) return incoming;
+  const a = normalizeEndpoint(incoming);
+  const b = normalizeEndpoint(stored);
+  // 规范化失败（不是合法 URL）→ 无法比较 → 用传入的（后续的端点校验会把它拦下来）
+  if (!a || !b || a !== b) return incoming;
+  if (queryOf(incoming)) return incoming; // 传入的自带 query → 用传入的
+  if (queryOf(stored)) return stored; // 已存的有 query → 沿用已存的完整端点（保住凭据）
+  if (hasUserInfo(incoming)) return incoming; // 传入的自带 userinfo → 用传入的
+  if (hasUserInfo(stored)) return stored; // 已存的有 userinfo → 沿用已存的完整端点
+  return incoming; // 两边都没有凭据 → 不变
 }
 
 /**
@@ -297,9 +350,32 @@ export class AppState {
     this.config = next;
   }
 
-  /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
-  setDetection(detection: DetectionSummary): void {
+  /**
+   * 当前配置的**指纹**（探测结论的「适用范围」）。
+   *
+   * 探测开始时记下它、结束时比对：指纹变了 = 探测期间配置变了 →
+   * 那份结论是**按旧配置**算出来的，不能写回缓存（见 `setDetection`）。
+   */
+  currentFingerprint(): string {
+    return configFingerprint(this.config);
+  }
+
+  /**
+   * 记录最近一次本机探测的结论（供 `napcat_status` 读取）。
+   *
+   * @param fingerprint 探测**运行时**用的配置指纹（可选）：
+   *   传了就先跟当前指纹比对——不一致说明**探测期间配置变了**，
+   *   那份结论是针对旧配置的，**丢弃**（不能写回缓存，否则会拿旧结论说「检测到本机 NapCat」）。
+   *   不传 = 无条件写入（老调用方 / 手工塞结论的测试）。
+   * @returns 是否真的写入了（false = 已丢弃）
+   */
+  setDetection(detection: DetectionSummary, fingerprint?: string): boolean {
+    if (fingerprint !== undefined && fingerprint !== this.currentFingerprint()) {
+      // 过期结论**不写**（也不去动已有的结论——配置变更路径已经清过缓存了）
+      return false;
+    }
     this.detection = detection;
+    return true;
   }
 
   /**
@@ -410,6 +486,14 @@ export class AppState {
    * - **落盘即失效**：配置一旦落盘，本机探测的结论缓存就被清掉（见 `clearDetection`）——
    *   探测结论是针对某一份配置得出的，配置变了它就对不上了。
    *
+   * **端点的解析规则（防误删凭据）**：
+   * 传入的端点是**规范化**形态时（面板的「使用这个」按钮传的就是它），
+   * 它已经**没有 query** 了——而凭据可能只存在于 query 里
+   * （OneBot 的 WS 约定：`ws://host:port?access_token=…`）。
+   * 因此：传入端点与**已存端点**规范化后相同、且已存的那个带 query 时，
+   * **沿用已存的完整端点串**（见 `preserveStoredQuery`）。
+   * 端点确实变了 → 一律用传入的。
+   *
    * **token 的解析规则（防误删凭据）**：
    * - 传入非空 token → 用它（换 token）；
    * - 传入空 token 且**没有** `clearToken` → **保留文件里已存的 token**。
@@ -423,19 +507,25 @@ export class AppState {
     token: string,
     opts: { clearToken?: boolean } = {},
   ): Promise<OB11LoginInfo> {
-    // ⓪ 解析出「真正要落盘 / 真正要用来连接」的 token
+    // ⓪ 解析出「真正要落盘 / 真正要用来连接」的 token 与端点
     const { raw } = loadConfigWithRaw(dataDir());
     const conn = isPlainObject(raw.connection) ? raw.connection : {};
     const storedToken = typeof conn.token === 'string' ? conn.token : '';
+    const storedEndpoint = typeof conn.endpoint === 'string' ? conn.endpoint : '';
     const effectiveToken = opts.clearToken ? '' : token !== '' ? token : storedToken;
     this.rememberToken(effectiveToken);
+    /**
+     * 端点：规范化形态的传入值**可能**丢掉了 query 里的凭据
+     * （面板「使用这个」按钮传的就是规范化候选）→ 同一个端点时沿用已存的完整串。
+     */
+    const effectiveEndpoint = preserveStoredQuery(endpoint, storedEndpoint);
 
     // ① 端点校验（不通过就直接抛，文件与内存态都不动）
-    const probed = createClient({ endpoint, token: effectiveToken || undefined });
-    assertUsableEndpoint(endpoint);
+    const probed = createClient({ endpoint: effectiveEndpoint, token: effectiveToken || undefined });
+    assertUsableEndpoint(effectiveEndpoint);
 
     // ② 校验通过 → patch 式落盘（只写 connection 段）
-    this.saveConnection(endpoint, effectiveToken);
+    this.saveConnection(effectiveEndpoint, effectiveToken);
     /**
      * 配置**一旦落盘**，之前的探测结论就失效了 → 立刻清缓存。
      *
@@ -452,12 +542,12 @@ export class AppState {
     this.client = null;
     this.clientEndpoint = '';
     await old?.close();
-    this.config.connection = { ...this.config.connection, endpoint, token: effectiveToken };
+    this.config.connection = { ...this.config.connection, endpoint: effectiveEndpoint, token: effectiveToken };
     // 指纹跟着内存态走（文件已落盘，两边一致）→ 之后的 reloadConfig 不会误判成「外部改了配置」
     this.loadedFingerprint = configFingerprint(this.config);
     // 注入替身时用它（probed 不会被连接，直接丢弃）；否则用刚校验过的客户端
     this.client = this.clientOverride ? null : probed;
-    if (this.client) this.clientEndpoint = endpoint;
+    if (this.client) this.clientEndpoint = effectiveEndpoint;
 
     // ④ 取登录信息（连不上会抛 → 工具层转 isError）
     const c = await this.ensureClient();

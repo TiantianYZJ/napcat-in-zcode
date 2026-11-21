@@ -207,7 +207,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 **不会**显示「未检测到本机 NapCat」：那轮扫描根本没扫完，下结论就是假阴性。
 遇到这种情况可以调大 `autoDetect.probeTimeoutMs` 或减少扫描端口后重试。
 
-> **数量以面板显示的提示为准**：候选端点与扫描端口都会被截断展示（各最多 20 条），
+> **数量以面板显示的提示为准**：候选端点、探测成功的端点与扫描端口都会被截断展示（各最多 20 条），
 > **完整计数写在提示（`notes`）里**，不在列表长度上。
 
 ### 4. 之后怎么改
@@ -436,7 +436,7 @@ NapCat 与 QQ 始终是插件之外的独立进程。
 | `autoDetect.paths` | `[]` | 本机 NapCat 扫描路径（**只接受绝对路径**，相对路径会被拒绝）；面板「设置 → 扫描路径」可编辑；面板保存时**整体替换**（不是追加） |
 | `autoDetect.probeTimeoutMs` | `1200` | 单个候选端点的探测超时（100–10000） |
 | `autoDetect.scanDrives` | `true` | 是否自动做盘根枚举（关掉后只扫你指定的路径与默认位置） |
-| `autoDetect.maxRoots` | `32` | 盘根发现的候选根上限（生效值 = min(maxRoots, 64)；0 = 禁用盘根发现） |
+| `autoDetect.maxRoots` | `32` | 盘根发现的候选根**总量**上限（生效值 = min(maxRoots, 64)，默认即 32 个候选根；按盘轮转填充；0 = 禁用盘根发现） |
 | `managed.napcatVersion` | `"4.18.42"` | **M1 不生效**（自带宿主是 M3） |
 | `managed.downloadMirror` | `"auto"` | **M1 不生效** |
 | `export.dir` | `"user"` | 决定「保存为附件…」与「导出」的默认目的地（`user` / `workspace`）；面板「导出▾」里显式选的目标优先 |
@@ -471,7 +471,7 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 |------|------|------|
 | `napcat_status` | 无 | `{configured, connected, mode, login?, error?, warning?, detection?}`。**连接失败时 `isError` 仍是 `false`** —— 那是状态，不是工具错误。`warning` 是安全警告（如非回环端点没设 token），有它不代表连接失败。`detection` 是**最近一次 `napcat_detect_local` 的结论缓存**（没探测过就没有这个键；读它**不会**触发任何扫描） |
 | `napcat_configure` | `{endpoint, token?, clearToken?, paths?}` | `{configured: true, connected: true, login, warning?, pathsSaved?, paths?}`。校验不过 → `isError`。**token 留空 = 保留已保存的 token**；清除要显式 `clearToken: true`。`paths`（本机扫描路径）的语义：**不传 = 不改**；传 `[]` = **清空**扫描路径；传 `[...]` = **整体替换**（不是追加）；**相对路径会被拒绝**（直接报错，不静默丢弃）。`endpoint` 传**空串** = 只更新扫描路径、**不动已有连接**（这样不会把你 WS URL 里的 `?access_token=` 抹掉） |
-| `napcat_detect_local` | 无 | `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`。探测**不带 token**（只回答「这个端点活着吗、需要 token 吗」），疑似需要 token 的端点在 `tokenRequired` 里。`budgetExhausted: true` = 扫描**没扫完**，结果可能不全，**不能**据此判断「本机没有 NapCat」。结论会带进 `napcat_status` 的 `detection` 字段（缓存，不重复扫描）。`installs[].configDir` 与 `scanned.paths` 是**本机绝对路径**，只用于解释「这个端点是从哪来的」 |
+| `napcat_detect_local` | 无 | `{found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort?, budgetExhausted, scanned, notes, installs, droppedEndpoints}`。探测**不带 token**（只回答「这个端点活着吗、需要 token 吗」），疑似需要 token 的端点在 `tokenRequired` 里。`budgetExhausted: true` = 扫描**没扫完**，结果可能不全，**不能**据此判断「本机没有 NapCat」。结论会带进 `napcat_status` 的 `detection` 字段（缓存，不重复扫描）。`installs[].configDir`、`scanned.paths`、`candidates[].detail` 与 `droppedEndpoints[].detail` 是**本机绝对路径**，只用于解释「这个端点是从哪来的」 |
 | `napcat_list_chats` | `{kind: "group" \| "friend"}` | `{chats: [{kind, id, name, memberCount?}]}`；`id` 一律是字符串 |
 | `napcat_get_history` | `{chatKind, chatId, beforeSeq?, count?, since?, until?}` | `{messages, nextBeforeSeq, exhausted}`。`count` 1–200，默认 100；`chatId` 接受数字或字符串；`since` / `until` 是 epoch 秒（含），在服务端本地过滤 |
 | `napcat_search_messages` | `{chatKind, chatId, query, startSeq?, maxPages?}` | `{hits: [{message, contextBefore}], scanned, pages, exhausted, hitsTruncated, note}`。`maxPages` 1–100，默认 20；`query` 大小写不敏感；命中数上限 **20**（超出则 `hitsTruncated` 为 `true` 并停止扫描） |
@@ -502,11 +502,16 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
   （`autoDetect.endpoints` 与当前已配置的连接端点）+ **本机安装发现**
   （默认安装位置 + 盘根枚举 + `autoDetect.paths` 指定的路径）；**不扫描局域网**；
 - **只读**：不改你的 NapCat 配置、不启停进程；探测**不带 token**；
-- **出参有上界**：候选端点与扫描端口各最多展示 **20** 条，**完整计数写在 `notes` 里**；
+- **出参有上界**：候选端点、探测成功的端点（`live`）与扫描端口各最多展示 **20** 条，
+  **完整计数写在 `notes` 里**；
 - **失败桶按来源裁剪**：每个来源最多展示 **5** 条失败候选，其余只给计数；
+- **HTTP 活端口的 `ws://` 孪生端点不是候选**：同一端口上的 HTTP 端点探测成功 →
+  它的 WebSocket 变体必然不是 WebSocket 服务 → 直接从候选里剔除（面板上少几个假候选）；
 - **超时 ≠ 连不上**：超时的候选/失败条目标「目标无响应（超时）」，与「连不上或被拒绝」分开说；
-- `notes` 是人类可读说明（预算耗尽、被丢弃的非回环端点、多个 WebUI 端口、裁剪计数…），
-  **原样读即可**，不要自己按数组长度重算数量。
+- `notes` 是人类可读说明（预算耗尽、被丢弃的非回环端点、多个 WebUI 端口、裁剪计数、
+  **盘根发现生效上限**、安装发现的截断说明…），**原样读即可**，不要自己按数组长度重算数量。
+- ⚠️ 返回里**含本机绝对路径**（`installs[].configDir`、`scanned.paths`、`candidates[].detail`、
+  `droppedEndpoints[].detail`）——它们**只用于解释「这个端点是从哪来的」**，不要拿它做别的用途。
 
 ---
 
@@ -584,9 +589,11 @@ agent 可以直接调用这 9 个工具（面板走的是同一组工具、同�
 15. **探测从不带 token，也从不改你的 NapCat。** 疑似受保护的端点只能靠「可能需要 access token」
     的措辞提示你；插件**不会**替你开启 OneBot Server、不会写 NapCat 的 `config.json`。
     要用受保护的端点，得你自己填 token、自己在 WebUI 里开 OneBot Server。
-16. **盘根枚举是有界的。** 每个盘最多取 `autoDetect.maxRoots` 个候选根、跨盘总量上限 64，
-    触顶时面板会提示「可能漏掉某些 NapCat 安装目录」。装在**自定义目录**里的 NapCat，
-    靠 `autoDetect.paths` 指定绝对路径最可靠。
+16. **盘根枚举是有界的。** 盘根发现的候选根**总量**上限 = `min(autoDetect.maxRoots, 64)`
+    （默认 `maxRoots=32` → 最多 **32** 个候选根；填充方式是**按盘轮转**，轮流从每个盘取一个，
+    避免第一个盘把额度吃光）；`maxRoots=0` 表示禁用盘根发现。
+    触顶时面板会提示「可能漏掉某些 NapCat 安装目录」，并显示**生效上限**。
+    装在**自定义目录**里的 NapCat，靠 `autoDetect.paths` 指定绝对路径最可靠。
 
 ### 路线图
 
