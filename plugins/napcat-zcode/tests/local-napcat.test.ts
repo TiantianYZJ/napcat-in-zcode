@@ -264,6 +264,28 @@ describe('findLocalNapCat', () => {
     expect(found[0].endpoints.map((e) => e.endpoint)).toEqual(['http://127.0.0.1:3000']);
   });
 
+  it('finds the official new layout <root>/napcat/config/ (three levels deep but a known shape)', () => {
+    // 制品解开后的形态：<安装目录>/napcat/config/{webui.json,onebot11_<uin>.json}
+    // 通用扫描最多两层深 → 命中不了；这里对这一种**已知形态**做定向补扫。
+    const root = join(tmp, 'NapCat-v4.18.42');
+    const configDir = join(root, 'napcat', 'config');
+    const file = writeOnebotConfig(configDir, 'onebot11_123.json', {
+      network: { httpServers: [httpServer(3000)], websocketServers: [] },
+    });
+    writeOnebotConfig(configDir, 'webui.json', { host: '127.0.0.1', port: 6099, token: 'secret-token' });
+
+    const found = findLocalNapCat([root]);
+
+    expect(found).toHaveLength(1);
+    expect(found[0].configDir).toBe(configDir);
+    expect(found[0].onebotConfigs).toEqual([file]);
+    expect(found[0].endpoints.map((e) => e.endpoint)).toEqual(['http://127.0.0.1:3000']);
+    // WebUI 端口被读出来（面板靠它去探 WebUI）
+    expect(found[0].webui?.port).toBe(6099);
+    // WebUI token 的明文不进返回值
+    expect(JSON.stringify(found[0])).not.toContain('secret-token');
+  });
+
   it('truncates the endpoints when the limit is exceeded and says so', () => {
     const rootA = join(tmp, 'A');
     const rootB = join(tmp, 'B');

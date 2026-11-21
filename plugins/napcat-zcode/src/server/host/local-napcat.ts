@@ -3,7 +3,8 @@
  *
  * 职责边界（硬约束）：
  * - **只读**：只读文件系统，不改用户文件、不启动/结束进程、不改 NapCat 配置。
- * - **有界**：每个根目录最多找**两层深**（`readdirSync` 两层），**绝不**全盘递归。
+ * - **有界**：每个根目录最多找**两层深**（`readdirSync` 两层），**绝不**全盘递归；
+ *   唯一的例外是**官方新布局** `<root>/napcat/config/`（已知形态，定向补扫一次）。
  * - **不抛错**：目录/文件不可读、JSON 损坏、路径不存在 → 跳过（跳过，不是抛错）。
  * - **不泄露凭据**：OneBot access token 与 WebUI token 的**明文都不进返回值**。
  *
@@ -36,6 +37,10 @@ export const MAX_ENDPOINTS_TOTAL = 10;
  *
  * NapCat 的真实布局是 `<安装目录>/config/onebot11_<uin>.json`——两层正好够；
  * 再深就是「别的程序的东西」，且递归下去会拖垮进程。
+ *
+ * ⚠️ **官方新布局**（制品解开后的形态）是 `<安装目录>/napcat/config/onebot11_<uin>.json`
+ * ——多一层，通用扫描命中不了。它是**已知形态**，所以单独定向补扫一次
+ * （见 `scanOfficialLayoutConfig`），**不**放宽这个通用上限。
  */
 const MAX_SCAN_DEPTH = 2;
 
@@ -227,10 +232,37 @@ function entryIsDir(entry: Dirent, fullPath: string): boolean {
 }
 
 /**
+ * **官方新布局**的配置目录：`<root>/napcat/config`。
+ *
+ * 制品（`NapCat.Shell.Windows.Node.zip`）解开后的形态是
+ * `<安装目录>/napcat/config/webui.json` 与 `<安装目录>/napcat/config/onebot11_<uin>.json`
+ * ——比通用布局（`<安装目录>/config/`）**多一层**，通用扫描（最多两层深）**命中不了**。
+ *
+ * 这里只对这一种**已知形态**做一次定向补扫（多一次 `readdir`，有界）：
+ * **不改**通用的深度上限，「三层深就不看」的既有约定不受影响
+ * （`<root>/a/b/xxx.json` 依然找不到）。
+ */
+function scanOfficialLayoutConfig(root: string): { onebot: FoundFile[]; webui: FoundFile[] } {
+  const onebot: FoundFile[] = [];
+  const webui: FoundFile[] = [];
+  const configDir = join(root, 'napcat', 'config');
+  const entries = safeReaddir(configDir);
+  if (!entries) return { onebot, webui };
+  for (const entry of entries) {
+    if (entry.isDirectory()) continue;
+    const full = join(configDir, entry.name);
+    if (ONEBOT_CONFIG_RE.test(entry.name)) onebot.push({ path: full, dir: configDir, depth: 3 });
+    else if (WEBUI_CONFIG_RE.test(entry.name)) webui.push({ path: full, dir: configDir, depth: 3 });
+  }
+  return { onebot, webui };
+}
+
+/**
  * 在一个根目录下找 NapCat 配置文件。
  *
  * **最多两层深**：`<root>/x.json`（1 层）与 `<root>/<dir>/x.json`（2 层）会被找到，
  * `<root>/<dir>/<dir>/x.json`（3 层）**不会**——不做全盘递归。
+ * （唯一的例外是**官方新布局** `<root>/napcat/config/`，见 `scanOfficialLayoutConfig`。）
  */
 function scanRoot(root: string): { onebot: FoundFile[]; webui: FoundFile[] } {
   const onebot: FoundFile[] = [];
@@ -253,6 +285,11 @@ function scanRoot(root: string): { onebot: FoundFile[]; webui: FoundFile[] } {
     }
   };
   visit(root, level1, 1);
+
+  // 官方新布局（<root>/napcat/config/）的定向补扫
+  const official = scanOfficialLayoutConfig(root);
+  onebot.push(...official.onebot);
+  webui.push(...official.webui);
 
   // 稳定的顺序：浅的在前，同深按路径排序（结果可复现）
   const byDepthThenPath = (a: FoundFile, b: FoundFile): number =>
