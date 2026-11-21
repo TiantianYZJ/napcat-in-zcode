@@ -1,144 +1,152 @@
 /*
  * 面板样式。
  *
- * 视觉语言对齐 **ZCode 前端的设计系统**（zai-org/ZCode 的 `packages/ui/src/styles.css`
- * 与 `DESIGN.md`）：
+ * **消费 ZCode 宿主的真令牌**（对齐官方 documents/pdf 面板的姿势）：
  *
- * - **令牌同名同义**：语义化命名（background / card / surface / popover / foreground /
- *   border / primary / success / warning / destructive…），值取 ZCode 的 Zai Light / Zai Dark。
- *   面板跑在沙箱 iframe 里拿不到宿主的 CSS 变量，所以在这里**自带一份**同值令牌。
+ * - 宿主在握手后把主题令牌映射成 MCP Apps 标准键（`--color-background-primary`、
+ *   `--color-text-primary`、`--font-text-md-size`、`--border-radius-lg` …）注入面板文档
+ *   （见 zai-org/ZCode `packages/ui/src/plugin-ui/domain/pluginUiStyleVariables.ts`）；
+ *   这里每一层变量都是 `var(标准键, zai 回退值)` —— 有宿主就用宿主的，没有就用自带回退。
+ * - **主题由 `data-theme` 属性驱动**（App.tsx 把 `hostContext.theme` 写到
+ *   `<html data-theme=…>`，并跟随 `ui/notifications/host-context-changed` 更新）；
+ *   回退值分浅（Zai Light）深（Zai Dark）两套。不再依赖 `prefers-color-scheme`。
+ * - 半透明派生色（success/warning/destructive 的 surface、我的消息气泡）宿主没有对应
+ *   标准键，按主题直接给字面量。
  * - **产品气质**："calm, dense, operational" —— 安静、密集、可操作；不做装饰性渐变，
  *   不用品牌色铺面，用**文字层级**而不是边框与色块制造密度。
  * - **层级不混用**：background（页）/ card·surface（内容容器）/ popover·menu（浮层）各司其职。
- * - **字号阶梯**：base 14px（`--ui-font-size` 可调），xl 18 / lg 16 / caption 13 / sm 12 / xs 10。
+ * - **字号阶梯**：base 14px，xl 18 / lg 16 / caption 13 / sm 12 / xs 10（有宿主令牌时跟随宿主）。
  * - **间距**：4px 基数；密集列表 12px、卡片与面板 16px。
  * - **圆角层级**：第一个圆角容器 xl(12) → lg(8) → md(6) → sm(4)；控件默认 lg。
- *
- * 深浅色跟随系统（`prefers-color-scheme`），面板没有主题开关。
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  /* ── 界面字号（ZCode 的 text-ui-* 阶梯） ─────────────────────────── */
-  --ui-font-size: 14px;
-  --text-ui-xl: calc(var(--ui-font-size) + 4px);
-  --text-ui-lg: calc(var(--ui-font-size) + 2px);
+  /* ── 界面字号（宿主 text 阶梯 → ZCode 的 text-ui-* 派生） ───────── */
+  --ui-font-size: var(--font-text-md-size, 14px);
+  --text-ui-xl: var(--font-heading-sm-size, calc(var(--ui-font-size) + 4px));
+  --text-ui-lg: var(--font-text-lg-size, calc(var(--ui-font-size) + 2px));
   --text-ui-base: var(--ui-font-size);
   --text-ui-caption: calc(var(--ui-font-size) - 1px);
-  --text-ui-sm: calc(var(--ui-font-size) - 2px);
-  --text-ui-xs: calc(var(--ui-font-size) - 4px);
+  --text-ui-sm: var(--font-text-sm-size, calc(var(--ui-font-size) - 2px));
+  --text-ui-xs: var(--font-text-xs-size, calc(var(--ui-font-size) - 4px));
 
-  /* ── 圆角层级 ──────────────────────────────────────────────────── */
-  --radius-xl: 12px;
-  --radius-lg: 8px;
-  --radius-md: 6px;
-  --radius-sm: 4px;
+  /* ── 圆角层级（宿主 --border-radius-* → 面板 --radius-*） ───────── */
+  --radius-xl: var(--border-radius-xl, 12px);
+  --radius-lg: var(--border-radius-lg, 8px);
+  --radius-md: var(--border-radius-md, 6px);
+  --radius-sm: var(--border-radius-sm, 4px);
 
-  /* ── 表面与文字（Zai Light） ───────────────────────────────────── */
-  --color-background: #f8f8f8;
-  --color-background-alt: #ececee;
-  --color-header: #ffffff;
-  --color-panel: #ffffff;
-  --color-sidebar: #f0f0f0;
-  --color-card: #ffffff;
-  --color-surface: rgba(13, 13, 13, 0.03);
-  --color-surface-hover: rgba(13, 13, 13, 0.05);
-  --color-popover: #ffffff;
-  --color-popover-header: #f8f8f8;
-  --color-menu: #ffffff;
-  --color-menu-hover: #f0f0f0;
-  --color-input: #ffffff;
-  --color-input-focused: #ffffff;
+  /* ── 表面与文字（Zai Light 回退；有宿主令牌时用宿主值） ─────────── */
+  --color-background: var(--color-background-primary, #f8f8f8);
+  --color-background-alt: var(--color-background-secondary, #ececee);
+  --color-header: var(--color-background-secondary, #ffffff);
+  --color-panel: var(--color-background-secondary, #ffffff);
+  --color-sidebar: var(--color-background-secondary, #f0f0f0);
+  --color-card: var(--color-background-secondary, #ffffff);
+  --color-surface: var(--color-background-tertiary, rgba(13, 13, 13, 0.03));
+  --color-surface-hover: var(--color-background-ghost, rgba(13, 13, 13, 0.05));
+  --color-popover: var(--color-background-secondary, #ffffff);
+  --color-popover-header: var(--color-background-primary, #f8f8f8);
+  --color-menu: var(--color-background-secondary, #ffffff);
+  --color-menu-hover: var(--color-background-ghost, #f0f0f0);
+  --color-input: var(--color-background-secondary, #ffffff);
+  --color-input-focused: var(--color-background-primary, #ffffff);
 
-  --color-foreground: #171717;
-  --color-foreground-subtle: rgba(23, 23, 23, 0.7);
-  --color-foreground-subtlest: rgba(23, 23, 23, 0.4);
-  --color-foreground-inverse: #ffffff;
+  --color-foreground: var(--color-text-primary, #171717);
+  --color-foreground-subtle: var(--color-text-secondary, rgba(23, 23, 23, 0.7));
+  --color-foreground-subtlest: var(--color-text-tertiary, rgba(23, 23, 23, 0.4));
+  --color-foreground-inverse: var(--color-text-inverse, #ffffff);
 
-  --color-border: rgba(13, 13, 13, 0.1);
-  --color-border-hover: rgba(13, 13, 13, 0.15);
-  --color-hover: rgba(13, 13, 13, 0.05);
-  --color-selected: rgba(13, 13, 13, 0.05);
-  --color-accent: #ebf4ff;
+  --color-border: var(--color-border-primary, rgba(13, 13, 13, 0.1));
+  --color-border-hover: var(--color-border-secondary, rgba(13, 13, 13, 0.15));
+  --color-hover: var(--color-background-ghost, rgba(13, 13, 13, 0.05));
+  --color-selected: var(--color-background-ghost, rgba(13, 13, 13, 0.05));
+  --color-accent: var(--color-background-info, #ebf4ff);
 
-  --color-primary: #000000;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #e6e6e6;
+  --color-primary: var(--color-background-inverse, #000000);
+  --color-primary-foreground: var(--color-text-inverse, #ffffff);
+  --color-secondary: var(--color-background-disabled, #e6e6e6);
 
-  --color-success: #1e8a3e;
-  --color-success-foreground: #ffffff;
+  --color-success: var(--color-background-success, #1e8a3e);
+  --color-success-foreground: var(--color-text-inverse, #ffffff);
   --color-success-surface: #eaf7ee;
-  --color-success-surface-foreground: #166b32;
-  --color-warning: #e07b00;
-  --color-warning-foreground: #ffffff;
+  --color-success-surface-foreground: var(--color-text-success, #166b32);
+  --color-warning: var(--color-background-warning, #e07b00);
+  --color-warning-foreground: var(--color-text-inverse, #ffffff);
   --color-warning-surface: rgba(224, 123, 0, 0.12);
-  --color-warning-surface-foreground: #914e00;
-  --color-destructive: #e03131;
-  --color-destructive-foreground: #ffffff;
+  --color-warning-surface-foreground: var(--color-text-warning, #914e00);
+  --color-destructive: var(--color-background-danger, #e03131);
+  --color-destructive-foreground: var(--color-text-inverse, #ffffff);
   --color-destructive-surface: rgba(224, 49, 49, 0.1);
-  --color-destructive-surface-foreground: #b42020;
+  --color-destructive-surface-foreground: var(--color-text-danger, #b42020);
 
-  /* 我的消息气泡（ZCode 的 user-message-bubble） */
+  /* 我的消息气泡（ZCode 的 user-message-bubble；宿主无对应标准键） */
   --color-user-message-bubble: rgba(13, 13, 13, 0.05);
 
+  /* 字体不桥接：标准键与本变量同名（自引用会成循环），且系统字体栈与宿主注入值等价 */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
     'Hiragino Sans GB', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  /* 动效：接近临界阻尼的缓动（ZCode 的节奏） */
+  /* 动效：接近临界阻尼的缓动（ZCode 的节奏；宿主没有对应令牌） */
   --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
   --dur-fast: 120ms;
   --dur-mid: 200ms;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-background: #161616;
-    --color-background-alt: #2b2b2b;
-    --color-header: #202020;
-    --color-panel: #202020;
-    --color-sidebar: #161616;
-    --color-card: #2b2b2b;
-    --color-surface: rgba(255, 255, 255, 0.05);
-    --color-surface-hover: rgba(255, 255, 255, 0.1);
-    --color-popover: #2b2b2b;
-    --color-popover-header: #202020;
-    --color-menu: #2b2b2b;
-    --color-menu-hover: #363636;
-    --color-input: #2b2b2b;
-    --color-input-focused: #2b2b2b;
+/*
+ * 深色回退：`<html data-theme="dark">` 时生效（App.tsx 由 hostContext.theme 设置）。
+ * 有宿主令牌时 `var(标准键, …)` 直接取宿主值，这里的字面量只在令牌缺失时兜底。
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
 
-    --color-foreground: #f5f5f5;
-    --color-foreground-subtle: rgba(212, 212, 212, 0.6);
-    --color-foreground-subtlest: rgba(212, 212, 212, 0.3);
-    --color-foreground-inverse: #000000;
+  --color-background: var(--color-background-primary, #161616);
+  --color-background-alt: var(--color-background-secondary, #2b2b2b);
+  --color-header: var(--color-background-secondary, #202020);
+  --color-panel: var(--color-background-secondary, #202020);
+  --color-sidebar: var(--color-background-secondary, #161616);
+  --color-card: var(--color-background-secondary, #2b2b2b);
+  --color-surface: var(--color-background-tertiary, rgba(255, 255, 255, 0.05));
+  --color-surface-hover: var(--color-background-ghost, rgba(255, 255, 255, 0.1));
+  --color-popover: var(--color-background-secondary, #2b2b2b);
+  --color-popover-header: var(--color-background-primary, #202020);
+  --color-menu: var(--color-background-secondary, #2b2b2b);
+  --color-menu-hover: var(--color-background-ghost, #363636);
+  --color-input: var(--color-background-secondary, #2b2b2b);
+  --color-input-focused: var(--color-background-primary, #2b2b2b);
 
-    --color-border: rgba(255, 255, 255, 0.1);
-    --color-border-hover: rgba(255, 255, 255, 0.15);
-    --color-hover: rgba(255, 255, 255, 0.05);
-    --color-selected: rgba(255, 255, 255, 0.1);
-    --color-accent: #001d3d;
+  --color-foreground: var(--color-text-primary, #f5f5f5);
+  --color-foreground-subtle: var(--color-text-secondary, rgba(212, 212, 212, 0.6));
+  --color-foreground-subtlest: var(--color-text-tertiary, rgba(212, 212, 212, 0.3));
+  --color-foreground-inverse: var(--color-text-inverse, #000000);
 
-    --color-primary: #ffffff;
-    --color-primary-foreground: #000000;
-    --color-secondary: #363636;
+  --color-border: var(--color-border-primary, rgba(255, 255, 255, 0.1));
+  --color-border-hover: var(--color-border-secondary, rgba(255, 255, 255, 0.15));
+  --color-hover: var(--color-background-ghost, rgba(255, 255, 255, 0.05));
+  --color-selected: var(--color-background-ghost, rgba(255, 255, 255, 0.1));
+  --color-accent: var(--color-background-info, #001d3d);
 
-    --color-success: #46bf72;
-    --color-success-foreground: #000000;
-    --color-success-surface: rgba(70, 191, 114, 0.16);
-    --color-success-surface-foreground: #87d9a4;
-    --color-warning: #ff8a30;
-    --color-warning-foreground: #000000;
-    --color-warning-surface: rgba(255, 138, 48, 0.16);
-    --color-warning-surface-foreground: #ffb26b;
-    --color-destructive: #ff5c5c;
-    --color-destructive-foreground: #ffffff;
-    --color-destructive-surface: rgba(255, 92, 92, 0.14);
-    --color-destructive-surface-foreground: #ff8a8a;
+  --color-primary: var(--color-background-inverse, #ffffff);
+  --color-primary-foreground: var(--color-text-inverse, #000000);
+  --color-secondary: var(--color-background-disabled, #363636);
 
-    --color-user-message-bubble: rgba(255, 255, 255, 0.08);
-  }
+  --color-success: var(--color-background-success, #46bf72);
+  --color-success-foreground: var(--color-text-inverse, #000000);
+  --color-success-surface: rgba(70, 191, 114, 0.16);
+  --color-success-surface-foreground: var(--color-text-success, #87d9a4);
+  --color-warning: var(--color-background-warning, #ff8a30);
+  --color-warning-foreground: var(--color-text-inverse, #000000);
+  --color-warning-surface: rgba(255, 138, 48, 0.16);
+  --color-warning-surface-foreground: var(--color-text-warning, #ffb26b);
+  --color-destructive: var(--color-background-danger, #ff5c5c);
+  --color-destructive-foreground: var(--color-text-inverse, #ffffff);
+  --color-destructive-surface: rgba(255, 92, 92, 0.14);
+  --color-destructive-surface-foreground: var(--color-text-danger, #ff8a8a);
+
+  --color-user-message-bubble: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -1001,6 +1009,29 @@ textarea {
   border-top: 1px solid var(--color-border);
   font-size: var(--text-ui-sm);
   color: var(--color-foreground-subtle);
+}
+
+/* 扫码登录引导：跑着但没登录 QQ 时出现在宿主卡内（复用确认区的分隔与文字层级） */
+.host-card .host-login-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.host-card .host-login-guide .guide-title {
+  font-size: var(--text-ui-sm);
+  font-weight: 600;
+  color: var(--color-warning-surface-foreground);
+}
+
+.host-card .host-login-guide code {
+  font-family: var(--font-mono);
+  font-size: var(--text-ui-xs);
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
 }
 
 .host-card .host-confirm > span {

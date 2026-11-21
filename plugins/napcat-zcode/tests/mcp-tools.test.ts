@@ -169,6 +169,7 @@ describe('mcp tool registration', () => {
       'napcat_start',
       'napcat_status',
       'napcat_stop',
+      'napcat_uninstall',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
     // description 里写明「连接失败返回 {connected:false, error} 且 isError 为 false」，避免下游当工具错误处理

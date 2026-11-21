@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   installStatus: vi.fn(),
   startHost: vi.fn(),
   stopHost: vi.fn(),
+  uninstallHost: vi.fn(),
   openLocalLink: vi.fn(),
+  caps: { openLinks: true },
 }));
 
 vi.mock('../src/panel/api.js', () => ({
@@ -21,9 +23,10 @@ vi.mock('../src/panel/api.js', () => ({
     installStatus: mocks.installStatus,
     startHost: mocks.startHost,
     stopHost: mocks.stopHost,
+    uninstallHost: mocks.uninstallHost,
   },
   bridge: {
-    capabilities: { openLinks: true },
+    capabilities: mocks.caps,
     openLocalLink: mocks.openLocalLink,
   },
 }));
@@ -65,12 +68,15 @@ beforeEach(() => {
   mocks.installStatus.mockReset();
   mocks.startHost.mockReset();
   mocks.stopHost.mockReset();
+  mocks.uninstallHost.mockReset();
   mocks.openLocalLink.mockReset();
+  mocks.caps.openLinks = true;
   mocks.hostStatus.mockResolvedValue(result());
   mocks.installNapcat.mockResolvedValue({ jobId: 'job-new', version: '4.18.42', dir: 'D:\\NapCat', mode: 'inject' });
   mocks.installStatus.mockResolvedValue({ id: 'job-old', state: 'running', phase: 'downloading', bytesReceived: 10 });
   mocks.startHost.mockResolvedValue({ started: true, pid: 42, mode: 'inject', message: 'started' });
   mocks.stopHost.mockResolvedValue({ stopped: true, message: 'stopped' });
+  mocks.uninstallHost.mockResolvedValue({ uninstalled: true, id: 'napcat-test', dir: 'D:\\NapCat', alreadyGone: false, message: 'ok' });
 });
 
 afterEach(() => {
@@ -141,5 +147,71 @@ describe('HostPanel', () => {
     const button = await screen.findByTestId('host-open-webui');
     fireEvent.click(button);
     await waitFor(() => expect(mocks.openLocalLink).toHaveBeenCalledWith('http://127.0.0.1:6099'));
+  });
+
+  it('uninstall requires a second confirmation and then removes the managed install', async () => {
+    mocks.hostStatus
+      .mockResolvedValueOnce(hostState('stopped'))
+      .mockResolvedValueOnce(result()); // 卸载成功后的刷新：台账空
+    render(<HostPanel />);
+    fireEvent.click(await screen.findByTestId('host-uninstall'));
+    // 确认文案点名安装目录（不可恢复）
+    expect(screen.getByTestId('host-uninstall-text').textContent).toContain('D:\\NapCat');
+    expect(mocks.uninstallHost).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('host-uninstall-confirm'));
+    await waitFor(() => expect(mocks.uninstallHost).toHaveBeenCalledWith('napcat-test'));
+    expect(mocks.stopHost).not.toHaveBeenCalled(); // 已停止 → 不需要组合停止
+    await waitFor(() => expect(screen.queryByTestId('host-card')).toBeNull());
+  });
+
+  it('uninstall on a running instance stops first, then uninstalls', async () => {
+    mocks.hostStatus.mockResolvedValue(hostState('running'));
+    render(<HostPanel />);
+    fireEvent.click(await screen.findByTestId('host-uninstall'));
+    // 运行中的确认文案要说明「先停止再卸载」
+    expect(screen.getByTestId('host-uninstall-text').textContent).toContain('先停止再卸载');
+    fireEvent.click(screen.getByTestId('host-uninstall-confirm'));
+    await waitFor(() => expect(mocks.stopHost).toHaveBeenCalledWith('napcat-test'));
+    await waitFor(() => expect(mocks.uninstallHost).toHaveBeenCalledWith('napcat-test'));
+    // 顺序：stop 先于 uninstall
+    const stopAt = mocks.stopHost.mock.invocationCallOrder[0];
+    const uninstallAt = mocks.uninstallHost.mock.invocationCallOrder[0];
+    expect(stopAt).toBeLessThan(uninstallAt);
+  });
+
+  it('shows a QR-login guide while running without a login, with a masked token hint', async () => {
+    mocks.hostStatus.mockResolvedValue(
+      hostState('running', { webuiPort: 6099, webuiReachable: true }),
+    );
+    render(<HostPanel />);
+    const guide = await screen.findByTestId('host-login-guide');
+    expect(guide.textContent).toContain('还没有登录 QQ');
+    expect(guide.textContent).toContain('webui.json');
+    // 掩码可展示、明文绝不出现
+    expect(guide.textContent).not.toMatch(/webuiToken=|token:["']/i);
+    fireEvent.click(screen.getByTestId('guide-open-webui'));
+    await waitFor(() => expect(mocks.openLocalLink).toHaveBeenCalledWith('http://127.0.0.1:6099'));
+    // 登录之后（hostStatus 返回 login）引导卡消失
+    cleanup();
+    mocks.hostStatus.mockResolvedValue(
+      hostState('running', { webuiPort: 6099, webuiReachable: true, login: { user_id: '1', nickname: '已登录' } }),
+    );
+    render(<HostPanel />);
+    await screen.findByTestId('host-card');
+    expect(screen.queryByTestId('host-login-guide')).toBeNull();
+  });
+
+  it('guide open button is disabled with a reason when openLinks is unsupported', async () => {
+    mocks.caps.openLinks = false;
+    mocks.hostStatus.mockResolvedValue(
+      hostState('running', { webuiPort: 6099, webuiReachable: true }),
+    );
+    render(<HostPanel />);
+    const openBtn = (await screen.findByTestId('guide-open-webui')) as HTMLButtonElement;
+    expect(openBtn.disabled).toBe(true);
+    expect(openBtn.title).toContain('宿主不支持');
+    // 刷新按钮不受 openLinks 影响（用户手动确认登录后可以刷新）
+    const refreshBtn = screen.getByTestId('guide-refresh') as HTMLButtonElement;
+    expect(refreshBtn.disabled).toBe(false);
   });
 });

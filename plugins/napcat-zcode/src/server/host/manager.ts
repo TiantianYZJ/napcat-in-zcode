@@ -759,7 +759,7 @@ export class ManagedHost {
   }
 
   /**
-   * 从台账里移除一条（**只**销号，不删目录——删目录是 Task 4 的卸载流程）。
+   * 从台账里移除一条（**只**销号 + 清凭据，**不删目录**）。
    *
    * @returns 真的移除了才返回 true。
    */
@@ -770,6 +770,59 @@ export class ManagedHost {
     this.persistRegistry(next);
     if (removed) this.forgetSecret(removed.dir);
     return true;
+  }
+
+  /**
+   * 卸载一个受管安装：**删除安装目录** + 销号 + 清凭据（台账 Task 4 的收尾）。
+   *
+   * 安全边界（与安装保护同一哲学）：
+   * - **只接受台账 id**：目录取自台账登记值，不收调用方给的路径；
+   * - **运行中的实例拒绝卸载**：先 `napcat_stop`（Windows 上运行中的文件本来就锁着）；
+   * - **有指向同目录的进行中安装作业时拒绝**（下载/解压写到一半的目录不是稳定状态）；
+   * - 目录若变成符号链接，拒绝跟随（防御台账文件被外部改动后的误删）；
+   * - 目录已不存在时视为已卸载（幂等），照常销号并清凭据。
+   *
+   * @returns 卸载结果（`alreadyGone` 说明目录本来就不在了，台账已清理）。
+   */
+  uninstall(id: string): { id: string; dir: string; alreadyGone: boolean } {
+    const install = this.get(id);
+    if (!install) {
+      throw new Error('卸载失败：台账里没有这个安装 id（napcat_host_status 可看当前台账）。');
+    }
+    if (this.pidOf(id) !== undefined) {
+      throw new Error('卸载失败：这个 NapCat 还在运行，请先停止（napcat_stop）再卸载。');
+    }
+    const dirKey = normalizeDirKey(install.dir, this.platform);
+    const busy = this.listJobs().some(
+      (job) =>
+        job.state === 'running' &&
+        job.request?.dir !== undefined &&
+        normalizeDirKey(job.request.dir, this.platform) === dirKey,
+    );
+    if (busy) {
+      throw new Error('卸载失败：这个目录有一个正在进行的安装作业，等它完成（或失败）后再卸载。');
+    }
+    let stat;
+    try {
+      stat = lstatSync(install.dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`卸载失败：无法读取安装目录状态：${errText(err)}`);
+      }
+      // 目录已经不在（用户手动删过）→ 幂等：照常销号清凭据
+      this.remove(id);
+      return { id, dir: install.dir, alreadyGone: true };
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error('卸载失败：安装目录现在是符号链接。为避免误删链接目标，请人工检查后再处理。');
+    }
+    try {
+      rmSync(install.dir, { recursive: true, force: true });
+    } catch (err) {
+      throw new Error(`卸载失败：删除安装目录时出错（可能有文件被占用）：${errText(err)}`);
+    }
+    this.remove(id);
+    return { id, dir: install.dir, alreadyGone: false };
   }
 
   /**

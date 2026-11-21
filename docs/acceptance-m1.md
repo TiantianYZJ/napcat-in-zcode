@@ -574,11 +574,11 @@
 
 ## 15. M3 验收项：受管 NapCat 宿主
 
-**范围**：插件下载安装并管理插件自己登记的 NapCat 实例。默认选择独立模式；注入模式只在用户明确选择安装时生效。删除式卸载工具与扫码引导不属于本次交付。
+**范围**：插件下载安装并管理插件自己登记的 NapCat 实例。默认选择独立模式；注入模式只在用户明确选择安装时生效。0.6.0 增量补齐删除式卸载（`napcat_uninstall`）与扫码登录引导（WebUI 引导流）。
 
 ### 15.1 清单与配置
 
-- [x] **15.1.1** `plugin.json`、`.mcp.json`、`package.json`、`marketplace.json` 版本均为 `0.5.0`
+- [x] **15.1.1** `plugin.json`、`.mcp.json`、`package.json`、`marketplace.json` 版本一致（0.5.0 交付时为 `0.5.0`，0.6.0 增量后为 `0.6.0`，由契约测试锁定）
 - [x] **15.1.2** 两份 MCP 清单的 env 键集一致，含 `NAPCAT_DOWNLOAD_PROXY` 与 `NAPCAT_DESKTOP_QQ_PATH`
 - [x] **15.1.3** 四项 `userConfig` 默认均为空串；空串不会覆盖 `config.json`
 - [x] **15.1.4** `napcat_get_config` 不返回代理 URL 或桌面 QQ 绝对路径，只返回 `downloadProxyConfigured` 与 `desktopQqPathConfigured`
@@ -602,13 +602,17 @@
 - [x] **15.3.5** 端口被外部实例占用时返回 `unknown`，面板禁用启动，不触碰外部进程
 - [x] **15.3.6** 面板停止按钮先显示二次确认，取消不会调用停止工具
 - [x] **15.3.7** 宿主支持 `openLinks` 时可打开 `http://127.0.0.1:<webuiPort>`；不支持时按钮置灰
+- [x] **15.3.8**（0.6.0）`napcat_uninstall` 只接受可选 `id`（目录取自台账登记值，不收任意路径）；运行中的实例拒绝卸载并提示先停止
+- [x] **15.3.9**（0.6.0）卸载删除安装目录 + 销号 + 清凭据，重开台账为空；目录已不存在时幂等清理（`alreadyGone`）；目录为符号链接时拒绝跟随
+- [x] **15.3.10**（0.6.0）面板卸载按钮二次确认（点名安装目录与不可恢复）；运行中实例的组合动作是「先停止再卸载」（stop 先于 uninstall）
+- [x] **15.3.11**（0.6.0）实例运行但未登录 QQ 时显示扫码登录引导：打开 WebUI 扫码 + 刷新状态；登录后引导消失；`openLinks` 不支持时打开按钮置灰并给原因
 
 ### 15.4 文案与隐私红线
 
 - [x] **15.4.1** 面板不显示 WebUI token、下载代理凭据或桌面 QQ 本机路径的工具回显
 - [x] **15.4.2** 安装失败、外部占用、未登记实例等错误说明可读且不泄露敏感路径或 token
-- [x] **15.4.3** 文档明确：当前没有 `napcat_uninstall`；用户须先停止，再自行删除受管目录
-- [x] **15.4.4** 未完成扫码引导不作为 M3 已交付能力宣称
+- [x] **15.4.3**（0.6.0 更新）卸载已交付：文档明确其安全边界（只删台账目录、运行中拒绝、二次确认）；引导卡的令牌提示只给**掩码**，完整值指向安装目录 `webui.json`，不经面板回显
+- [x] **15.4.4**（0.6.0 更新）扫码引导为 WebUI 引导流：文档如实说明「不内嵌二维码、不自动登录」
 
 ### 15.5 自动化验收记录
 
@@ -625,3 +629,13 @@
   - 320px 下过滤工具栏、底部动作条、「加载更早」行横向溢出 → 三处加 `flex-wrap`（`styles.css`），消息气泡不再被撑宽截断。
 
   修复后复验：3 个场景 × 2 主题 × 3 视口均无溢出、无重叠；面板相关 110 项测试与全量 696 项测试通过。
+
+### 15.6 v0.6.0 增量验收记录（卸载 + 扫码引导 + 宿主令牌主题）
+
+- [x] `npm run typecheck`
+- [x] `npm test` — 31 个文件 / 710 通过 / 4 跳过，进程干净退出（manager 39 = 台账 33 + 卸载 6；host-panel 9；bridge 32 含主题解析 / 通知合并 / dispose 清理）
+- [x] `npm run build` — `dist/server.mjs` + `dist/ui/panel.html`（219 kB）
+- [x] `npm run smoke` — smoke-stdio 18 步（**16 个工具** + `napcat_start` / `napcat_uninstall` 仅接受 `id`）；smoke-panel 14/14
+- [x] 视口复验（同 15.5 方法，场景扩为 5 个：chat / install / stop / **uninstall** / **guide** × 深浅 × 320/480/800）：卸载确认区点名目录且提示不可恢复、先停后卸；引导卡（橙色标题、打开 WebUI 扫码 / 刷新状态、`webui.json` 掩码提示）三视口无溢出无重叠；主题改由假宿主 `hostContext.theme` 驱动，light/dark 均正确渲染
+- [x] 宿主令牌桥接：面板变量全部改为 `var(--color-background-primary, zai 回退)` 等官方映射（来源 zai-org/ZCode `packages/ui/src/plugin-ui/domain/pluginUiStyleVariables.ts` 与官方 documents 面板）；`data-theme` 由 `hostContext.theme` 设置并跟随 `ui/notifications/host-context-changed`（params 为部分上下文，做合并）
+- [x] deep 安全扫描（Mimosa）：0 发现项，305 个依赖无 advisory 命中（封印 `sha256:bde9c722…`，库来源 / 调用图证据维度按插件提示为部分证据）

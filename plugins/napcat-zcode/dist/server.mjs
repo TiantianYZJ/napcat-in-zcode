@@ -25588,7 +25588,7 @@ var ManagedHost = class {
     this.persistRegistry(next.slice(-MAX_INSTALLS));
   }
   /**
-   * 从台账里移除一条（**只**销号，不删目录——删目录是 Task 4 的卸载流程）。
+   * 从台账里移除一条（**只**销号 + 清凭据，**不删目录**）。
    *
    * @returns 真的移除了才返回 true。
    */
@@ -25599,6 +25599,54 @@ var ManagedHost = class {
     this.persistRegistry(next);
     if (removed) this.forgetSecret(removed.dir);
     return true;
+  }
+  /**
+   * 卸载一个受管安装：**删除安装目录** + 销号 + 清凭据（台账 Task 4 的收尾）。
+   *
+   * 安全边界（与安装保护同一哲学）：
+   * - **只接受台账 id**：目录取自台账登记值，不收调用方给的路径；
+   * - **运行中的实例拒绝卸载**：先 `napcat_stop`（Windows 上运行中的文件本来就锁着）；
+   * - **有指向同目录的进行中安装作业时拒绝**（下载/解压写到一半的目录不是稳定状态）；
+   * - 目录若变成符号链接，拒绝跟随（防御台账文件被外部改动后的误删）；
+   * - 目录已不存在时视为已卸载（幂等），照常销号并清凭据。
+   *
+   * @returns 卸载结果（`alreadyGone` 说明目录本来就不在了，台账已清理）。
+   */
+  uninstall(id) {
+    const install = this.get(id);
+    if (!install) {
+      throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u53F0\u8D26\u91CC\u6CA1\u6709\u8FD9\u4E2A\u5B89\u88C5 id\uFF08napcat_host_status \u53EF\u770B\u5F53\u524D\u53F0\u8D26\uFF09\u3002");
+    }
+    if (this.pidOf(id) !== void 0) {
+      throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u8FD9\u4E2A NapCat \u8FD8\u5728\u8FD0\u884C\uFF0C\u8BF7\u5148\u505C\u6B62\uFF08napcat_stop\uFF09\u518D\u5378\u8F7D\u3002");
+    }
+    const dirKey = normalizeDirKey(install.dir, this.platform);
+    const busy = this.listJobs().some(
+      (job) => job.state === "running" && job.request?.dir !== void 0 && normalizeDirKey(job.request.dir, this.platform) === dirKey
+    );
+    if (busy) {
+      throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u8FD9\u4E2A\u76EE\u5F55\u6709\u4E00\u4E2A\u6B63\u5728\u8FDB\u884C\u7684\u5B89\u88C5\u4F5C\u4E1A\uFF0C\u7B49\u5B83\u5B8C\u6210\uFF08\u6216\u5931\u8D25\uFF09\u540E\u518D\u5378\u8F7D\u3002");
+    }
+    let stat;
+    try {
+      stat = lstatSync2(install.dir);
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        throw new Error(`\u5378\u8F7D\u5931\u8D25\uFF1A\u65E0\u6CD5\u8BFB\u53D6\u5B89\u88C5\u76EE\u5F55\u72B6\u6001\uFF1A${errText3(err)}`);
+      }
+      this.remove(id);
+      return { id, dir: install.dir, alreadyGone: true };
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error("\u5378\u8F7D\u5931\u8D25\uFF1A\u5B89\u88C5\u76EE\u5F55\u73B0\u5728\u662F\u7B26\u53F7\u94FE\u63A5\u3002\u4E3A\u907F\u514D\u8BEF\u5220\u94FE\u63A5\u76EE\u6807\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5\u540E\u518D\u5904\u7406\u3002");
+    }
+    try {
+      rmSync2(install.dir, { recursive: true, force: true });
+    } catch (err) {
+      throw new Error(`\u5378\u8F7D\u5931\u8D25\uFF1A\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u65F6\u51FA\u9519\uFF08\u53EF\u80FD\u6709\u6587\u4EF6\u88AB\u5360\u7528\uFF09\uFF1A${errText3(err)}`);
+    }
+    this.remove(id);
+    return { id, dir: install.dir, alreadyGone: false };
   }
   /**
    * 记录 / 清除**插件自己拉起的**进程 pid（Task 3 用）。
@@ -26642,6 +26690,34 @@ function registerHostTools(server2, state) {
       }
     }
   );
+  server2.registerTool(
+    "napcat_uninstall",
+    {
+      description: "\u5378\u8F7D\u4E00\u4E2A\u53D7\u7BA1\u5B89\u88C5\uFF1A**\u5220\u9664\u5B89\u88C5\u76EE\u5F55**\uFF08\u4E0D\u53EF\u6062\u590D\uFF09\u5E76\u6E05\u7406\u53F0\u8D26\u4E0E\u51ED\u636E\u3002\u53EA\u63A5\u53D7\u53F0\u8D26 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09\uFF1B\u76EE\u5F55\u53D6\u81EA\u53F0\u8D26\u767B\u8BB0\u503C\uFF0C\u4E0D\u6536\u4EFB\u610F\u8DEF\u5F84\u3002\u8FD0\u884C\u4E2D\u7684\u5B9E\u4F8B\u4F1A\u88AB\u62D2\u7EDD\u2014\u2014\u5148\u7528 napcat_stop \u505C\u6B62\uFF1B\u76EE\u5F55\u5DF2\u4E0D\u5B58\u5728\u65F6\u5E42\u7B49\u6E05\u7406\u53F0\u8D26\u3002",
+      inputSchema: {
+        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09")
+      }
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u6CA1\u6709\u53EF\u5378\u8F7D\u7684\u5BF9\u8C61\u3002");
+        }
+        const r = h.uninstall(install.id);
+        return ok({
+          uninstalled: true,
+          id: r.id,
+          dir: r.dir,
+          alreadyGone: r.alreadyGone,
+          message: r.alreadyGone ? `\u76EE\u5F55\u5DF2\u4E0D\u5B58\u5728\uFF0C\u5DF2\u4ECE\u53F0\u8D26\u6E05\u7406\uFF1A${r.dir}` : `\u5DF2\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u5E76\u6E05\u7406\u53F0\u8D26\uFF1A${r.dir}`
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
 }
 
 // src/server/tools.ts
@@ -27119,7 +27195,7 @@ function registerPanelResource(server2, htmlPath) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.5.0" });
+var server = new McpServer({ name: "napcat", version: "0.6.0" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 await server.connect(new StdioServerTransport());

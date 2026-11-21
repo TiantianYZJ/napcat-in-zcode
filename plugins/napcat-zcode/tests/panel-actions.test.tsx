@@ -27,6 +27,8 @@ vi.mock('../src/panel/api.js', async (importOriginal) => {
       updateModelContext: mock.updateModelContext,
       downloadFile: mock.downloadFile,
       writeClipboard: mock.writeClipboard,
+      getHostContext: () => ({ styleVariables: {} }),
+      onHostContextChanged: () => () => {},
     },
   };
 });

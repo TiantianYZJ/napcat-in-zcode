@@ -2,18 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, bridge, type HostStatus, type HostStatusResult, type InstallJobView } from '../api.js';
 
 /**
- * 受管宿主面板：**装 / 启 / 停** NapCat。
+ * 受管宿主面板：**装 / 启 / 停 / 卸** NapCat。
  *
  * 三段式，一段只回答一件事：
  *
  * 1. **已装的**（插件自己下载安装的）：一张卡说清「装在哪、什么版本、在不在跑」，
- *    并给出启动 / 停止。
+ *    并给出启动 / 停止 / 卸载；跑着但没登录 QQ 时给扫码登录引导。
  * 2. **正在装的**：进度条 + 阶段文字（下载 / 校验 / 解压）。
  * 3. **还没装的**：选版本、选目录（可选代理），点「下载并安装」。
  *
  * 两条硬规矩：
- * - **不越权**：只停本插件自己启动的进程；端口被别的实例占着时如实说明，不去动它。
- * - **不静默失败**：每个按钮都给出禁用原因或失败原因。
+ * - **不越权**：只停/卸本插件自己登记的实例；端口被别的实例占着时如实说明，不去动它。
+ *   卸载只认台账 id、目录取自台账登记值；运行中先停（服务端拒绝运行中卸载）。
+ * - **不静默失败**：每个按钮都给出禁用原因或失败原因；卸载必须二次确认（目录不可恢复）。
+ * - **token 不出参**：WebUI 访问令牌只显示掩码，完整值留在安装目录的 webui.json。
  */
 
 const PHASE_TEXT: Record<string, string> = {
@@ -57,6 +59,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
   const [busy, setBusy] = useState('');
   const [job, setJob] = useState<InstallJobView | null>(null);
   const [confirmStop, setConfirmStop] = useState<string | null>(null);
+  const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null);
   const [startMode, setStartMode] = useState<'standalone' | 'inject'>('standalone');
 
   // 安装表单
@@ -160,6 +163,21 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
       await refresh();
     });
 
+  /**
+   * 卸载（面板负责「先停止再卸载」的组合：服务端对运行中的实例会拒绝）。
+   * 确认区已明确「目录整个删除、不可恢复」；成功后刷新并通知外层（状态条等）。
+   */
+  const confirmUninstallInstance = (id: string | undefined): Promise<void> =>
+    run('uninstall', async () => {
+      const target = state?.status.find((s) => (s.install?.id ?? '') === (id ?? ''));
+      const stillRunning = target ? ['running', 'starting', 'degraded'].includes(target.state) : false;
+      if (stillRunning) await api.stopHost(id);
+      await api.uninstallHost(id);
+      setConfirmUninstall(null);
+      await refresh();
+      onChangedRef.current?.();
+    });
+
   return (
     <div className="detect" data-testid="host-panel">
       <div className="section-title">受管宿主（插件自己下载安装的 NapCat）</div>
@@ -229,10 +247,64 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                   打开 WebUI
                 </button>
               )}
+              <button
+                className="btn"
+                data-testid="host-uninstall"
+                disabled={busy !== ''}
+                title="删除安装目录并清理台账（不可恢复）"
+                onClick={() => setConfirmUninstall(id ?? '')}
+              >
+                卸载
+              </button>
             </div>
             {s.onebotPort && (
               <div className="host-msg" data-testid="host-onebot-endpoint">
                 OneBot：{s.onebotPortReachable ? '已监听' : '未监听'} · 127.0.0.1:{s.onebotPort}
+              </div>
+            )}
+            {s.state === 'running' && !s.login && s.webuiPort && (
+              <div className="host-login-guide" data-testid="host-login-guide">
+                <div className="guide-title">还没有登录 QQ</div>
+                <div className="host-msg">
+                  NapCat 已启动，但还没有登录 QQ（拉取消息要先登录）。打开 WebUI →「QQ 登录」页，用手机 QQ
+                  扫码登录。
+                </div>
+                <div className="host-acts">
+                  <button
+                    className="btn primary"
+                    data-testid="guide-open-webui"
+                    disabled={!bridge.capabilities.openLinks || busy !== ''}
+                    title={
+                      bridge.capabilities.openLinks
+                        ? '在默认浏览器打开本机 NapCat WebUI'
+                        : '宿主不支持打开外部链接'
+                    }
+                    onClick={() =>
+                      void run('open-webui', () => bridge.openLocalLink(`http://127.0.0.1:${s.webuiPort}`))
+                    }
+                  >
+                    打开 WebUI 扫码
+                  </button>
+                  <button
+                    className="btn"
+                    data-testid="guide-refresh"
+                    disabled={busy !== ''}
+                    onClick={() => void refresh()}
+                  >
+                    我已登录，刷新状态
+                  </button>
+                </div>
+                {s.install?.dir && (
+                  <div className="host-msg" data-testid="host-login-token-hint">
+                    登录 WebUI 需要访问令牌：插件已把随机令牌写在安装目录的
+                    <code>webui.json</code>
+                    里（面板不回显明文{(() => {
+                      const masked = s.install?.webuiTokenMasked;
+                      return masked ? `；掩码 ${masked}，可用来核对` : '';
+                    })()}
+                    ）。
+                  </div>
+                )}
               </div>
             )}
             {confirmStop === (id ?? '') && (
@@ -248,6 +320,35 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                     {isStopping ? '停止中…' : '确认停止'}
                   </button>
                   <button className="btn" data-testid="host-stop-cancel" disabled={busy !== ''} onClick={() => setConfirmStop(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+            {confirmUninstall === (id ?? '') && (
+              <div className="host-confirm" role="group" aria-label="确认卸载 NapCat">
+                <span data-testid="host-uninstall-text">
+                  卸载会整个删除安装目录（不可恢复）：{s.install?.dir ?? '（未知目录）'}
+                  ；WebUI 令牌等凭据一并清除。
+                  {s.state === 'running' || s.state === 'starting' || s.state === 'degraded'
+                    ? ' 实例正在运行，确认后会先停止再卸载。'
+                    : ''}
+                </span>
+                <div className="host-confirm-acts">
+                  <button
+                    className="btn danger"
+                    data-testid="host-uninstall-confirm"
+                    disabled={busy !== ''}
+                    onClick={() => void confirmUninstallInstance(id)}
+                  >
+                    {busy === 'uninstall' ? '卸载中…' : '确认卸载'}
+                  </button>
+                  <button
+                    className="btn"
+                    data-testid="host-uninstall-cancel"
+                    disabled={busy !== ''}
+                    onClick={() => setConfirmUninstall(null)}
+                  >
                     取消
                   </button>
                 </div>

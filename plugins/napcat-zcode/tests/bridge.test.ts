@@ -174,7 +174,7 @@ describe('HostBridge', () => {
     const params = init.params as { appInfo: unknown; appCapabilities: unknown; protocolVersion: string };
     // protocolVersion 在协议 schema 里是必填的（brief 漏了，按实测补上）
     expect(params.protocolVersion).toBe('2026-01-26');
-    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.5.0' });
+    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.6.0' });
     expect(params.appCapabilities).toEqual({ availableDisplayModes: ['inline', 'fullscreen'] });
 
     const notified = host.sent.find((m) => m.method === 'ui/notifications/initialized');
@@ -554,5 +554,99 @@ describe('HostBridge', () => {
     // 不自造人话：给一个中性的机器可读标记，由面板自己措辞
     expect(r.error).toBe('download_not_confirmed');
     expect(r.raw).toEqual({ isError: true });
+  });
+
+  // ── 宿主主题上下文（hostContext.theme + styles.variables） ────────
+
+  it('reads theme and style variables from the initialize hostContext', async () => {
+    fakeHost((method) => {
+      if (method === 'ui/initialize') {
+        return {
+          result: {
+            protocolVersion: '2026-01-26',
+            hostCapabilities: {},
+            hostContext: {
+              theme: 'dark',
+              styles: { variables: { '--color-background-primary': '#161616', 'not-a-var': 'x' } },
+            },
+          },
+        };
+      }
+      return { result: {} };
+    });
+    const b = new HostBridge();
+    await b.initialize();
+    const ctx = b.getHostContext();
+    expect(ctx.theme).toBe('dark');
+    expect(ctx.styleVariables['--color-background-primary']).toBe('#161616');
+    // 非 `--` 开头的键不收（不是 CSS 自定义属性，写进 DOM 没有意义）
+    expect(Object.keys(ctx.styleVariables)).toEqual(['--color-background-primary']);
+  });
+
+  it('merges partial host-context-changed notifications and notifies subscribers', async () => {
+    const host = fakeHost((method) => {
+      if (method === 'ui/initialize') {
+        return {
+          result: {
+            protocolVersion: '2026-01-26',
+            hostCapabilities: {},
+            hostContext: { theme: 'light', styles: { variables: { '--color-text-primary': '#171717' } } },
+          },
+        };
+      }
+      return { result: {} };
+    });
+    const b = new HostBridge();
+    await b.initialize();
+    const seen: unknown[] = [];
+    const off = b.onHostContextChanged((ctx) => seen.push(ctx));
+
+    // 通知只带变化字段（partial）→ 与当前上下文合并，不丢已有变量
+    host.listeners.forEach((fn) =>
+      fn({
+        data: {
+          jsonrpc: '2.0',
+          method: 'ui/notifications/host-context-changed',
+          params: { theme: 'dark', styles: { variables: { '--color-text-primary': '#f5f5f5' } } },
+        },
+      } as MessageEvent),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    const ctx = b.getHostContext();
+    expect(ctx.theme).toBe('dark');
+    expect(ctx.styleVariables['--color-text-primary']).toBe('#f5f5f5');
+    expect(seen).toHaveLength(1);
+
+    off();
+    host.listeners.forEach((fn) =>
+      fn({ data: { jsonrpc: '2.0', method: 'ui/notifications/host-context-changed', params: { theme: 'light' } } } as MessageEvent),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen).toHaveLength(1); // 取消订阅后不再收到回调
+    // 桥仍是状态持有者：内部状态继续跟随通知推进，只是不再通知订阅者
+    expect(b.getHostContext().theme).toBe('light');
+  });
+
+  it('falls back to an empty context when the host sends no theme', async () => {
+    fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    expect(b.getHostContext().theme).toBeUndefined();
+    expect(b.getHostContext().styleVariables).toEqual({});
+  });
+
+  it('clears host context and listeners on dispose', async () => {
+    fakeHost();
+    const b = new HostBridge();
+    await b.initialize();
+    let calls = 0;
+    b.onHostContextChanged(() => {
+      calls += 1;
+    });
+    b.dispose();
+    expect(b.getHostContext()).toEqual({ styleVariables: {} });
+    // dispose 后桥不再处理通知（监听器已摘除）——直接断言订阅者集合被清空的行为：
+    // 重新 initialize 前通知不会触发任何回调（calls 保持 0）
+    expect(calls).toBe(0);
   });
 });

@@ -306,6 +306,41 @@ export function registerHostTools(server: McpServer, state: AppState): void {
       }
     },
   );
+
+  // ── 卸载 ────────────────────────────────────────────────────────────
+  server.registerTool(
+    'napcat_uninstall',
+    {
+      description:
+        '卸载一个受管安装：**删除安装目录**（不可恢复）并清理台账与凭据。' +
+        '只接受台账 id（不传 = 最近登记的那个）；目录取自台账登记值，不收任意路径。' +
+        '运行中的实例会被拒绝——先用 napcat_stop 停止；目录已不存在时幂等清理台账。',
+      inputSchema: {
+        id: z.string().optional().describe('受管安装 id（不传 = 最近登记的那个）'),
+      },
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error('还没有受管安装：没有可卸载的对象。');
+        }
+        const r = h.uninstall(install.id);
+        return ok({
+          uninstalled: true,
+          id: r.id,
+          dir: r.dir,
+          alreadyGone: r.alreadyGone,
+          message: r.alreadyGone
+            ? `目录已不存在，已从台账清理：${r.dir}`
+            : `已删除安装目录并清理台账：${r.dir}`,
+        });
+      } catch (e) {
+        return fail(state, e);
+      }
+    },
+  );
 }
 
 // `require` 不用了（统一顶层 import）

@@ -83,6 +83,23 @@ export function mergeOlder(prev: Msg[], incoming: Msg[]): { merged: Msg[]; added
   return { merged: fresh.length ? [...fresh, ...prev] : prev, added: fresh.length };
 }
 
+/**
+ * 把宿主展示上下文落到 DOM：`<html data-theme="…">` 驱动 CSS 的深浅色分支，
+ * 宿主令牌变量（`--color-background-primary` 等标准键）写进 documentElement，
+ * 面板样式里的 `var(标准键, 回退值)` 就消费宿主真值。
+ *
+ * 主题缺失时回退 light（与官方 documents 面板一致）；握手失败时保持回退态，
+ * 面板的错误态展示不受影响。
+ */
+function applyHostTheme(): void {
+  const ctx = bridge.getHostContext();
+  const root = document.documentElement;
+  root.dataset.theme = ctx.theme ?? 'light';
+  for (const [key, value] of Object.entries(ctx.styleVariables)) {
+    root.style.setProperty(key, value);
+  }
+}
+
 /** 时间范围的起点（epoch 秒）；`all` 返回 undefined（不过滤）。 */
 function rangeCutoff(range: string): number | undefined {
   const now = Date.now() / 1000;
@@ -240,11 +257,14 @@ export function App() {
    */
   useEffect(() => {
     let alive = true;
+    // 宿主主题：握手成功后应用一次，其后跟随 host-context-changed 通知实时更新
+    const offContext = bridge.onHostContextChanged(() => applyHostTheme());
     (async () => {
       try {
         const c = await handshake();
         if (!alive) return;
         setCaps(c);
+        applyHostTheme();
         await reload();
         /**
          * 读一次配置，拿到导出目的地（`export.dir`）。
@@ -268,6 +288,7 @@ export function App() {
     })();
     return () => {
       alive = false;
+      offContext();
     };
   }, [reload]);
 

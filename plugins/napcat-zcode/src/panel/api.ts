@@ -588,4 +588,18 @@ export const api = {
       'napcat_stop',
       id === undefined ? {} : { id },
     ),
+
+  /**
+   * 卸载一个受管安装：删除安装目录（不可恢复）并清理台账与凭据。
+   *
+   * 运行中的实例服务端会拒绝 —— 面板负责「先停止再卸载」的组合动作。
+   */
+  uninstallHost: (id?: string) =>
+    callToolJson<{
+      uninstalled: boolean;
+      id: string;
+      dir: string;
+      alreadyGone: boolean;
+      message: string;
+    }>('napcat_uninstall', id === undefined ? {} : { id }),
 };

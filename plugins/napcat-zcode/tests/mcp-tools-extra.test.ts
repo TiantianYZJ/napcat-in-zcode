@@ -600,6 +600,7 @@ describe('mcp tool registration (T10)', () => {
       'napcat_start',
       'napcat_status',
       'napcat_stop',
+      'napcat_uninstall',
     ]);
     const byName = new Map(list.tools.map((t) => [t.name, t]));
     const props = (name: string) =>
@@ -610,6 +611,7 @@ describe('mcp tool registration (T10)', () => {
     expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromTime', 'includeImages', 'messages', 'toTime', 'workspaceDir']);
     expect(props('napcat_get_config')).toEqual([]);
     expect(props('napcat_start')).toEqual(['id']);
+    expect(props('napcat_uninstall')).toEqual(['id']);
   });
 
   it('publishes the chat structure in the export input schema', async () => {

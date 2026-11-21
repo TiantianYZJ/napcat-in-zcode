@@ -376,6 +376,94 @@ describe('M3 Task 2：受管安装台账 + 安装作业', () => {
     });
   });
 
+  // ── ⑥ 卸载（Task 4：删目录 + 销号 + 清凭据） ─────────────────────
+
+  describe('卸载（Task 4）', () => {
+    it('删除目录 + 销号 + 清凭据；重开台账为空', () => {
+      const host = newHost();
+      const dir = join(workDir, 'napcat-4.18.42');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'webui.json'), '{"token":"secret"}', 'utf-8');
+      const install = makeInstall(dir);
+      host.add(install);
+
+      const r = host.uninstall(install.id);
+      expect(r).toMatchObject({ id: install.id, dir, alreadyGone: false });
+      expect(existsSync(dir)).toBe(false);
+      expect(host.list()).toHaveLength(0);
+
+      const reopened = newHost();
+      expect(reopened.list()).toHaveLength(0);
+    });
+
+    it('运行中的实例拒绝卸载，目录原样保留', () => {
+      const host = newHost();
+      const dir = join(workDir, 'napcat-running');
+      mkdirSync(dir, { recursive: true });
+      const install = makeInstall(dir);
+      host.add(install);
+      host.setPid(install.id, 4321);
+
+      expect(() => host.uninstall(install.id)).toThrow(/先停止/);
+      expect(existsSync(dir)).toBe(true);
+      expect(host.list()).toHaveLength(1);
+    });
+
+    it('目录已不存在：幂等清理（alreadyGone），台账销号', () => {
+      const host = newHost();
+      const install = makeInstall(join(workDir, 'gone'));
+      host.add(install);
+
+      const r = host.uninstall(install.id);
+      expect(r.alreadyGone).toBe(true);
+      expect(host.list()).toHaveLength(0);
+    });
+
+    it('未知 id 报错', () => {
+      const host = newHost();
+      expect(() => host.uninstall('nope')).toThrow(/台账里没有/);
+    });
+
+    it('目录被换成符号链接时拒绝跟随，链接目标不受影响', () => {
+      const host = newHost();
+      const dir = join(workDir, 'linked');
+      const target = join(workDir, 'target');
+      mkdirSync(target, { recursive: true });
+      let made = true;
+      try {
+        symlinkSync(target, dir, 'dir');
+      } catch {
+        made = false; // 无特权环境建不了目录链接 → 跳过该断言
+      }
+      if (!made) return;
+      const install = makeInstall(dir);
+      host.add(install);
+
+      expect(() => host.uninstall(install.id)).toThrow(/符号链接/);
+      expect(existsSync(target)).toBe(true);
+    });
+
+    it('有指向同目录的进行中安装作业时拒绝卸载', () => {
+      const dir = join(workDir, 'napcat-busy');
+      mkdirSync(dir, { recursive: true });
+      // 挂一个永不完成的下载：作业保持 running（stub 永不 resolve，不产生写盘）
+      const host = newHost({ download: () => new Promise(() => {}) });
+      const install = makeInstall(dir);
+      host.add(install);
+      const job = makeJob();
+      host.startInstall(job, {
+        dir,
+        version: '4.18.42',
+        mode: 'standalone',
+        url: 'http://127.0.0.1:9/x.zip',
+        sha256: 'a'.repeat(64),
+        allowedHosts: ['127.0.0.1'],
+      });
+      expect(host.listJobs().some((j) => j.state === 'running')).toBe(true);
+      expect(() => host.uninstall(install.id)).toThrow(/安装作业/);
+    });
+  });
+
   // ── ② 原子写 ────────────────────────────────────────────────────
 
   describe('原子写', () => {

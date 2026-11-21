@@ -82,7 +82,7 @@ export interface HostBridgeOptions {
   retryDelayMs?: number;
   /** `appInfo.name`。默认 'napcat-zcode'。 */
   appName?: string;
-  /** `appInfo.version`。默认 '0.5.0'（与 plugin.json / package.json 保持一致）。 */
+  /** `appInfo.version`。默认 '0.6.0'（与 plugin.json / package.json 保持一致）。 */
   appVersion?: string;
   /** 协议版本。默认 '2026-01-26'（官方 bundle 里的常量）。 */
   protocolVersion?: number | string;
@@ -92,7 +92,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_INIT_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 500;
 const DEFAULT_APP_NAME = 'napcat-zcode';
-const DEFAULT_APP_VERSION = '0.5.0';
+const DEFAULT_APP_VERSION = '0.6.0';
 const DEFAULT_PROTOCOL_VERSION = '2026-01-26';
 
 /** 一个在途请求。 */
@@ -142,6 +142,51 @@ export function parseHostCapabilities(raw: unknown): HostCaps {
     downloadFile: capEnabled(caps, 'downloadFile'),
     serverTools: capEnabled(caps, 'serverTools'),
     openLinks: capEnabled(caps, 'openLinks'),
+  };
+}
+
+/** 宿主主题（`hostContext.theme`）。 */
+export type HostTheme = 'light' | 'dark';
+
+/** 面板视角的宿主展示上下文（MCP Apps `hostContext` 的子集）。 */
+export interface HostContextView {
+  theme?: HostTheme;
+  /**
+   * 宿主主题令牌映射成的 MCP Apps 标准样式变量（`hostContext.styles.variables`）。
+   *
+   * ZCode 把内部 token（`--color-background` 等）映射成标准键
+   * （`--color-background-primary` 等）传给面板；面板把它写进 `documentElement`
+   * 后，CSS 里的 `var(--color-background-primary, …)` 就消费宿主真值。
+   */
+  styleVariables: Record<string, string>;
+}
+
+/**
+ * 归一 `hostContext`（initialize 响应 / host-context-changed 通知里的字段）。
+ *
+ * 边界：`theme` 只认 `'light' | 'dark'`（其余值忽略，面板回退浅色）；
+ * `styles.variables` 只收字符串值；坏形状一律返回空对象位，不抛错。
+ */
+export function parseHostContext(raw: unknown): HostContextView {
+  const view: HostContextView = { styleVariables: {} };
+  if (!isRecord(raw)) return view;
+  if (raw.theme === 'light' || raw.theme === 'dark') view.theme = raw.theme;
+  const styles = isRecord(raw.styles) ? raw.styles : undefined;
+  const variables = styles && isRecord(styles.variables) ? styles.variables : undefined;
+  if (variables) {
+    for (const [key, value] of Object.entries(variables)) {
+      if (typeof value === 'string' && key.startsWith('--')) view.styleVariables[key] = value;
+    }
+  }
+  return view;
+}
+
+/** 合并部分 hostContext（host-context-changed 只带变化字段）：只覆盖出现的键。 */
+export function mergeHostContext(current: HostContextView, patch: unknown): HostContextView {
+  const incoming = parseHostContext(patch);
+  return {
+    theme: incoming.theme ?? current.theme,
+    styleVariables: { ...current.styleVariables, ...incoming.styleVariables },
   };
 }
 
@@ -203,6 +248,8 @@ export class HostBridge {
     openLinks: false,
   };
   private rawCaps: RawHostCapabilities = {};
+  private hostContext: HostContextView = { styleVariables: {} };
+  private contextListeners = new Set<(ctx: HostContextView) => void>();
   private handshakeDone = false;
   private lastInitError: unknown;
   private readonly timeoutMs: number;
@@ -228,6 +275,7 @@ export class HostBridge {
           jsonrpc?: unknown;
           id?: unknown;
           method?: unknown;
+          params?: unknown;
           result?: unknown;
           error?: HostErrorPayload;
         }
@@ -244,8 +292,22 @@ export class HostBridge {
     const source = (ev as MessageEvent & { source?: unknown }).source;
     if (source !== undefined && source !== null && source !== window.parent) return;
 
+    /**
+     * 宿主通知：`host-context-changed`（params 是**部分** hostContext，只带变化字段）。
+     *
+     * 必须在按 id 关联响应**之前**拦截 —— 通知没有 id，走到下面会被直接丢弃。
+     * 通知到达时更新内部上下文并通知订阅者（App 层据此刷新 `<html data-theme>` 与样式变量）。
+     */
+    if (data.method === 'ui/notifications/host-context-changed') {
+      if (this.handshakeDone) {
+        this.hostContext = mergeHostContext(this.hostContext, data.params);
+        for (const cb of [...this.contextListeners]) cb({ ...this.hostContext });
+      }
+      return;
+    }
+
     const id = Number(data.id);
-    if (!Number.isInteger(id)) return; // 通知没有 id，不参与关联
+    if (!Number.isInteger(id)) return; // 其余通知没有 id，不参与关联
 
     /**
      * 带 `method` 的帧是**请求/通知**，不是响应 → 一律不当成响应处理。
@@ -350,11 +412,13 @@ export class HostBridge {
           appInfo: { name: this.appName, version: this.appVersion },
           appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
           protocolVersion: this.protocolVersion,
-        })) as { hostCapabilities?: unknown } | undefined;
+        })) as { hostCapabilities?: unknown; hostContext?: unknown } | undefined;
 
         const raw = isRecord(result) && isRecord(result.hostCapabilities) ? result.hostCapabilities : {};
         this.rawCaps = raw;
         this.caps = parseHostCapabilities(raw);
+        // 宿主展示上下文（主题 + 主题令牌变量）：`getHostContext()` 消费，通知到达时合并更新
+        this.hostContext = parseHostContext(isRecord(result) ? result.hostContext : undefined);
         this.notify('ui/notifications/initialized');
         this.handshakeDone = true;
         this.lastInitError = undefined;
@@ -513,6 +577,22 @@ export class HostBridge {
     return { ...this.rawCaps };
   }
 
+  /** 宿主展示上下文（主题 + 令牌变量；未握手时是空视图，theme 回退浅色由调用方决定）。 */
+  getHostContext(): HostContextView {
+    return { theme: this.hostContext.theme, styleVariables: { ...this.hostContext.styleVariables } };
+  }
+
+  /**
+   * 订阅宿主上下文变化（主题切换等）。返回取消订阅函数。
+   *
+   * 通知只在**握手完成**后处理；订阅前已发生的变化通过 initialize 后先读一次
+   * `getHostContext()` 拿到。
+   */
+  onHostContextChanged(listener: (ctx: HostContextView) => void): () => void {
+    this.contextListeners.add(listener);
+    return () => this.contextListeners.delete(listener);
+  }
+
   /** 握手是否已完成。 */
   get initialized(): boolean {
     return this.handshakeDone;
@@ -548,6 +628,8 @@ export class HostBridge {
       openLinks: false,
     };
     this.rawCaps = {};
+    this.hostContext = { styleVariables: {} };
+    this.contextListeners.clear();
   }
 }
 

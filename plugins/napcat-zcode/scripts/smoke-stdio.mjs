@@ -135,12 +135,15 @@ try {
   const want = ['napcat_configure', 'napcat_detect_local', 'napcat_export', 'napcat_format_selection',
     'napcat_get_config', 'napcat_get_history', 'napcat_host_status', 'napcat_install',
     'napcat_install_status', 'napcat_list_chats', 'napcat_open_panel', 'napcat_search_messages',
-    'napcat_start', 'napcat_status', 'napcat_stop'];
+    'napcat_start', 'napcat_status', 'napcat_stop', 'napcat_uninstall'];
   const names = tools.map((t) => t.name);
-  check('tools/list 返回 15 个工具', want.every((w) => names.includes(w)) && names.length === want.length, names.join(','));
+  check('tools/list 返回 16 个工具', want.every((w) => names.includes(w)) && names.length === want.length, names.join(','));
   const startSchema = tools.find((tool) => tool.name === 'napcat_start')?.inputSchema?.properties ?? {};
   check('napcat_start 仅接受安装 id（模式固定为台账登记值）',
     Object.keys(startSchema).join(',') === 'id', Object.keys(startSchema).join(','));
+  const uninstallSchema = tools.find((tool) => tool.name === 'napcat_uninstall')?.inputSchema?.properties ?? {};
+  check('napcat_uninstall 只接受安装 id（目录取自台账登记值）',
+    Object.keys(uninstallSchema).join(',') === 'id', Object.keys(uninstallSchema).join(','));
 
   const st0 = toolText(await rpc('tools/call', { name: 'napcat_status', arguments: {} }));
   check('napcat_status 未配置时结构化返回', st0.configured === false && st0.connected === false, JSON.stringify(st0));
