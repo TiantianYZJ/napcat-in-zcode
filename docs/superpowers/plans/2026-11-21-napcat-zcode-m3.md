@@ -56,6 +56,25 @@
 
 ---
 
+## 制品清单（Task 2/4 直接用，不要自行改来源）
+
+| 项 | 值 |
+|---|---|
+| 版本 | `4.18.42`（**当前钉死**；将来要换版时同时换 sha256） |
+| 制品 | `NapCat.Shell.Windows.Node.zip` |
+| 大小 | `124,162,399` 字节 |
+| sha256 | `77397ac38d66f46383e48f08f35d5f9d37ec575c22069f62d6c600e73b4521ed` |
+| 下载 URL | `https://github.com/XingYunStar/NapCatQQ/releases/download/v4.18.42/NapCat.Shell.Windows.Node.zip` |
+| 允许清单（host） | `github.com`、`objects.githubusercontent.com`、`api.github.com`、`raw.githubusercontent.com` |
+| 平台 | **Windows**（其它平台本轮不支持 → 面板明确提示改用外部端点） |
+| 模式 | 独立模式（默认，`napcat.bat` → `node.exe index.js`）；注入模式可选但默认关闭并标注风险 |
+
+**来源说明**：上游 `NapNeko/NapCatQQ` 已清空（仓库只剩一句话、releases 为空、资源库 404），上面这个归档镜像 `XingYunStar/NapCatQQ` 是目前唯一能拿到**官方 CI 构建产物**的源。镜像非官方一手源 → **sha256 必须钉死并校验**，校验不过就丢弃、绝不安装。下载 URL 的 host 必须在允许清单内（用户可改 URL，但改完仍要过同一道校验）。
+
+**代理**：本机 `github.com:443` 直连被阻断，必须经本机代理（默认 `http://127.0.0.1:7897`）。下载器要支持可选代理（`userConfig.downloadProxy`），代理地址只允许 http/https 且必须是**回环地址**。
+
+---
+
 ## Global Constraints
 
 - 复用 `D:\Develop\Napcat in ZCode\plugins\napcat-zcode` 现有模块；**不得重写** `createClient` / `detectLocal` / 配置读写 / 面板骨架
