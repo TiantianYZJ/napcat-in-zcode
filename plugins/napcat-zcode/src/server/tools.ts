@@ -10,6 +10,7 @@ import { safeEndpointLabel, type OneBotClient } from './onebot/client.js';
 import type { OB11Message } from './onebot/types.js';
 import type { AppState } from './state.js';
 import { endpointSecurityWarning } from './state.js';
+import { detectLocalWithInstalls } from './host/detect-local.js';
 
 /** 单次 `napcat_get_history` 最多翻多少页（防死循环）。 */
 const MAX_PAGES = 40;
@@ -407,12 +408,46 @@ export function registerTools(server: McpServer, state: AppState): void {
     async ({ endpoint, token, clearToken }) => {
       try {
         const login = await state.setConnection(endpoint, token ?? '', { clearToken: clearToken === true });
+        // 配置变了（端点/端口/路径都可能变了）→ 之前那次探测的结论已经对不上 → 清掉缓存
+        state.clearDetection();
         // 安全警告：非回环端点 + 没有 token → 同网段的人可能读到聊天记录（spec §5.2 / §9）
         const warning = endpointSecurityWarning(
           state.config.connection.endpoint,
           state.config.connection.token ?? '',
         );
         return ok({ configured: true, connected: true, login, ...(warning ? { warning } : {}) });
+      } catch (e) {
+        return fail(state, e);
+      }
+    },
+  );
+
+  server.registerTool(
+    'napcat_detect_local',
+    {
+      description:
+        '本机 NapCat 探测：只探测回环地址与用户显式配置的端点，不扫描网络。' +
+        '把 autoDetect.{ports,endpoints,paths} 与本机安装发现的结果合并成候选后逐个探测（不接参数，范围完全由配置决定）。' +
+        '返回 {found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort, budgetExhausted, scanned, notes, installs, droppedEndpoints}：' +
+        '探测**不带 token**，疑似需要 token 的端点在 tokenRequired 里；' +
+        'budgetExhausted=true 表示扫描未完成（预算耗尽），结果可能不全，**不能**读作「没找到本机 NapCat」；' +
+        'notes 里有人类可读的说明（失败候选计数、被丢弃的非回环端点、多个 WebUI 端口等）。' +
+        '探测结论会被 napcat_status 顺带返回（缓存，不重复扫描）。',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        // 配置可能已被外部改过（面板设置页 / 用户手改文件）→ 刷新后再探
+        state.reloadConfig();
+        const payload = await detectLocalWithInstalls(state);
+        // 结论缓存给 napcat_status 读（status 自己不会触发扫描）
+        state.setDetection({
+          found: payload.found,
+          napcatRunning: payload.napcatRunning,
+          endpoint: payload.live[0]?.endpoint,
+          budgetExhausted: payload.budgetExhausted,
+        });
+        return ok(payload);
       } catch (e) {
         return fail(state, e);
       }

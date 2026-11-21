@@ -8,7 +8,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,10 @@ if (!existsSync(SERVER)) {
   process.exit(1);
 }
 const DATA = mkdtempSync(join(tmpdir(), 'napcat-smoke-data-'));
+// 探测范围完全由配置决定：只扫假 OneBot 的那个端口，并关掉盘根发现（冒烟要可复现、不能扫盘）
+writeFileSync(join(DATA, 'config.json'), JSON.stringify({
+  autoDetect: { ports: [PORT], endpoints: [], paths: [], probeTimeoutMs: 1200, scanDrives: false, maxRoots: 0 },
+}));
 // 导出目录取自 os.homedir()，因此给子进程一个临时 HOME —— 冒烟不得污染用户的真实导出目录
 const FAKE_HOME = mkdtempSync(join(tmpdir(), 'napcat-smoke-home-'));
 const child = spawn(process.execPath, [SERVER], {
@@ -102,16 +106,29 @@ try {
   check('initialize 握手（真实 stdio）', true);
 
   const { tools } = await rpc('tools/list', {});
-  const want = ['napcat_configure', 'napcat_export', 'napcat_format_selection', 'napcat_get_config',
-    'napcat_get_history', 'napcat_list_chats', 'napcat_search_messages', 'napcat_status'];
+  const want = ['napcat_configure', 'napcat_detect_local', 'napcat_export', 'napcat_format_selection',
+    'napcat_get_config', 'napcat_get_history', 'napcat_list_chats', 'napcat_search_messages', 'napcat_status'];
   const names = tools.map((t) => t.name);
-  check('tools/list 返回 8 个工具', want.every((w) => names.includes(w)), names.join(','));
+  check('tools/list 返回 9 个工具', want.every((w) => names.includes(w)), names.join(','));
 
   const st0 = toolText(await rpc('tools/call', { name: 'napcat_status', arguments: {} }));
   check('napcat_status 未配置时结构化返回', st0.configured === false && st0.connected === false, JSON.stringify(st0));
 
+  // 本机探测：只探回环 + 配置里的端口 → 应命中假 OneBot；结论会被 status 顺带带出
+  const det = toolText(await rpc('tools/call', { name: 'napcat_detect_local', arguments: {} }));
+  check('napcat_detect_local 探测到本机 OneBot',
+    det.found === true && det.live?.[0]?.endpoint === `http://127.0.0.1:${PORT}` && Array.isArray(det.notes),
+    JSON.stringify({ found: det.found, live: det.live?.[0]?.endpoint }));
+  const st1 = toolText(await rpc('tools/call', { name: 'napcat_status', arguments: {} }));
+  check('napcat_status 带出缓存的 detection',
+    st1.detection?.found === true && st1.detection?.endpoint === `http://127.0.0.1:${PORT}`,
+    JSON.stringify(st1.detection));
+
   const cfg = toolText(await rpc('tools/call', { name: 'napcat_configure', arguments: { endpoint: `http://127.0.0.1:${PORT}` } }));
   check('napcat_configure 连上假 OneBot', cfg.connected === true && cfg.login?.nickname === '冒烟测试号', JSON.stringify(cfg));
+
+  const st2 = toolText(await rpc('tools/call', { name: 'napcat_status', arguments: {} }));
+  check('napcat_configure 成功后清掉 detection 缓存', st2.detection === undefined, JSON.stringify(st2.detection));
 
   const chats = toolText(await rpc('tools/call', { name: 'napcat_list_chats', arguments: { kind: 'group' } }));
   check('napcat_list_chats 拿到群', chats.chats?.[0]?.name === '冒烟群', JSON.stringify(chats.chats?.[0]));

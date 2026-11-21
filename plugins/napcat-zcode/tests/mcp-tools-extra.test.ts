@@ -522,6 +522,7 @@ describe('mcp tool registration (T10)', () => {
     const list = await c.listTools();
     expect(list.tools.map((t) => t.name).sort()).toEqual([
       'napcat_configure',
+      'napcat_detect_local',
       'napcat_export',
       'napcat_format_selection',
       'napcat_get_config',

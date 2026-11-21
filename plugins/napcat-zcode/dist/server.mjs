@@ -2980,7 +2980,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3007,7 +3007,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3871,7 +3871,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4262,7 +4262,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -7742,15 +7742,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage = "";
+  let errorMessage2 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage
+    message: errorMessage2
   };
 };
 var EMPTY_PATH = [];
@@ -17591,19 +17591,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key, errorMessage2, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage) {
+  if (errorMessage2) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key]: errorMessage2
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage2, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+  addErrorMessage(res, key, errorMessage2, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -18917,8 +18917,8 @@ var Protocol = class {
                   if (queuedMessage.type === "response") {
                     resolver(message);
                   } else {
-                    const errorMessage = message;
-                    const error2 = new McpError(errorMessage.error.code, errorMessage.error.message, errorMessage.error.data);
+                    const errorMessage2 = message;
+                    const error2 = new McpError(errorMessage2.error.code, errorMessage2.error.message, errorMessage2.error.data);
                     resolver(error2);
                   }
                 } else {
@@ -19383,7 +19383,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -19400,7 +19400,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -19478,7 +19478,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -19740,12 +19740,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -20229,23 +20229,23 @@ var Server = class extends Protocol {
       const wrappedHandler = async (request, extra) => {
         const validatedRequest = safeParse2(CallToolRequestSchema, request);
         if (!validatedRequest.success) {
-          const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
+          const errorMessage2 = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage2}`);
         }
         const { params } = validatedRequest.data;
         const result = await Promise.resolve(handler(request, extra));
         if (params.task) {
           const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
-            const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
-            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
+            const errorMessage2 = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
+            throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage2}`);
           }
           return taskValidationResult.data;
         }
         const validationResult = safeParse2(CallToolResultSchema, result);
         if (!validationResult.success) {
-          const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage}`);
+          const errorMessage2 = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call result: ${errorMessage2}`);
         }
         return validationResult.data;
       };
@@ -20785,12 +20785,12 @@ var McpServer = class {
    * @param errorMessage - The error message.
    * @returns The tool error result.
    */
-  createToolError(errorMessage) {
+  createToolError(errorMessage2) {
     return {
       content: [
         {
           type: "text",
-          text: errorMessage
+          text: errorMessage2
         }
       ],
       isError: true
@@ -20811,8 +20811,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(schemaToParse, args ?? {});
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Input validation error: Invalid arguments for tool ${toolName}: ${errorMessage2}`);
     }
     return parseResult.data;
   }
@@ -20836,8 +20836,8 @@ var McpServer = class {
     const parseResult = await safeParseAsync2(outputObj, result.structuredContent);
     if (!parseResult.success) {
       const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-      const errorMessage = getParseErrorMessage(error2);
-      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage}`);
+      const errorMessage2 = getParseErrorMessage(error2);
+      throw new McpError(ErrorCode.InvalidParams, `Output validation error: Invalid structured content for tool ${toolName}: ${errorMessage2}`);
     }
   }
   /**
@@ -20885,7 +20885,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -21049,8 +21049,8 @@ var McpServer = class {
         const parseResult = await safeParseAsync2(argsObj, request.params.arguments ?? {});
         if (!parseResult.success) {
           const error2 = "error" in parseResult ? parseResult.error : "Unknown error";
-          const errorMessage = getParseErrorMessage(error2);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage}`);
+          const errorMessage2 = getParseErrorMessage(error2);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage2}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -21549,19 +21549,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
 };
 
 // src/server/index.ts
-import { dirname, join as join3 } from "node:path";
+import { dirname, join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/onebot/errors.ts
@@ -22220,11 +22220,18 @@ async function exportSelection(opts) {
 // src/server/config.ts
 import { chmodSync as chmodSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { isAbsolute, join as join2 } from "node:path";
 function defaultConfig() {
   return {
     connection: { mode: "auto", endpoint: "", token: "" },
-    autoDetect: { ports: [3e3, 3001, 6099], endpoints: [] },
+    autoDetect: {
+      ports: [3e3, 3001, 6099],
+      endpoints: [],
+      paths: [],
+      probeTimeoutMs: 1200,
+      scanDrives: true,
+      maxRoots: 32
+    },
     managed: { napcatVersion: "4.18.42", downloadMirror: "auto" },
     export: { dir: "user", includeImages: false },
     inject: { maxInjectChars: 4e4 }
@@ -22259,6 +22266,29 @@ function pickEndpoints(v) {
   if (!Array.isArray(v)) return [];
   return v.filter((s) => typeof s === "string" && s.trim() !== "");
 }
+function pickPaths(v) {
+  if (!Array.isArray(v)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const p of v) {
+    if (typeof p !== "string") continue;
+    const t = p.trim();
+    if (t === "") continue;
+    if (!isAbsolute(t)) continue;
+    seen.add(t);
+  }
+  return [...seen];
+}
+function pickProbeTimeoutMs(v, fallback) {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 100 || v > 1e4) return fallback;
+  return v;
+}
+function pickBool(v, fallback) {
+  return typeof v === "boolean" ? v : fallback;
+}
+function pickMaxRoots(v, fallback) {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 512) return fallback;
+  return v;
+}
 function sanitize(m) {
   const d = defaultConfig();
   const conn = isObj(m.connection) ? m.connection : {};
@@ -22274,7 +22304,11 @@ function sanitize(m) {
     },
     autoDetect: {
       ports: pickPorts(auto.ports, d.autoDetect.ports),
-      endpoints: pickEndpoints(auto.endpoints)
+      endpoints: pickEndpoints(auto.endpoints),
+      paths: pickPaths(auto.paths),
+      probeTimeoutMs: pickProbeTimeoutMs(auto.probeTimeoutMs, d.autoDetect.probeTimeoutMs),
+      scanDrives: pickBool(auto.scanDrives, d.autoDetect.scanDrives),
+      maxRoots: pickMaxRoots(auto.maxRoots, d.autoDetect.maxRoots)
     },
     managed: {
       napcatVersion: typeof man.napcatVersion === "string" && man.napcatVersion.trim() !== "" ? man.napcatVersion : d.managed.napcatVersion,
@@ -22379,7 +22413,7 @@ var WsTransport = class {
     if (this.closed) return Promise.reject(new OneBotError(-2, "websocket client closed"));
     if (this.connecting) return this.connecting;
     let rejectConnect = () => void 0;
-    const promise = new Promise((resolve, reject) => {
+    const promise = new Promise((resolve2, reject) => {
       rejectConnect = reject;
       const url = new URL(this.cfg.endpoint);
       if (this.cfg.token) url.searchParams.set("access_token", this.cfg.token);
@@ -22410,7 +22444,7 @@ var WsTransport = class {
           return;
         }
         this.socket = ws;
-        resolve();
+        resolve2();
       };
       ws.onerror = () => {
         settleHandshake();
@@ -22464,12 +22498,12 @@ var WsTransport = class {
     const socket = this.socket;
     if (!socket) throw new OneBotError(-2, "websocket not connected");
     const echo = `e${++this.seq}`;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(echo);
         reject(new OneBotError(-3, `action ${action} timeout`));
       }, this.timeoutMs);
-      this.pending.set(echo, { resolve, reject, timer, socket });
+      this.pending.set(echo, { resolve: resolve2, reject, timer, socket });
       try {
         socket.send(JSON.stringify({ action, params: params ?? {}, echo }));
       } catch (err) {
@@ -22500,9 +22534,9 @@ var WsTransport = class {
   }
   /** 关闭单条连接并等待其 close 事件；对端不配合时有兜底超时，不会挂住 close() */
   closeSocket(ws) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       if (ws.readyState === WebSocket.CLOSED) {
-        resolve();
+        resolve2();
         return;
       }
       let settled = false;
@@ -22511,7 +22545,7 @@ var WsTransport = class {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
-        resolve();
+        resolve2();
       };
       timer = setTimeout(finish, CLOSE_FALLBACK_MS);
       timer.unref?.();
@@ -22651,10 +22685,18 @@ var AppState = class {
   clientEndpoint = "";
   /** 测试注入用：优先于 endpoint 构造。 */
   clientOverride = null;
-  /** 测试注入用：导出目录重定向（user 目录）。 */
+  /** 测试注入用：导出目录重定向（user 目录；也用作本机安装发现的 home 根）。 */
   homeDirOverride;
   /** 测试注入用：导出目录重定向（workspace 目录）。 */
   workspaceDirOverride;
+  /**
+   * 最近一次本机探测的结论（**仅内存**，进程重启即失效）。
+   *
+   * `napcat_status` 读它来展示「探测到本机 NapCat」，
+   * 但**不会**为了拿它去触发一次端口扫描（那会让状态条每刷新一次就等几秒）。
+   * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
+   */
+  detection;
   /** 本进程见过的所有 token（脱敏用，见 `redact`）。 */
   knownTokens = /* @__PURE__ */ new Set();
   constructor() {
@@ -22686,6 +22728,30 @@ var AppState = class {
   /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
   rememberToken(token) {
     if (token) this.knownTokens.add(token);
+  }
+  /**
+   * 重读配置文件（运行期外部改了 `config.json` 也要看得见）。
+   *
+   * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
+   * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
+   */
+  reloadConfig() {
+    this.rememberToken(this.config.connection?.token);
+    this.config = loadConfigData();
+    this.rememberToken(this.config.connection?.token);
+  }
+  /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
+  setDetection(detection) {
+    this.detection = detection;
+  }
+  /**
+   * 清除探测结论缓存。
+   *
+   * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
+   * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
+   */
+  clearDetection() {
+    this.detection = void 0;
   }
   /**
    * 拿到可用的 OneBot 客户端（没有就按配置建一个）。
@@ -22782,25 +22848,37 @@ var AppState = class {
    * 状态条就会一直显示启动时的旧端点/旧状态。
    */
   async status() {
-    this.rememberToken(this.config.connection?.token);
-    this.config = loadConfigData();
-    this.rememberToken(this.config.connection?.token);
+    this.reloadConfig();
+    const detection = this.detection;
     if (!this.configured) {
-      return { configured: false, connected: false, mode: "unconfigured" };
+      return {
+        configured: false,
+        connected: false,
+        mode: "unconfigured",
+        ...detection ? { detection } : {}
+      };
     }
     const endpoint = endpointOf(this.config);
     const warning = endpointSecurityWarning(endpoint, this.config.connection?.token ?? "");
     try {
       const c = await this.ensureClient();
       const login = await getLoginInfo(c);
-      return { configured: true, connected: true, mode: "external", login, warning };
+      return {
+        configured: true,
+        connected: true,
+        mode: "external",
+        login,
+        warning,
+        ...detection ? { detection } : {}
+      };
     } catch (e) {
       return {
         configured: true,
         connected: false,
         mode: "external",
         error: this.redact(errText2(e)),
-        warning
+        warning,
+        ...detection ? { detection } : {}
       };
     }
   }
@@ -22811,6 +22889,861 @@ async function closeConnection(state) {
   state.client = null;
   state.clientEndpoint = "";
   await client?.close();
+}
+
+// src/server/host/detect-local.ts
+import { homedir as homedir3 } from "node:os";
+
+// src/server/onebot/detect.ts
+import { connect } from "node:net";
+var DEFAULT_PROBE_TIMEOUT_MS = 1200;
+var DEFAULT_PROBE_BUDGET_MS = 5e3;
+var NAPCAT_WEBUI_PORT = 6099;
+var MAX_CONCURRENT_PROBES = 16;
+var BUDGET_MARGIN_MS = 200;
+var SUPPORTED_SCHEMES = /* @__PURE__ */ new Set(["http:", "https:", "ws:", "wss:"]);
+var AUTH_RETCODES = /* @__PURE__ */ new Set([401, 1404]);
+var AUTH_TEXT = /(token|unauthoriz|unauthoris|forbidden|鉴权|认证|未授权|无权限|授权失败)/i;
+var SECRET_ASSIGNMENT = /\b(access[_-]?token|token|secret|password|passwd|pwd|api[_-]?key|apikey)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
+var BEARER = /\b(bearer)\s+[^\s"',;]+/gi;
+function normalizeEndpoint(raw) {
+  if (typeof raw !== "string") return void 0;
+  const trimmed = raw.trim();
+  if (!trimmed) return void 0;
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return void 0;
+  }
+  if (!SUPPORTED_SCHEMES.has(url.protocol)) return void 0;
+  if (!url.hostname) return void 0;
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.toString().replace(/\/+$/, "");
+}
+function isLoopbackHost(hostname2) {
+  const host = hostname2.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (host === "localhost") return true;
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+function isLoopbackEndpoint2(endpoint) {
+  try {
+    return isLoopbackHost(new URL(endpoint).hostname);
+  } catch {
+    return false;
+  }
+}
+function transportOf(endpoint) {
+  return endpoint.startsWith("ws") ? "ws" : "http";
+}
+function extractSecrets(endpoint) {
+  const secrets = [];
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return secrets;
+  }
+  if (url.password) secrets.push(url.password);
+  for (const [key, value] of url.searchParams) {
+    if (value && /token|secret|key|password|passwd/i.test(key)) secrets.push(value);
+  }
+  return secrets;
+}
+function redactSecrets(text, secrets = []) {
+  let out = text.replace(BEARER, "$1 ***");
+  out = out.replace(SECRET_ASSIGNMENT, (_m, key, sep) => `${key}${sep}***`);
+  for (const secret of secrets) {
+    if (secret.length >= 4) out = out.split(secret).join("***");
+  }
+  return out;
+}
+function errorMessage(err) {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err.message === "string") {
+    return err.message;
+  }
+  return String(err);
+}
+function isAuthFailure(err, raw) {
+  const retcode = err instanceof OneBotError ? err.retcode : void 0;
+  if (retcode !== void 0 && AUTH_RETCODES.has(retcode)) return true;
+  if (isWsConnectFailure(err, raw)) return true;
+  return AUTH_TEXT.test(raw);
+}
+function isWsConnectFailure(err, raw) {
+  const retcode = err instanceof OneBotError ? err.retcode : void 0;
+  return retcode === -2 && /websocket connect/i.test(raw);
+}
+function isPortListening(endpoint, timeoutMs) {
+  let host;
+  let port;
+  try {
+    const url = new URL(endpoint);
+    host = url.hostname.replace(/^\[/, "").replace(/\]$/, "");
+    const scheme = url.protocol;
+    const def = scheme === "https:" || scheme === "wss:" ? 443 : 80;
+    port = url.port ? Number(url.port) : def;
+  } catch {
+    return Promise.resolve(false);
+  }
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
+  return new Promise((resolve2) => {
+    const socket = connect({ host, port });
+    let settled = false;
+    const done = (listening) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve2(listening);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.once("timeout", () => done(false));
+  });
+}
+async function probeEndpoint(c, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) {
+  const label = safeEndpointLabel(c.endpoint) || c.endpoint;
+  const secrets = extractSecrets(c.endpoint);
+  let client;
+  try {
+    client = createClient({ endpoint: c.endpoint, timeoutMs });
+  } catch (err) {
+    const raw = errorMessage(err);
+    return { ok: false, error: `${label}\uFF1A${redactSecrets(raw, secrets)}` };
+  }
+  try {
+    const info = await getLoginInfo(client);
+    return {
+      ok: true,
+      login: { user_id: String(info.user_id ?? ""), nickname: String(info.nickname ?? "") }
+    };
+  } catch (err) {
+    const raw = errorMessage(err);
+    let needsToken = isAuthFailure(err, raw);
+    let detail = raw;
+    if (needsToken && isWsConnectFailure(err, raw)) {
+      const listening = await isPortListening(c.endpoint, Math.min(timeoutMs, 500));
+      if (!listening) {
+        needsToken = false;
+        detail = `${raw}\uFF08\u8BE5\u7AEF\u53E3\u6CA1\u6709\u670D\u52A1\uFF09`;
+      } else {
+        detail = `${raw}\uFF08\u8BE5\u7AEF\u53E3\u6709\u670D\u52A1\u4F46 WebSocket \u63E1\u624B\u88AB\u62D2\uFF1A\u53EF\u80FD\u662F access token \u4FDD\u62A4\uFF0C\u4E5F\u53EF\u80FD\u662F\u8BE5\u7AEF\u53E3\u4E0D\u662F WebSocket \u670D\u52A1\uFF09`;
+      }
+    }
+    return {
+      ok: false,
+      error: `${label}\uFF1A${redactSecrets(detail, secrets)}`,
+      needsToken
+    };
+  } finally {
+    try {
+      await client.close();
+    } catch {
+    }
+  }
+}
+async function probeWebUi(port, timeoutMs) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/`, {
+      method: "GET",
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    try {
+      await res.arrayBuffer();
+    } catch {
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+function normalizePorts(ports) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of Array.isArray(ports) ? ports : []) {
+    const p = Number(raw);
+    if (!Number.isInteger(p) || p < 1 || p > 65535) continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+function positiveInt(value, fallback) {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
+}
+function validPort(value) {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) return void 0;
+  return value;
+}
+function toCandidate(raw, source, detail) {
+  const endpoint = normalizeEndpoint(raw);
+  if (!endpoint) return void 0;
+  if (source !== "config" && !isLoopbackEndpoint2(endpoint)) return void 0;
+  return { endpoint, transport: transportOf(endpoint), source, detail };
+}
+async function detectLocal(opts) {
+  const requestedTimeoutMs = positiveInt(opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS);
+  const budgetMs = positiveInt(opts.budgetMs ?? DEFAULT_PROBE_BUDGET_MS, DEFAULT_PROBE_BUDGET_MS);
+  const webuiPort = validPort(opts.webuiPort ?? NAPCAT_WEBUI_PORT) ?? NAPCAT_WEBUI_PORT;
+  const timeoutMs = Math.min(requestedTimeoutMs, Math.max(50, budgetMs - BUDGET_MARGIN_MS));
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const addCandidate = (c) => {
+    if (!c) return;
+    if (seen.has(c.endpoint)) return;
+    seen.add(c.endpoint);
+    candidates.push(c);
+  };
+  const extraEndpoints = Array.isArray(opts.extraEndpoints) ? opts.extraEndpoints : [];
+  let extraCount = 0;
+  for (const raw of extraEndpoints) {
+    const label = safeEndpointLabel(String(raw ?? "").trim());
+    const c = toCandidate(String(raw ?? ""), "config", label ? `\u7528\u6237\u914D\u7F6E\uFF1A${label}` : void 0);
+    if (!c) continue;
+    extraCount += 1;
+    addCandidate(c);
+  }
+  const ports = normalizePorts(opts.ports);
+  for (const p of ports) {
+    addCandidate(toCandidate(`http://127.0.0.1:${p}`, "port", `\u672C\u673A\u7AEF\u53E3 ${p}`));
+    addCandidate(toCandidate(`ws://127.0.0.1:${p}`, "port", `\u672C\u673A\u7AEF\u53E3 ${p}`));
+  }
+  const installCandidates = Array.isArray(opts.installCandidates) ? opts.installCandidates : [];
+  for (const raw of installCandidates) {
+    if (!raw) continue;
+    addCandidate(toCandidate(raw.endpoint, "install", raw.detail ?? "\u672C\u673A\u5B89\u88C5\u914D\u7F6E"));
+  }
+  addCandidate(toCandidate(`http://127.0.0.1:${webuiPort}`, "port", `NapCat WebUI \u7AEF\u53E3 ${webuiPort}`));
+  const outcomes = /* @__PURE__ */ new Map();
+  let next = 0;
+  let budgetFired = false;
+  const worker = async () => {
+    for (; ; ) {
+      if (budgetFired) return;
+      const index = next++;
+      if (index >= candidates.length) return;
+      const c = candidates[index];
+      const result = await probeEndpoint(c, timeoutMs);
+      outcomes.set(c.endpoint, result);
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(MAX_CONCURRENT_PROBES, Math.max(candidates.length, 1)) },
+    () => worker()
+  );
+  let napcatRunning = false;
+  const webuiProbe = probeWebUi(webuiPort, timeoutMs).then((alive) => {
+    napcatRunning = alive;
+  });
+  let timer;
+  const budget = new Promise((resolve2) => {
+    timer = setTimeout(() => {
+      budgetFired = true;
+      resolve2();
+    }, budgetMs);
+  });
+  try {
+    await Promise.race([Promise.allSettled([...workers, webuiProbe]), budget]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const live = [];
+  const failed = [];
+  const tokenRequired = [];
+  for (const c of candidates) {
+    const outcome = outcomes.get(c.endpoint);
+    if (!outcome) continue;
+    if (outcome.ok) {
+      live.push({ ...c, login: outcome.login });
+      continue;
+    }
+    failed.push({ ...c, error: outcome.error, needsToken: outcome.needsToken === true });
+    if (outcome.needsToken) {
+      tokenRequired.push({ ...c, error: outcome.error, needsToken: true });
+    }
+  }
+  return {
+    found: live.length > 0,
+    candidates,
+    live,
+    failed,
+    tokenRequired,
+    napcatRunning,
+    webuiPort: napcatRunning ? webuiPort : void 0,
+    budgetExhausted: budgetFired && outcomes.size < candidates.length,
+    scanned: {
+      ports,
+      paths: Array.isArray(opts.installPaths) ? [...opts.installPaths] : [],
+      extraEndpoints: extraCount
+    }
+  };
+}
+
+// src/server/host/local-napcat.ts
+import { readdirSync, readFileSync as readFileSync3, statSync as statSync2 } from "node:fs";
+import { join as join3, resolve } from "node:path";
+var MAX_ENDPOINTS_PER_INSTALL = 6;
+var MAX_ENDPOINTS_TOTAL = 10;
+var MAX_SCAN_DEPTH = 2;
+var ONEBOT_CONFIG_RE = /^onebot11.*\.json$/i;
+var WEBUI_CONFIG_RE = /^webui\.json$/i;
+function isObj2(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function safeReaddir(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return void 0;
+  }
+}
+function stripJsonComments(text) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+function stripTrailingCommas(text) {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (j < text.length && (text[j] === "}" || text[j] === "]")) continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+function safeReadJson(file) {
+  let text;
+  try {
+    text = readFileSync3(file, "utf-8");
+  } catch {
+    return void 0;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+  }
+  try {
+    return JSON.parse(stripTrailingCommas(stripJsonComments(text)));
+  } catch {
+    return void 0;
+  }
+}
+function entryIsDir(entry, fullPath) {
+  try {
+    if (entry.isDirectory()) return true;
+    if (entry.isSymbolicLink()) return statSync2(fullPath).isDirectory();
+  } catch {
+  }
+  return false;
+}
+function scanRoot(root) {
+  const onebot = [];
+  const webui = [];
+  const level1 = safeReaddir(root);
+  if (!level1) return { onebot, webui };
+  const visit = (dir, entries, depth) => {
+    for (const entry of entries) {
+      const full = join3(dir, entry.name);
+      if (entryIsDir(entry, full)) {
+        if (depth >= MAX_SCAN_DEPTH) continue;
+        const sub = safeReaddir(full);
+        if (!sub) continue;
+        visit(full, sub, depth + 1);
+        continue;
+      }
+      if (ONEBOT_CONFIG_RE.test(entry.name)) onebot.push({ path: full, dir, depth });
+      else if (WEBUI_CONFIG_RE.test(entry.name)) webui.push({ path: full, dir, depth });
+    }
+  };
+  visit(root, level1, 1);
+  const byDepthThenPath = (a, b) => a.depth - b.depth || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  onebot.sort(byDepthThenPath);
+  webui.sort(byDepthThenPath);
+  return { onebot, webui };
+}
+function isEnabled(value) {
+  if (value === false || value === 0 || value === "false" || value === "0" || value === "") return false;
+  return true;
+}
+function rewriteHost(raw) {
+  const h = raw.trim().replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (h === "" || h === "0" || h === "0.0.0.0" || h === "*") return { host: "127.0.0.1", rewritten: true };
+  if (h === "::" || h === "::0" || h === "0:0:0:0:0:0:0:0") return { host: "::1", rewritten: true };
+  return { host: h, rewritten: false };
+}
+function urlHost(host) {
+  return host.includes(":") ? `[${host}]` : host;
+}
+function parsePort(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") return Number(value);
+  return NaN;
+}
+function collectServers(out, raw, scheme, file) {
+  if (!Array.isArray(raw)) return;
+  for (const item of raw) {
+    if (!isObj2(item)) continue;
+    if (!isEnabled(item.enable)) continue;
+    const port = parsePort(item.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
+    const { host, rewritten } = rewriteHost(typeof item.host === "string" ? item.host : "");
+    const endpoint = normalizeEndpoint(`${scheme}://${urlHost(host)}:${port}`);
+    if (!endpoint) continue;
+    const entry = {
+      endpoint,
+      transport: scheme,
+      // scheme 是权威
+      detail: file
+    };
+    if (typeof item.name === "string" && item.name.trim() !== "") entry.serverName = item.name.trim();
+    if (rewritten) entry.rewrittenToLoopback = true;
+    if (!isLoopbackHost(host)) entry.nonLoopback = true;
+    out.push(entry);
+  }
+}
+function readOnebotEndpoints(file) {
+  const json = safeReadJson(file);
+  if (!isObj2(json)) return [];
+  const network = isObj2(json.network) ? json.network : {};
+  const out = [];
+  collectServers(out, network.httpServers, "http", file);
+  collectServers(out, network.websocketServers, "ws", file);
+  return out;
+}
+function readWebUi(file) {
+  const json = safeReadJson(file);
+  if (!isObj2(json)) return void 0;
+  const port = parsePort(json.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return void 0;
+  const out = { port };
+  const token = typeof json.token === "string" ? json.token.trim() : "";
+  if (token !== "") out.hasToken = true;
+  if (json.disableWebUI === true) out.disabled = true;
+  return out;
+}
+function buildInstall(scan) {
+  if (scan.onebot.length === 0 && scan.webui.length === 0) return void 0;
+  const onebotConfigs = scan.onebot.map((f) => f.path);
+  const configDir = scan.onebot.length > 0 ? scan.onebot[0].dir : scan.webui[0]?.dir ?? "";
+  const endpoints = [];
+  for (const file of scan.onebot) endpoints.push(...readOnebotEndpoints(file.path));
+  const notes = [];
+  let truncated = false;
+  if (endpoints.length > MAX_ENDPOINTS_PER_INSTALL) {
+    const dropped = endpoints.length - MAX_ENDPOINTS_PER_INSTALL;
+    endpoints.length = MAX_ENDPOINTS_PER_INSTALL;
+    truncated = true;
+    notes.push(
+      `\u7AEF\u70B9\u6570\u8D85\u8FC7\u6BCF\u4E2A\u5B89\u88C5\u76EE\u5F55\u7684\u4E0A\u9650\uFF08${MAX_ENDPOINTS_PER_INSTALL}\uFF09\uFF0C\u5DF2\u622A\u65AD\uFF08\u53E6\u6709 ${dropped} \u4E2A\u7AEF\u70B9\u672A\u7EB3\u5165\uFF09`
+    );
+  }
+  const inst = { configDir, onebotConfigs, endpoints };
+  const webui = scan.webui.length > 0 ? readWebUi(scan.webui[0].path) : void 0;
+  if (webui) inst.webui = webui;
+  if (truncated) inst.truncated = true;
+  if (notes.length > 0) inst.notes = notes;
+  return inst;
+}
+function findLocalNapCat(roots) {
+  if (!Array.isArray(roots)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const results = [];
+  for (const raw of roots) {
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    let root;
+    try {
+      root = resolve(raw.trim());
+    } catch {
+      continue;
+    }
+    if (seen.has(root)) continue;
+    seen.add(root);
+    const inst = buildInstall(scanRoot(root));
+    if (inst) results.push(inst);
+  }
+  let remaining = MAX_ENDPOINTS_TOTAL;
+  for (const inst of results) {
+    if (inst.endpoints.length > remaining) {
+      const dropped = inst.endpoints.length - remaining;
+      inst.endpoints.length = Math.max(remaining, 0);
+      inst.truncated = true;
+      inst.notes = [
+        ...inst.notes ?? [],
+        `\u7AEF\u70B9\u6570\u8D85\u8FC7\u5168\u5C40\u4E0A\u9650\uFF08${MAX_ENDPOINTS_TOTAL}\uFF09\uFF0C\u5DF2\u622A\u65AD\uFF08\u53E6\u6709 ${dropped} \u4E2A\u7AEF\u70B9\u672A\u7EB3\u5165\uFF09`
+      ];
+    }
+    remaining -= inst.endpoints.length;
+  }
+  return results;
+}
+function toInstallCandidates(installed) {
+  if (!Array.isArray(installed)) return [];
+  const out = [];
+  for (const inst of installed) {
+    if (!inst || !Array.isArray(inst.endpoints)) continue;
+    for (const e of inst.endpoints) {
+      if (!e || typeof e.endpoint !== "string" || e.endpoint === "") continue;
+      out.push({
+        endpoint: e.endpoint,
+        transport: e.transport,
+        source: "install",
+        detail: e.detail
+      });
+    }
+  }
+  return out;
+}
+function installPathsOf(installed) {
+  if (!Array.isArray(installed)) return [];
+  const out = /* @__PURE__ */ new Set();
+  for (const inst of installed) {
+    if (!inst) continue;
+    if (inst.configDir) out.add(inst.configDir);
+    for (const p of inst.onebotConfigs) if (p) out.add(p);
+  }
+  return [...out];
+}
+var MAX_DISCOVERED_ROOTS = 32;
+var MAX_ROOTS_TOTAL = 64;
+var NAPCAT_DIR_NAME_RE = /napcat/i;
+function dirExists(path) {
+  try {
+    return statSync2(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function napCatDriveRoots(platform = process.platform) {
+  if (platform !== "win32") return ["/"];
+  const out = [];
+  for (let i = 0; i < 26; i++) out.push(`${String.fromCharCode(65 + i)}:\\`);
+  return out;
+}
+function napCatCandidateDirs(driveRoot) {
+  let entries;
+  try {
+    entries = readdirSync(driveRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const named = [];
+  const byConfig = [];
+  for (const entry of entries) {
+    const isDir = entry.isDirectory();
+    const isLink = entry.isSymbolicLink();
+    if (!isDir && !isLink) continue;
+    const full = join3(driveRoot, entry.name);
+    if (isLink && !dirExists(full)) continue;
+    if (NAPCAT_DIR_NAME_RE.test(entry.name)) named.push(full);
+    else if (dirExists(join3(full, "config"))) byConfig.push(full);
+  }
+  return [...named, ...byConfig];
+}
+function resolveMaxRoots(value) {
+  if (value === void 0) return MAX_DISCOVERED_ROOTS;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return MAX_DISCOVERED_ROOTS;
+  return value;
+}
+function discoverNapCatInstallRootsDetailed(platform = process.platform, opts = {}) {
+  const maxRoots = resolveMaxRoots(opts.maxRoots);
+  if (maxRoots === 0) return { roots: [], truncated: false };
+  const totalLimit = Math.min(maxRoots, MAX_ROOTS_TOTAL);
+  const drives = Array.isArray(opts.driveRoots) ? opts.driveRoots : napCatDriveRoots(platform);
+  const perDrive = [];
+  let truncated = false;
+  for (const drive of drives) {
+    if (!dirExists(drive)) continue;
+    const candidates = napCatCandidateDirs(drive);
+    if (candidates.length > maxRoots) truncated = true;
+    perDrive.push(candidates.slice(0, maxRoots));
+  }
+  const roots = [];
+  const maxPerDrive = perDrive.reduce((n, c) => Math.max(n, c.length), 0);
+  for (let i = 0; i < maxPerDrive && roots.length < totalLimit; i++) {
+    for (const candidates of perDrive) {
+      if (roots.length >= totalLimit) break;
+      if (i < candidates.length) roots.push(candidates[i]);
+    }
+  }
+  const available = perDrive.reduce((n, c) => n + c.length, 0);
+  if (available > roots.length) truncated = true;
+  return { roots, truncated };
+}
+function defaultNapCatRoots(homeDir, platform, env = process.env) {
+  const home = typeof homeDir === "string" ? homeDir : "";
+  const out = [];
+  const add = (p) => {
+    if (typeof p === "string" && p.trim() !== "") out.push(p.trim());
+  };
+  if (home) {
+    add(join3(home, ".napcat"));
+    add(join3(home, "NapCat"));
+    add(join3(home, ".config", "napcat"));
+  }
+  if (platform === "win32") {
+    if (env.APPDATA) add(join3(env.APPDATA, "NapCat"));
+    if (env.LOCALAPPDATA) add(join3(env.LOCALAPPDATA, "NapCat"));
+    if (env.ProgramFiles) add(join3(env.ProgramFiles, "NapCat"));
+    if (env["ProgramFiles(x86)"]) add(join3(env["ProgramFiles(x86)"], "NapCat"));
+    if (home) add(join3(home, "AppData", "Roaming", "NapCatQQ"));
+    if (env.USERPROFILE) add(join3(env.USERPROFILE, "AppData", "Roaming", "NapCatQQ"));
+  } else {
+    if (home) {
+      add(join3(home, "Library", "Application Support", "QQ", "NapCat"));
+      add(join3(home, "Library", "Application Support", "NapCat"));
+      add(join3(home, ".local", "share", "NapCat"));
+    }
+  }
+  return Array.from(new Set(out));
+}
+
+// src/server/host/detect-local.ts
+var FAILED_PER_SOURCE_LIMIT = 5;
+var TIMEOUT_TEXT = /(timeout|timed out|超时|ETIMEDOUT|ECONNABORTED|aborted)/i;
+function mergeDetectionRoots(cfg, opts) {
+  const notes = [];
+  const env = opts.env ?? process.env;
+  const roots = [];
+  for (const p of cfg?.paths ?? []) {
+    if (typeof p === "string" && p.trim() !== "") roots.push(p.trim());
+  }
+  roots.push(...defaultNapCatRoots(opts.home, opts.platform, env));
+  let driveRoots = [];
+  let truncated = false;
+  const rawMax = cfg?.maxRoots;
+  const requested = typeof rawMax === "number" && Number.isInteger(rawMax) && rawMax >= 0 ? rawMax : MAX_DISCOVERED_ROOTS;
+  const maxRoots = Math.min(requested, MAX_ROOTS_TOTAL);
+  if (cfg?.scanDrives === false) {
+    notes.push("\u76D8\u6839\u81EA\u52A8\u53D1\u73B0\u5DF2\u5173\u95ED\uFF08autoDetect.scanDrives=false\uFF09");
+  } else if (maxRoots === 0) {
+    notes.push("\u76D8\u6839\u81EA\u52A8\u53D1\u73B0\u5DF2\u7981\u7528\uFF08autoDetect.maxRoots=0\uFF09");
+  } else {
+    const disc = discoverNapCatInstallRootsDetailed(opts.platform, { maxRoots, driveRoots: opts.driveRoots });
+    driveRoots = disc.roots;
+    truncated = disc.truncated;
+    if (truncated) notes.push("\u76D8\u6839\u53D1\u73B0\u7684\u5019\u9009\u6839\u8FBE\u5230\u4E0A\u9650\uFF0C\u53EF\u80FD\u6F0F\u6389\u67D0\u4E9B NapCat \u5B89\u88C5\u76EE\u5F55");
+  }
+  roots.push(...driveRoots);
+  return { roots, driveRoots, truncated, notes };
+}
+function pickWebuiPort(installed) {
+  const notes = [];
+  const withWebui = (Array.isArray(installed) ? installed : []).filter(
+    (i) => i && i.webui && Number.isInteger(i.webui.port) && i.webui.port > 0 && i.webui.port <= 65535
+  );
+  const enabled = withWebui.filter((i) => i.webui?.disabled !== true);
+  const disabled = withWebui.filter((i) => i.webui?.disabled === true);
+  const ports = [...new Set(withWebui.map((i) => i.webui.port))];
+  const chosen = enabled.find((i) => (i.endpoints?.length ?? 0) > 0) ?? enabled[0];
+  if (chosen) {
+    const port = chosen.webui.port;
+    if (ports.length > 1) {
+      notes.push(`\u53D1\u73B0\u591A\u4E2A NapCat WebUI \u7AEF\u53E3\uFF08${ports.join("\u3001")}\uFF09\uFF0C\u672C\u8F6E\u53EA\u63A2\u6D4B ${port}`);
+    }
+    if (disabled.length > 0) {
+      notes.push(`\u6709 ${disabled.length} \u4E2A\u5B89\u88C5\u7684 WebUI \u5DF2\u88AB\u7981\u7528\uFF08disableWebUI\uFF09\uFF0C\u4E0D\u4F5C\u4E3A\u63A2\u6D4B\u7AEF\u53E3`);
+    }
+    return { port, notes };
+  }
+  if (disabled.length > 0) {
+    notes.push(
+      `\u53D1\u73B0\u7684 NapCat WebUI \u5DF2\u88AB\u7981\u7528\uFF08disableWebUI\uFF09\uFF0C\u4E0D\u4F5C\u4E3A\u63A2\u6D4B\u7AEF\u53E3\uFF0C\u6539\u7528\u9ED8\u8BA4\u7AEF\u53E3 ${NAPCAT_WEBUI_PORT}`
+    );
+  }
+  return { port: NAPCAT_WEBUI_PORT, notes };
+}
+function redactDetectResult(state, result) {
+  const r = (text) => text === void 0 ? void 0 : state.redact(text);
+  return {
+    ...result,
+    candidates: (result.candidates ?? []).map((c) => ({ ...c, detail: r(c.detail) })),
+    live: (result.live ?? []).map((c) => ({
+      ...c,
+      detail: r(c.detail),
+      error: r(c.error),
+      login: c.login ? { ...c.login, nickname: r(c.login.nickname) ?? "" } : void 0
+    })),
+    failed: (result.failed ?? []).map((c) => ({ ...c, detail: r(c.detail), error: r(c.error) })),
+    tokenRequired: (result.tokenRequired ?? []).map((c) => ({
+      ...c,
+      detail: r(c.detail),
+      error: r(c.error)
+    }))
+  };
+}
+function trimFailedBySource(items, limit) {
+  const list = Array.isArray(items) ? items : [];
+  const max = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+  const kept = [];
+  const counts = /* @__PURE__ */ new Map();
+  let dropped = 0;
+  for (const item of list) {
+    const n = counts.get(item.source) ?? 0;
+    if (n < max) {
+      kept.push(item);
+      counts.set(item.source, n + 1);
+    } else {
+      dropped += 1;
+    }
+  }
+  return { kept, dropped, total: list.length };
+}
+function isTimeoutText(text) {
+  return typeof text === "string" && TIMEOUT_TEXT.test(text);
+}
+async function detectLocalWithInstalls(state, opts = {}) {
+  const cfg = state.config.autoDetect;
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? state.homeDirOverride ?? homedir3();
+  const merged = mergeDetectionRoots(cfg, { home, platform, env, driveRoots: opts.driveRoots });
+  const installed = findLocalNapCat(merged.roots);
+  const { port: webuiPort, notes: webuiNotes } = pickWebuiPort(installed);
+  const extraEndpoints = [];
+  for (const e of cfg?.endpoints ?? []) {
+    if (typeof e === "string" && e.trim() !== "") extraEndpoints.push(e.trim());
+  }
+  const configured = state.config.connection?.endpoint ?? "";
+  if (configured.trim() !== "") extraEndpoints.push(configured.trim());
+  const result = await detectLocal({
+    ports: Array.isArray(cfg?.ports) ? cfg.ports : [],
+    extraEndpoints,
+    installCandidates: toInstallCandidates(installed),
+    installPaths: installPathsOf(installed),
+    timeoutMs: cfg?.probeTimeoutMs,
+    budgetMs: opts.budgetMs ?? DEFAULT_PROBE_BUDGET_MS,
+    webuiPort
+  });
+  const redacted = redactDetectResult(state, result);
+  const failedAll = redacted.failed.map((f) => {
+    const unresponsive = isTimeoutText(f.error);
+    return unresponsive ? { ...f, unresponsive: true } : { ...f };
+  });
+  const tokenAll = redacted.tokenRequired.map((f) => {
+    const unresponsive = isTimeoutText(f.error);
+    return unresponsive ? { ...f, unresponsive: true } : { ...f };
+  });
+  const failedTrimmed = trimFailedBySource(failedAll, FAILED_PER_SOURCE_LIMIT);
+  const tokenTrimmed = trimFailedBySource(tokenAll, FAILED_PER_SOURCE_LIMIT);
+  const droppedEndpoints = [];
+  for (const inst of installed) {
+    for (const e of inst.endpoints ?? []) {
+      if (e.nonLoopback !== true) continue;
+      droppedEndpoints.push({
+        endpoint: state.redact(e.endpoint),
+        reason: "nonLoopback",
+        detail: e.detail ? state.redact(e.detail) : void 0
+      });
+    }
+  }
+  const notes = [...merged.notes, ...webuiNotes];
+  if (redacted.budgetExhausted) {
+    notes.push(
+      "\u626B\u63CF\u672A\u5B8C\u6210\uFF08\u9884\u7B97\u8017\u5C3D\uFF09\uFF0C\u7ED3\u679C\u53EF\u80FD\u4E0D\u5168\uFF1A\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u300C\u672C\u673A\u6CA1\u6709 NapCat\u300D\uFF0C\u8BF7\u8C03\u5927 autoDetect.probeTimeoutMs \u6216\u51CF\u5C11\u626B\u63CF\u7AEF\u53E3\u540E\u91CD\u8BD5"
+    );
+  }
+  if (failedTrimmed.dropped > 0) {
+    notes.push(
+      `\u5931\u8D25\u5019\u9009\u5171 ${failedTrimmed.total} \u6761\uFF08\u5176\u4E2D ${tokenTrimmed.total} \u6761\u7591\u4F3C\u9700\u8981 token\uFF09\uFF0C\u5DF2\u6309\u6765\u6E90\u5404\u53D6\u524D ${FAILED_PER_SOURCE_LIMIT} \u6761\u5C55\u793A\uFF0C\u5176\u4F59 ${failedTrimmed.dropped} \u6761\u4EC5\u8BA1\u6570`
+    );
+  }
+  if (tokenTrimmed.dropped > 0) {
+    notes.push(`\u7591\u4F3C\u9700\u8981 token \u7684\u5019\u9009\u5171 ${tokenTrimmed.total} \u6761\uFF0C\u4EC5\u5C55\u793A\u524D ${tokenTrimmed.kept.length} \u6761`);
+  }
+  if (droppedEndpoints.length > 0) {
+    notes.push(
+      `\u5B89\u88C5\u914D\u7F6E\u91CC\u6709 ${droppedEndpoints.length} \u4E2A\u7AEF\u70B9\u4E0D\u662F\u56DE\u73AF\u5730\u5740\uFF0C\u5DF2\u88AB\u56DE\u73AF\u95F8\u95E8\u4E22\u5F03\uFF08\u672A\u63A2\u6D4B\uFF09\uFF1A` + droppedEndpoints.map((d) => d.endpoint).join("\u3001")
+    );
+  }
+  if (installed.length === 0) {
+    notes.push("\u672A\u5728\u672C\u673A\u5E38\u89C1\u4F4D\u7F6E\u53D1\u73B0 NapCat \u5B89\u88C5\u76EE\u5F55\uFF08\u53EA\u626B\u4E86\u914D\u7F6E\u91CC\u7684\u8DEF\u5F84\u4E0E\u9ED8\u8BA4\u4F4D\u7F6E\uFF09");
+  }
+  return {
+    found: redacted.found,
+    candidates: redacted.candidates,
+    live: redacted.live,
+    failed: failedTrimmed.kept,
+    tokenRequired: tokenTrimmed.kept,
+    napcatRunning: redacted.napcatRunning,
+    webuiPort: redacted.webuiPort,
+    budgetExhausted: redacted.budgetExhausted,
+    scanned: {
+      ...redacted.scanned,
+      paths: (redacted.scanned?.paths ?? []).map((p) => state.redact(p))
+    },
+    notes,
+    installs: installed.map((inst) => ({
+      configDir: state.redact(inst.configDir ?? ""),
+      endpoints: inst.endpoints?.length ?? 0,
+      webuiPort: inst.webui?.port,
+      webuiDisabled: inst.webui?.disabled === true ? true : void 0,
+      webuiHasToken: inst.webui?.hasToken === true ? true : void 0,
+      nonLoopbackEndpoints: (inst.endpoints ?? []).filter((e) => e.nonLoopback === true).length,
+      truncated: inst.truncated === true ? true : void 0,
+      notes: inst.notes?.map((n) => state.redact(n))
+    })),
+    droppedEndpoints
+  };
 }
 
 // src/server/tools.ts
@@ -23011,11 +23944,34 @@ function registerTools(server2, state) {
     async ({ endpoint, token, clearToken }) => {
       try {
         const login = await state.setConnection(endpoint, token ?? "", { clearToken: clearToken === true });
+        state.clearDetection();
         const warning = endpointSecurityWarning(
           state.config.connection.endpoint,
           state.config.connection.token ?? ""
         );
         return ok({ configured: true, connected: true, login, ...warning ? { warning } : {} });
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
+  server2.registerTool(
+    "napcat_detect_local",
+    {
+      description: "\u672C\u673A NapCat \u63A2\u6D4B\uFF1A\u53EA\u63A2\u6D4B\u56DE\u73AF\u5730\u5740\u4E0E\u7528\u6237\u663E\u5F0F\u914D\u7F6E\u7684\u7AEF\u70B9\uFF0C\u4E0D\u626B\u63CF\u7F51\u7EDC\u3002\u628A autoDetect.{ports,endpoints,paths} \u4E0E\u672C\u673A\u5B89\u88C5\u53D1\u73B0\u7684\u7ED3\u679C\u5408\u5E76\u6210\u5019\u9009\u540E\u9010\u4E2A\u63A2\u6D4B\uFF08\u4E0D\u63A5\u53C2\u6570\uFF0C\u8303\u56F4\u5B8C\u5168\u7531\u914D\u7F6E\u51B3\u5B9A\uFF09\u3002\u8FD4\u56DE {found, candidates, live, failed, tokenRequired, napcatRunning, webuiPort, budgetExhausted, scanned, notes, installs, droppedEndpoints}\uFF1A\u63A2\u6D4B**\u4E0D\u5E26 token**\uFF0C\u7591\u4F3C\u9700\u8981 token \u7684\u7AEF\u70B9\u5728 tokenRequired \u91CC\uFF1BbudgetExhausted=true \u8868\u793A\u626B\u63CF\u672A\u5B8C\u6210\uFF08\u9884\u7B97\u8017\u5C3D\uFF09\uFF0C\u7ED3\u679C\u53EF\u80FD\u4E0D\u5168\uFF0C**\u4E0D\u80FD**\u8BFB\u4F5C\u300C\u6CA1\u627E\u5230\u672C\u673A NapCat\u300D\uFF1Bnotes \u91CC\u6709\u4EBA\u7C7B\u53EF\u8BFB\u7684\u8BF4\u660E\uFF08\u5931\u8D25\u5019\u9009\u8BA1\u6570\u3001\u88AB\u4E22\u5F03\u7684\u975E\u56DE\u73AF\u7AEF\u70B9\u3001\u591A\u4E2A WebUI \u7AEF\u53E3\u7B49\uFF09\u3002\u63A2\u6D4B\u7ED3\u8BBA\u4F1A\u88AB napcat_status \u987A\u5E26\u8FD4\u56DE\uFF08\u7F13\u5B58\uFF0C\u4E0D\u91CD\u590D\u626B\u63CF\uFF09\u3002",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        state.reloadConfig();
+        const payload = await detectLocalWithInstalls(state);
+        state.setDetection({
+          found: payload.found,
+          napcatRunning: payload.napcatRunning,
+          endpoint: payload.live[0]?.endpoint,
+          budgetExhausted: payload.budgetExhausted
+        });
+        return ok(payload);
       } catch (e) {
         return fail(state, e);
       }
@@ -23217,7 +24173,7 @@ function registerTools(server2, state) {
 }
 
 // src/server/uiresource.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
 var PANEL_URI = "ui://napcat-zcode/panel.html";
 var PANEL_MIME = "text/html;profile=mcp-app";
 var ERROR_HTML = "<!doctype html><html><body><p>panel.html missing \u2014 run `npm run build`</p></body></html>";
@@ -23225,7 +24181,7 @@ function registerPanelResource(server2, htmlPath) {
   server2.registerResource("panel", PANEL_URI, { mimeType: PANEL_MIME }, async (uri) => {
     let html;
     try {
-      html = readFileSync3(htmlPath, "utf-8");
+      html = readFileSync4(htmlPath, "utf-8");
     } catch {
       html = ERROR_HTML;
     }
@@ -23237,7 +24193,7 @@ function registerPanelResource(server2, htmlPath) {
 var here = dirname(fileURLToPath(import.meta.url));
 var server = new McpServer({ name: "napcat", version: "0.1.0" });
 registerTools(server, appState);
-registerPanelResource(server, join3(here, "ui", "panel.html"));
+registerPanelResource(server, join4(here, "ui", "panel.html"));
 await server.connect(new StdioServerTransport());
 server.server.onclose = () => {
   void closeConnection(appState);

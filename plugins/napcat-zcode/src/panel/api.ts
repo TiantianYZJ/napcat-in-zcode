@@ -92,6 +92,18 @@ export interface StatusInfo {
    * 有警告不代表连接失败——面板单独展示，不当成错误。
    */
   warning?: string;
+  /**
+   * 最近一次 `napcat_detect_local` 的结论（**缓存**）。
+   *
+   * 没探测过时**不存在**这个字段——status 自己不会触发端口扫描。
+   * `budgetExhausted: true` 表示扫描没扫完，**不能**当成「没找到本机 NapCat」。
+   */
+  detection?: {
+    found: boolean;
+    napcatRunning: boolean;
+    endpoint?: string;
+    budgetExhausted?: boolean;
+  };
 }
 
 /** `napcat_get_history` 的返回。 */

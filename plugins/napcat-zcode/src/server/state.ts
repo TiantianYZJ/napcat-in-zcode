@@ -14,6 +14,34 @@ export interface StatusInfo {
    * 有警告**不代表连接失败**——它是配置风险提示，面板单独展示。
    */
   warning?: string;
+  /**
+   * 最近一次 `napcat_detect_local` 的结论（**缓存**，读取它不会触发任何扫描）。
+   *
+   * 没探测过时这个字段**不存在**——`status` 绝不会自己去扫端口
+   * （状态条每刷新一次就等几秒是不能接受的）。
+   */
+  detection?: DetectionSummary;
+}
+
+/**
+ * 本机探测的结论（`napcat_detect_local` 的摘要）。
+ *
+ * 面板用它解释「面板上那个『检测到本机 NapCat』的结论是哪来的」——
+ * 结论**只在用户显式调用探测工具之后**才存在。
+ */
+export interface DetectionSummary {
+  /** 是否找到可用的 OneBot 端点。 */
+  found: boolean;
+  /** NapCat WebUI 有响应 → NapCat 在跑。 */
+  napcatRunning: boolean;
+  /** 探测到的第一个可用端点。 */
+  endpoint?: string;
+  /**
+   * 扫描预算耗尽 → **没扫完**。
+   *
+   * `true` 时不能读作「没找到本机 NapCat」（那是假阴性）。
+   */
+  budgetExhausted?: boolean;
 }
 
 /**
@@ -142,10 +170,18 @@ export class AppState {
   clientEndpoint = '';
   /** 测试注入用：优先于 endpoint 构造。 */
   clientOverride: OneBotClient | null = null;
-  /** 测试注入用：导出目录重定向（user 目录）。 */
+  /** 测试注入用：导出目录重定向（user 目录；也用作本机安装发现的 home 根）。 */
   homeDirOverride?: string;
   /** 测试注入用：导出目录重定向（workspace 目录）。 */
   workspaceDirOverride?: string;
+  /**
+   * 最近一次本机探测的结论（**仅内存**，进程重启即失效）。
+   *
+   * `napcat_status` 读它来展示「探测到本机 NapCat」，
+   * 但**不会**为了拿它去触发一次端口扫描（那会让状态条每刷新一次就等几秒）。
+   * 结论只在用户显式调用 `napcat_detect_local` 之后才产生。
+   */
+  detection?: DetectionSummary;
   /** 本进程见过的所有 token（脱敏用，见 `redact`）。 */
   private knownTokens = new Set<string>();
 
@@ -182,6 +218,33 @@ export class AppState {
   /** 记住一个见过的 token（之后它出现在任何出参里都会被遮蔽）。 */
   private rememberToken(token: string | undefined): void {
     if (token) this.knownTokens.add(token);
+  }
+
+  /**
+   * 重读配置文件（运行期外部改了 `config.json` 也要看得见）。
+   *
+   * 刷新前先记住内存里的 token：重读会把内存里的 token 换成文件里的值，
+   * 只按新值脱敏就会出现「换了配置就漏出旧 token」的窗口。
+   */
+  reloadConfig(): void {
+    this.rememberToken(this.config.connection?.token);
+    this.config = loadConfigData();
+    this.rememberToken(this.config.connection?.token);
+  }
+
+  /** 记录最近一次本机探测的结论（供 `napcat_status` 读取）。 */
+  setDetection(detection: DetectionSummary): void {
+    this.detection = detection;
+  }
+
+  /**
+   * 清除探测结论缓存。
+   *
+   * 配置改了（端点/端口/路径都变了）之后，旧结论已经对不上 → 必须清掉，
+   * 否则面板会拿一个过期结论说「检测到本机 NapCat」。
+   */
+  clearDetection(): void {
+    this.detection = undefined;
   }
 
   /**
@@ -297,18 +360,30 @@ export class AppState {
    */
   async status(): Promise<StatusInfo> {
     // 刷新前先记住内存里的 token：重读会把它换成文件里的值（脱敏要覆盖旧值，见 redact）
-    this.rememberToken(this.config.connection?.token);
-    this.config = loadConfigData();
-    this.rememberToken(this.config.connection?.token);
+    this.reloadConfig();
+    // 探测结论是**缓存**：读它不会触发任何扫描；没探测过就没有这个字段
+    const detection = this.detection;
     if (!this.configured) {
-      return { configured: false, connected: false, mode: 'unconfigured' };
+      return {
+        configured: false,
+        connected: false,
+        mode: 'unconfigured',
+        ...(detection ? { detection } : {}),
+      };
     }
     const endpoint = endpointOf(this.config);
     const warning = endpointSecurityWarning(endpoint, this.config.connection?.token ?? '');
     try {
       const c = await this.ensureClient();
       const login = await getLoginInfo(c);
-      return { configured: true, connected: true, mode: 'external', login, warning };
+      return {
+        configured: true,
+        connected: true,
+        mode: 'external',
+        login,
+        warning,
+        ...(detection ? { detection } : {}),
+      };
     } catch (e) {
       return {
         configured: true,
@@ -316,6 +391,7 @@ export class AppState {
         mode: 'external',
         error: this.redact(errText(e)),
         warning,
+        ...(detection ? { detection } : {}),
       };
     }
   }
