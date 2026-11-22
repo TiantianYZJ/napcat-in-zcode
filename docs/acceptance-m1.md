@@ -693,7 +693,7 @@
 - [x] `npm run typecheck` / `npm test`（35 文件 / **735 通过 / 4 跳过**；新增 qrlogin 5）/ `npm run build` / `npm run smoke`（stdio 19/19、panel 15/15，**18 个工具**）
 - [x] 视觉复验：扫码卡（白底二维码居中 + 引导行 + 回退入口）dark 主题截图确认
 
-### 15.12 v0.13.0 增量验收记录（连接页信息架构重构）
+### 15.12 v0.14.0 增量验收记录（连接页信息架构重构）
 
 用户裁定「眼花缭乱、没有美感」并点名 apple-design / frontend-design 技能后的连接页重构：
 
