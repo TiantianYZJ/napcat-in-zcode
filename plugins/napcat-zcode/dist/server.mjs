@@ -27014,6 +27014,16 @@ function registerHostTools(server2, state) {
             onebotPort: ports.onebotPort
           });
         }
+        if (probe.state === "unknown") {
+          return ok({
+            started: false,
+            blocked: "port-conflict",
+            mode: install.mode,
+            message: "\u7AEF\u53E3\u88AB\u53E6\u4E00\u4E2A NapCat \u5B9E\u4F8B\u5360\u7528\uFF0C\u8FD9\u4E2A\u5B89\u88C5\u6682\u65F6\u542F\u52A8\u4E0D\u4E86\u3002\u53EF\u4EE5\u5148\u505C\u6389\u90A3\u4E2A\u5B9E\u4F8B\uFF0C\u6216\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u7ED9\u8FD9\u4E2A\u5B89\u88C5\u6362\u4E00\u7EC4\u7AEF\u53E3\u3002",
+            webuiPort: ports.webuiPort,
+            onebotPort: ports.onebotPort
+          });
+        }
         const started = await startManagedHost(install, {
           host: h,
           desktopQqPath: state.config.managed?.desktopQqPath
@@ -27761,7 +27771,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.13.0" });
+var server = new McpServer({ name: "napcat", version: "0.12.3" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

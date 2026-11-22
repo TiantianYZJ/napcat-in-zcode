@@ -282,6 +282,20 @@ export function registerHostTools(server: McpServer, state: AppState): void {
             onebotPort: ports.onebotPort,
           });
         }
+        // 端口冲突：另一个 NapCat 实例占着端口（不是本插件启动的）。
+        // 仍去 spawn 只会得到一个绑定失败、起不来的半成品进程——如实拒绝。
+        if (probe.state === 'unknown') {
+          return ok({
+            started: false,
+            blocked: 'port-conflict',
+            mode: install.mode,
+            message:
+              '端口被另一个 NapCat 实例占用，这个安装暂时启动不了。' +
+              '可以先停掉那个实例，或在插件设置里给这个安装换一组端口。',
+            webuiPort: ports.webuiPort,
+            onebotPort: ports.onebotPort,
+          });
+        }
         const started = await startManagedHost(install, {
           host: h,
           desktopQqPath: state.config.managed?.desktopQqPath,

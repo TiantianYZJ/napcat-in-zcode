@@ -96,16 +96,23 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
     void refresh();
   }, [refresh]);
 
-  // 安装完成 → 自动启动 → 面板进入扫码登录流程（不用再点一次启动）
+  // 安装完成 → 自动启动 → 面板进入扫码登录流程（不用再点一次启动）。
+  // 但如果**另一个** NapCat 实例已经在跑（用户自己启动的），就不自动开新的——
+  // 否则会同时出现两个进程，端口也互相抢。
   const autoStartId = job?.state === 'succeeded' ? (job.install?.id ?? null) : null;
+  const otherRunning = statuses.some(
+    (s) =>
+      s.install?.id !== autoStartId &&
+      ['running', 'starting', 'degraded', 'unknown'].includes(s.state),
+  );
   useEffect(() => {
-    if (!autoStartId || autoStarted.has(autoStartId)) return;
+    if (!autoStartId || autoStarted.has(autoStartId) || otherRunning) return;
     autoStarted.add(autoStartId);
     void run('autostart', async () => {
       await api.startHost(autoStartId);
       await refresh();
     });
-  }, [autoStartId]);
+  }, [autoStartId, otherRunning]);
 
   useEffect(() => {
     if (!pollJobId && !liveHost) return;
@@ -431,6 +438,11 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                 onChangedRef.current?.();
               }}
             />
+          )}
+          {job.state === 'succeeded' && otherRunning && (
+            <div className="host-msg" data-testid="autostart-skipped">
+              检测到你自己的 NapCat 正在运行，就没有自动启动这个新装的——两个进程会抢端口。可以先停掉旧的再点启动，或直接去连接页连它。
+            </div>
           )}
           {job.error && <div className="host-warn">{job.error}</div>}
           {/* 失败时 error 与 notes 常是同一句话；过程 notes 折进详情，不占屏 */}

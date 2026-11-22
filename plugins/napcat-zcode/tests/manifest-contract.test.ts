@@ -111,7 +111,7 @@ describe('清单契约：两份 MCP server 声明同源', () => {
     const marketplace = JSON.parse(
       readFileSync(fileURLToPath(new URL('../../../marketplace.json', import.meta.url)), 'utf-8'),
     ) as { plugins: Array<{ name: string; version: string }> };
-    expect(plugin.version).toBe('0.13.0');
+    expect(plugin.version).toBe('0.12.3');
     expect(packageJson.version).toBe(plugin.version);
     expect(marketplace.plugins.find((item) => item.name === plugin.name)?.version).toBe(plugin.version);
   });

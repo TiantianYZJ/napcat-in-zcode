@@ -214,4 +214,55 @@ describe('HostPanel', () => {
     const refreshBtn = screen.getByTestId('guide-refresh') as HTMLButtonElement;
     expect(refreshBtn.disabled).toBe(false);
   });
+
+  it('auto-starts a finished install when no other instance is running', async () => {
+    mocks.hostStatus.mockResolvedValue(
+      result({
+        installs: [install],
+        status: [{ state: 'stopped', install }],
+        jobs: [
+          {
+            id: 'job-done',
+            startedAt: '2026-11-22T00:00:00.000Z',
+            state: 'succeeded',
+            phase: 'done',
+            bytesReceived: 1,
+            install,
+          },
+        ],
+      }),
+    );
+    render(<HostPanel />);
+    await waitFor(() => expect(mocks.startHost).toHaveBeenCalledWith('napcat-test'));
+    expect(mocks.startHost).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-start when another instance is already running, and says why', async () => {
+    const adopted = { ...install, id: 'napcat-adopted', version: '0.0.1' };
+    mocks.hostStatus.mockResolvedValue(
+      result({
+        installs: [adopted, install],
+        status: [
+          // 用户自己的实例在跑（端口被占 = unknown）
+          { state: 'unknown', install: adopted, message: '端口被占用' },
+          // 新装的还没启动
+          { state: 'stopped', install },
+        ],
+        jobs: [
+          {
+            id: 'job-done',
+            startedAt: '2026-11-22T00:00:00.000Z',
+            state: 'succeeded',
+            phase: 'done',
+            bytesReceived: 1,
+            install,
+          },
+        ],
+      }),
+    );
+    render(<HostPanel />);
+    await screen.findByTestId('autostart-skipped');
+    // 不自动启动：两个进程会抢端口
+    expect(mocks.startHost).not.toHaveBeenCalled();
+  });
 });
