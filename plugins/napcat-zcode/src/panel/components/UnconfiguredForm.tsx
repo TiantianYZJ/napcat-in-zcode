@@ -26,7 +26,7 @@ export function UnconfiguredForm({
   /** 本机探测完成（用来刷新状态条上的探测摘要）。 */
   onDetected?: () => void;
   initialEndpoint?: string;
-  /** 跳到「宿主」页：还没装 NapCat 时去那里下载安装，或接管检测到的安装。 */
+  /** 跳到 NapCat 页：还没装 NapCat 时去那里下载安装，或接管检测到的安装。 */
   onGoHost?: () => void;
 }) {
   const [endpoint, setEndpoint] = useState(initialEndpoint ?? 'http://127.0.0.1:3000');
@@ -156,7 +156,7 @@ export function UnconfiguredForm({
       </p>
       {onGoHost && (
         <button className="btn" data-testid="go-host-btn" onClick={onGoHost}>
-          没有 NapCat？去「宿主」页安装
+          没有 NapCat？去 NapCat 页安装
         </button>
       )}
     </div>

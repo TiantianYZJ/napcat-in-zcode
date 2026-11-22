@@ -38,6 +38,10 @@ async function webuiJson(
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(WEBUI_TIMEOUT_MS),
   });
+  if (res.status === 401 || res.status === 403) {
+    // 常见于端口冲突：这个端口上的 WebUI 是**另一个**实例的，令牌自然对不上
+    throw new Error('这个端口上的 WebUI 属于另一个实例（令牌不匹配）。请停掉其它 NapCat 实例，或在插件设置里换一个 WebUI 端口。');
+  }
   if (!res.ok) {
     throw new Error(`WebUI 返回了 ${res.status}`);
   }

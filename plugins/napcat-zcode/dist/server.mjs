@@ -26457,6 +26457,9 @@ async function webuiJson(fetcher, url, token) {
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(WEBUI_TIMEOUT_MS)
   });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error("\u8FD9\u4E2A\u7AEF\u53E3\u4E0A\u7684 WebUI \u5C5E\u4E8E\u53E6\u4E00\u4E2A\u5B9E\u4F8B\uFF08\u4EE4\u724C\u4E0D\u5339\u914D\uFF09\u3002\u8BF7\u505C\u6389\u5176\u5B83 NapCat \u5B9E\u4F8B\uFF0C\u6216\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u6362\u4E00\u4E2A WebUI \u7AEF\u53E3\u3002");
+  }
   if (!res.ok) {
     throw new Error(`WebUI \u8FD4\u56DE\u4E86 ${res.status}`);
   }
@@ -26993,6 +26996,24 @@ function registerHostTools(server2, state) {
           throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u5148\u7528 napcat_install \u4E0B\u8F7D\u4E00\u4E2A\u3002");
         }
         const ports = portsOf(install);
+        const probe = await probeManagedHost(install, {
+          host: h,
+          webuiPort: ports.webuiPort,
+          onebotPort: ports.onebotPort,
+          probeTimeoutMs: 800,
+          desktopQqPath: state.config.managed?.desktopQqPath
+        });
+        if (probe.state === "running" || probe.state === "starting") {
+          return ok({
+            started: false,
+            alreadyRunning: true,
+            pid: probe.pid,
+            mode: install.mode,
+            message: "\u5DF2\u7ECF\u5728\u8FD0\u884C\u4E86\uFF0C\u4E0D\u7528\u91CD\u590D\u542F\u52A8\u3002",
+            webuiPort: ports.webuiPort,
+            onebotPort: ports.onebotPort
+          });
+        }
         const started = await startManagedHost(install, {
           host: h,
           desktopQqPath: state.config.managed?.desktopQqPath

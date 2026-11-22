@@ -125,7 +125,7 @@ export function LocalDetect({
           {!result.found && result.napcatRunning !== true && result.budgetExhausted !== true && (
             <div className="detect-notfound" data-testid="detect-notfound">
               <div className="empty-title">没有找到正在运行的 NapCat</div>
-              <div className="empty-desc">启动 NapCat 后重新检测，或到「宿主」页安装一个</div>
+              <div className="empty-desc">启动 NapCat 后重新检测，或到 NapCat 页安装一个</div>
             </div>
           )}
           {candidates.length > 0 && (

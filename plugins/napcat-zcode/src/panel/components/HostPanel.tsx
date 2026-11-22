@@ -71,8 +71,6 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
   const pollTimer = useRef<number | null>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
-  /** 安装完成后自动启动（只做一次）：初次体验的关键闭环 */
-  const autoStartedRef = useRef(false);
   const installs = state?.installs ?? [];
   const statuses = state?.status ?? [];
   const versions = state?.versions ?? [];
@@ -101,8 +99,8 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
   // 安装完成 → 自动启动 → 面板进入扫码登录流程（不用再点一次启动）
   const autoStartId = job?.state === 'succeeded' ? (job.install?.id ?? null) : null;
   useEffect(() => {
-    if (!autoStartId || autoStartedRef.current) return;
-    autoStartedRef.current = true;
+    if (!autoStartId || autoStarted.has(autoStartId)) return;
+    autoStarted.add(autoStartId);
     void run('autostart', async () => {
       await api.startHost(autoStartId);
       await refresh();
@@ -194,7 +192,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <div className="host-page" data-testid="host-panel">
-      <div className="page-title">NapCat 宿主</div>
+      <div className="page-title">NapCat 管理</div>
       <div className="page-desc">在这里安装 NapCat，随时启动和停止</div>
 
       {installs.length > 0 && (
@@ -452,69 +450,139 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
       )}
 
       {!job || job.state !== 'running' ? (
-        <div className="host-card" data-testid="host-install">
-          <div className="host-head">
-            <span className="host-name">安装 NapCat</span>
-          </div>
-          <div className="install-grid">
-            <label className="host-msg">
-              版本
-              <select value={version} onChange={(e) => setVersion(e.target.value)} data-testid="host-version">
-                <option value="">默认（{versions[0] ?? '4.18.42'}）</option>
-                {versions.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="host-msg">
-              运行模式
-              <select value={startMode} onChange={(e) => setStartMode(e.target.value as 'standalone' | 'inject')} data-testid="host-mode">
-                <option value="standalone">独立模式（不影响桌面 QQ，推荐）</option>
-                <option value="inject">注入桌面 QQ（较新版本可能无法启动）</option>
-              </select>
-            </label>
-            <label className="host-msg">
-              安装目录
-              <input
-                type="text"
-                value={dir}
-                onChange={(e) => setDir(e.target.value)}
-                placeholder="默认用插件数据目录"
-                data-testid="host-dir"
-              />
-            </label>
-            <label className="host-msg">
-              下载代理
-              <input
-                type="text"
-                value={proxy}
-                onChange={(e) => setProxy(e.target.value)}
-                placeholder="可选，如 http://127.0.0.1:7897"
-                data-testid="host-proxy"
-              />
-            </label>
-          </div>
-          {startMode === 'inject' && (
-            <div className="host-warn" data-testid="host-inject-warning">
-              注入模式会操作桌面 QQ，较新版本可能无法启动。
+        installs.length > 0 ? (
+          // 已经装过：安装表单收起来，避免误触重复安装
+          <details className="install-extra">
+            <summary data-testid="install-extra-toggle">安装另一个 NapCat</summary>
+            <div className="host-card" data-testid="host-install">
+              <div className="host-head">
+                <span className="host-name">安装 NapCat</span>
+              </div>
+              <div className="install-grid">
+                <label className="host-msg">
+                  版本
+                  <select value={version} onChange={(e) => setVersion(e.target.value)} data-testid="host-version">
+                    <option value="">默认（{versions[0] ?? '4.18.42'}）</option>
+                    {versions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="host-msg">
+                  运行模式
+                  <select value={startMode} onChange={(e) => setStartMode(e.target.value as 'standalone' | 'inject')} data-testid="host-mode">
+                    <option value="standalone">独立模式（不影响桌面 QQ，推荐）</option>
+                    <option value="inject">注入桌面 QQ（较新版本可能无法启动）</option>
+                  </select>
+                </label>
+                <label className="host-msg">
+                  安装目录
+                  <input
+                    type="text"
+                    value={dir}
+                    onChange={(e) => setDir(e.target.value)}
+                    placeholder="默认用插件数据目录"
+                    data-testid="host-dir"
+                  />
+                </label>
+                <label className="host-msg">
+                  下载代理
+                  <input
+                    type="text"
+                    value={proxy}
+                    onChange={(e) => setProxy(e.target.value)}
+                    placeholder="可选，如 http://127.0.0.1:7897"
+                    data-testid="host-proxy"
+                  />
+                </label>
+              </div>
+              {startMode === 'inject' && (
+                <div className="host-warn" data-testid="host-inject-warning">
+                  注入模式会操作桌面 QQ，较新版本可能无法启动。
+                </div>
+              )}
+              <div className="host-acts">
+                <button
+                  className="btn primary"
+                  data-testid="host-install-btn"
+                  disabled={busy !== ''}
+                  onClick={() => void install()}
+                >
+                  {busy === 'install' ? '安装中…' : '下载并安装'}
+                </button>
+                <button className="btn" data-testid="host-refresh" disabled={busy !== ''} onClick={() => void refresh()}>
+                  刷新
+                </button>
+              </div>
             </div>
-          )}
-          <div className="host-acts">
-            <button
-              className="btn primary"
-              data-testid="host-install-btn"
-              disabled={busy !== ''}
-              onClick={() => void install()}
-            >
-              {busy === 'install' ? '安装中…' : '下载并安装'}
-            </button>
-            <button className="btn" data-testid="host-refresh" disabled={busy !== ''} onClick={() => void refresh()}>
-              刷新
-            </button>
+          </details>
+        ) : (
+          <div className="host-card" data-testid="host-install">
+            <div className="host-head">
+              <span className="host-name">安装 NapCat</span>
+            </div>
+            <div className="install-grid">
+              <label className="host-msg">
+                版本
+                <select value={version} onChange={(e) => setVersion(e.target.value)} data-testid="host-version">
+                  <option value="">默认（{versions[0] ?? '4.18.42'}）</option>
+                  {versions.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="host-msg">
+                运行模式
+                <select value={startMode} onChange={(e) => setStartMode(e.target.value as 'standalone' | 'inject')} data-testid="host-mode">
+                  <option value="standalone">独立模式（不影响桌面 QQ，推荐）</option>
+                  <option value="inject">注入桌面 QQ（较新版本可能无法启动）</option>
+                </select>
+              </label>
+              <label className="host-msg">
+                安装目录
+                <input
+                  type="text"
+                  value={dir}
+                  onChange={(e) => setDir(e.target.value)}
+                  placeholder="默认用插件数据目录"
+                  data-testid="host-dir"
+                />
+              </label>
+              <label className="host-msg">
+                下载代理
+                <input
+                  type="text"
+                  value={proxy}
+                  onChange={(e) => setProxy(e.target.value)}
+                  placeholder="可选，如 http://127.0.0.1:7897"
+                  data-testid="host-proxy"
+                />
+              </label>
+            </div>
+            {startMode === 'inject' && (
+              <div className="host-warn" data-testid="host-inject-warning">
+                注入模式会操作桌面 QQ，较新版本可能无法启动。
+              </div>
+            )}
+            <div className="host-acts">
+              <button
+                className="btn primary"
+                data-testid="host-install-btn"
+                disabled={busy !== ''}
+                onClick={() => void install()}
+              >
+                {busy === 'install' ? '安装中…' : '下载并安装'}
+              </button>
+              <button className="btn" data-testid="host-refresh" disabled={busy !== ''} onClick={() => void refresh()}>
+                刷新
+              </button>
+            </div>
           </div>
-        </div>
+        )
       ) : null}
       </div>
 
@@ -534,3 +602,10 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/**
+ * 安装完成后自动启动的**全局**去重：
+ * 组件内 ref 会随页签切换重挂而重置（用户反馈「一切换宿主页就重启」），
+ * 模块级 Set 跨挂载保留，一个安装只自动启动一次。
+ */
+const autoStarted = new Set<string>();

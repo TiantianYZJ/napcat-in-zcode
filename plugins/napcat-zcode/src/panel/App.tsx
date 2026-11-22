@@ -551,7 +551,7 @@ export function App() {
                   setDrawerOpen(false);
                 }}
               >
-                宿主
+                NapCat
               </button>
             </div>
           )}

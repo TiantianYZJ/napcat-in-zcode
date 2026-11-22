@@ -263,6 +263,25 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           throw new Error('还没有受管安装：先用 napcat_install 下载一个。');
         }
         const ports = portsOf(install);
+        // 幂等：已经在跑的实例不重复 spawn（面板切页签会反复触发启动）
+        const probe = await probeManagedHost(install, {
+          host: h,
+          webuiPort: ports.webuiPort,
+          onebotPort: ports.onebotPort,
+          probeTimeoutMs: 800,
+          desktopQqPath: state.config.managed?.desktopQqPath,
+        });
+        if (probe.state === 'running' || probe.state === 'starting') {
+          return ok({
+            started: false,
+            alreadyRunning: true,
+            pid: probe.pid,
+            mode: install.mode,
+            message: '已经在运行了，不用重复启动。',
+            webuiPort: ports.webuiPort,
+            onebotPort: ports.onebotPort,
+          });
+        }
         const started = await startManagedHost(install, {
           host: h,
           desktopQqPath: state.config.managed?.desktopQqPath,

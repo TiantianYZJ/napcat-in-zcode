@@ -1387,6 +1387,18 @@ textarea {
   }
 }
 
+/* 已有安装时收起的「安装另一个」入口 */
+details.install-extra > summary {
+  cursor: pointer;
+  font-size: var(--text-ui-sm);
+  color: var(--color-foreground-subtle);
+  padding: 6px 0;
+}
+
+details.install-extra > summary:hover {
+  color: var(--color-foreground);
+}
+
 details.job-notes {
   font-size: var(--text-ui-xs);
   color: var(--color-foreground-subtlest);
