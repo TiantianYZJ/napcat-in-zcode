@@ -27740,7 +27740,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.12.0" });
+var server = new McpServer({ name: "napcat", version: "0.12.1" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

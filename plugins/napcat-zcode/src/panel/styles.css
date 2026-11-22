@@ -54,11 +54,11 @@
   --text-ui-sm: var(--font-text-sm-size, calc(var(--ui-font-size) - 2px));
   --text-ui-xs: var(--font-text-xs-size, calc(var(--ui-font-size) - 4px));
 
-  /* ── 圆角层级：比宿主默认再大两档（max() 保证不小于这个下限） ── */
-  --radius-xl: max(var(--border-radius-xl, 12px), 20px);
-  --radius-lg: max(var(--border-radius-lg, 8px), 16px);
-  --radius-md: max(var(--border-radius-md, 6px), 12px);
-  --radius-sm: max(var(--border-radius-sm, 4px), 10px);
+  /* ── 圆角层级：对齐原生窗口的大圆角（max() 保证不小于这个下限） ── */
+  --radius-xl: max(var(--border-radius-xl, 12px), 28px);
+  --radius-lg: max(var(--border-radius-lg, 8px), 20px);
+  --radius-md: max(var(--border-radius-md, 6px), 14px);
+  --radius-sm: max(var(--border-radius-sm, 4px), 12px);
 
   /* ── 表面与文字（Zai Light 回退；有宿主令牌时用宿主值） ─────────── */
   --color-background: var(--color-background-primary, #f8f8f8);
