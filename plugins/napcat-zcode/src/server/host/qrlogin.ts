@@ -42,6 +42,7 @@ async function webuiPost(
   body: Record<string, unknown>,
 ): Promise<WebuiEnvelope> {
   const res = await fetcher(url, {
+    method: 'POST',
     headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(WEBUI_TIMEOUT_MS),
