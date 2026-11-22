@@ -21807,7 +21807,7 @@ var StdioServerTransport = class {
 };
 
 // src/server/index.ts
-import { dirname as dirname5, join as join7 } from "node:path";
+import { dirname as dirname5, join as join8 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/server/tools.ts
@@ -24427,8 +24427,8 @@ function detectLocalOnce(state, opts = {}) {
 }
 
 // src/server/host/host-tools.ts
-import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute4, join as join6 } from "node:path";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, writeFileSync as writeFileSync6 } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute4, join as join7 } from "node:path";
 
 // src/server/tool-results.ts
 function ok(data) {
@@ -26065,6 +26065,15 @@ var ManagedHost = class {
     }
     return void 0;
   }
+  /** 更新一个安装的端口记录（端口自适应后回写台账）。 */
+  setPorts(id, ports) {
+    const index = this.installs.findIndex((i) => i.id === id);
+    if (index < 0) return;
+    const next = [...this.installs];
+    next[index] = { ...this.installs[index], webuiPort: ports.webuiPort, onebotPort: ports.onebotPort };
+    this.installs = next;
+    this.persistRegistry(next);
+  }
   /** 取某个安装的 WebUI token **掩码**（对外唯一允许的形态）。 */
   maskWebuiToken(target) {
     return maskSecret(this.webuiTokenOf(target));
@@ -26522,11 +26531,96 @@ async function pollQrLogin(fetcher, opts) {
   return { phase: "waiting", message: "\u8BF7\u7528\u624B\u673A QQ \u626B\u4E00\u626B", qrDataUrl };
 }
 
+// src/server/host/portfix.ts
+import { execFile } from "node:child_process";
+import { createServer } from "node:net";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join5 } from "node:path";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+function isPortFree(port) {
+  return new Promise((resolve4) => {
+    const srv = createServer();
+    srv.once("error", () => resolve4(false));
+    srv.listen({ host: "127.0.0.1", port }, () => {
+      srv.close(() => resolve4(true));
+    });
+  });
+}
+async function findFreePorts(webuiPreferred, onebotPreferred) {
+  const taken = /* @__PURE__ */ new Set();
+  const pick2 = async (base) => {
+    for (let p = base + 1; p <= base + 32; p++) {
+      if (taken.has(p)) continue;
+      if (await isPortFree(p)) {
+        taken.add(p);
+        return p;
+      }
+    }
+    return void 0;
+  };
+  const webuiPort = await pick2(webuiPreferred);
+  if (webuiPort === void 0) return null;
+  const onebotPort = await pick2(onebotPreferred);
+  if (onebotPort === void 0) return null;
+  return { webuiPort, onebotPort };
+}
+async function remapFreePorts(preferred) {
+  const found = await findFreePorts(preferred.webuiPort, preferred.onebotPort);
+  if (!found) {
+    throw new Error("6099/3000 \u9644\u8FD1\u7684\u7AEF\u53E3\u90FD\u88AB\u5360\u7528\u4E86\uFF0C\u627E\u4E0D\u5230\u53EF\u7528\u7684\u7AEF\u53E3\u3002");
+  }
+  return found;
+}
+function configDirs(dir) {
+  return [join5(dir, "napcat", "config"), join5(dir, "config")];
+}
+function rewriteNapcatPorts(dir, ports) {
+  for (const configDir of configDirs(dir)) {
+    try {
+      const webuiPath = join5(configDir, "webui.json");
+      const webui = JSON.parse(readFileSync5(webuiPath, "utf8"));
+      if (Number.isInteger(webui.port)) {
+        webui.port = ports.webuiPort;
+        writeFileSync5(webuiPath, JSON.stringify(webui, null, 2), "utf-8");
+      }
+    } catch {
+    }
+    try {
+      const p = join5(configDir, "onebot11.json");
+      const cfg = JSON.parse(readFileSync5(p, "utf8"));
+      const http = cfg.network?.httpServers?.[0];
+      if (http && Number.isInteger(http.port)) {
+        http.port = ports.onebotPort;
+        writeFileSync5(p, JSON.stringify(cfg, null, 2), "utf-8");
+      }
+    } catch {
+    }
+  }
+}
+async function killProcessesUnder(dir) {
+  const escaped = dir.replace(/'/g, "''");
+  const script = `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${escaped}*' } | Select-Object -ExpandProperty ProcessId`;
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { timeout: 15e3 }
+  );
+  const pids = stdout.split(/\r?\n/).map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
+  for (const pid of pids) {
+    try {
+      await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 1e4 });
+    } catch {
+    }
+  }
+  return pids.length;
+}
+
 // src/server/host/supervise.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
 import { connect as connect2 } from "node:net";
-import { delimiter, join as join5 } from "node:path";
+import { delimiter, join as join6 } from "node:path";
 var INJECT_MODE_WARNING = "\u6CE8\u5165\u6A21\u5F0F\u4F1A\u542F\u52A8\u684C\u9762 QQ \u5E76\u5411\u5176\u8FDB\u7A0B\u6CE8\u5165\u672C\u7EC4\u4EF6\u3002QQ 9.9.36 \u53CA\u4EE5\u4E0A\u7248\u672C\u5728\u542F\u52A8\u524D\u4F1A\u505A\u539F\u751F\u5B8C\u6574\u6027\u68C0\u67E5\uFF0C\u6CE8\u5165\u53EF\u80FD\u5BFC\u81F4\u5B83\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\uFF0C\u8BF7\u91CD\u65B0\u5B89\u88C5\u300D\u5E76\u4E2D\u6B62\u542F\u52A8\u3002\u4E0D\u786E\u5B9A\u65F6\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002";
 function isProcessAlive(pid) {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
@@ -26580,7 +26674,7 @@ function pathWithFirst(dir) {
   return `${dir}${delimiter}${process.env.PATH ?? ""}`;
 }
 function assertManagedProgram(dir, fileName) {
-  if (!existsSync3(join5(dir, fileName))) {
+  if (!existsSync3(join6(dir, fileName))) {
     throw new Error(`\u542F\u52A8\u5931\u8D25\uFF1A\u5B89\u88C5\u76EE\u5F55\u91CC\u627E\u4E0D\u5230 ${fileName}\uFF08\u5B89\u88C5\u53EF\u80FD\u4E0D\u5B8C\u6574\uFF09\u3002`);
   }
 }
@@ -26590,10 +26684,10 @@ async function startManagedHost(install, opts) {
   }
   const mode = install.mode ?? "standalone";
   if (mode === "inject") {
-    const napcatDir = join5(install.dir, "napcat");
+    const napcatDir = join6(install.dir, "napcat");
     assertManagedProgram(napcatDir, "NapCatWinBootMain.exe");
     const qqPath = resolveDesktopQqPath(install, opts);
-    const hook = join5(napcatDir, "NapCatWinBootHook.dll");
+    const hook = join6(napcatDir, "NapCatWinBootHook.dll");
     const child2 = spawn("NapCatWinBootMain.exe", [qqPath, hook], {
       cwd: napcatDir,
       detached: true,
@@ -26603,11 +26697,11 @@ async function startManagedHost(install, opts) {
       env: {
         ...process.env,
         PATH: pathWithFirst(napcatDir),
-        NAPCAT_PATCH_PACKAGE: join5(napcatDir, "qqnt.json"),
-        NAPCAT_LOAD_PATH: join5(napcatDir, "loadNapCat.js"),
+        NAPCAT_PATCH_PACKAGE: join6(napcatDir, "qqnt.json"),
+        NAPCAT_LOAD_PATH: join6(napcatDir, "loadNapCat.js"),
         NAPCAT_INJECT_PATH: hook,
-        NAPCAT_LAUNCHER_PATH: join5(napcatDir, "NapCatWinBootMain.exe"),
-        NAPCAT_MAIN_PATH: join5(napcatDir, "napcat.mjs")
+        NAPCAT_LAUNCHER_PATH: join6(napcatDir, "NapCatWinBootMain.exe"),
+        NAPCAT_MAIN_PATH: join6(napcatDir, "napcat.mjs")
       }
     });
     await waitForSpawn(child2);
@@ -26754,7 +26848,7 @@ function resolveDesktopQqPath(install, opts) {
     ["config", "qq_path.txt"]
   ]) {
     try {
-      const text = readFileSync5(join5(install.dir, ...rel), "utf8").trim();
+      const text = readFileSync6(join6(install.dir, ...rel), "utf8").trim();
       if (text) {
         if (!existsSync3(text)) {
           throw new Error("\u6CE8\u5165\u6A21\u5F0F\u4FDD\u5B58\u7684\u684C\u9762 QQ \u8DEF\u5F84\u5DF2\u5931\u6548\uFF08\u6587\u4EF6\u4E0D\u5B58\u5728\uFF09\uFF0C\u8BF7\u91CD\u65B0\u8BBE\u7F6E\u3002");
@@ -26816,9 +26910,9 @@ var DEFAULT_ONEBOT_PORT2 = 3e3;
 function portsOf(install) {
   let webuiPort = install.webuiPort ?? DEFAULT_WEBUI_PORT2;
   let onebotPort = install.onebotPort ?? DEFAULT_ONEBOT_PORT2;
-  const configDir = join6(install.dir, "napcat", "config");
+  const configDir = join7(install.dir, "napcat", "config");
   try {
-    const webui = JSON.parse(readFileSync6(join6(configDir, "webui.json"), "utf8"));
+    const webui = JSON.parse(readFileSync7(join7(configDir, "webui.json"), "utf8"));
     if (Number.isInteger(webui?.port) && (webui?.port ?? 0) > 0) webuiPort = webui.port;
   } catch {
   }
@@ -26826,7 +26920,7 @@ function portsOf(install) {
     const files = readdirSync3(configDir);
     const onebotFile = files.find((f) => f.startsWith("onebot11_") && f.endsWith(".json"));
     if (onebotFile) {
-      const cfg = JSON.parse(readFileSync6(join6(configDir, onebotFile), "utf8"));
+      const cfg = JSON.parse(readFileSync7(join7(configDir, onebotFile), "utf8"));
       const http = cfg.network?.httpServers?.find((s) => s.enable !== false);
       if (Number.isInteger(http?.port) && (http?.port ?? 0) > 0) onebotPort = http.port;
     }
@@ -26927,7 +27021,7 @@ function registerHostTools(server2, state) {
             `\u6CA1\u6709\u53EF\u7528\u7684 NapCat ${wantVersion} \u5236\u54C1\uFF08\u5F53\u524D\u5E73\u53F0\u53EA\u63D0\u4F9B ${availableVersions().join("\u3001")}\uFF09\u3002`
           );
         }
-        const targetDir = dir || join6(dataDir(), `napcat-${artifact.version}`);
+        const targetDir = dir || join7(dataDir(), `napcat-${artifact.version}`);
         if (!isAbsolute4(targetDir)) {
           throw new Error("\u5B89\u88C5\u76EE\u5F55\u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\uFF1A\u76F8\u5BF9\u8DEF\u5F84\u4F1A\u968F\u5BBF\u4E3B\u7684\u5DE5\u4F5C\u76EE\u5F55\u53D8\u5316\uFF0C\u65E0\u6CD5\u590D\u73B0\u3002");
         }
@@ -27015,13 +27109,25 @@ function registerHostTools(server2, state) {
           });
         }
         if (probe.state === "unknown") {
+          const remapped = await remapFreePorts(ports);
+          h.setPorts(install.id, remapped);
+          rewriteNapcatPorts(install.dir, remapped);
+          const started2 = await startManagedHost(
+            { ...install, webuiPort: remapped.webuiPort, onebotPort: remapped.onebotPort },
+            {
+              host: h,
+              desktopQqPath: state.config.managed?.desktopQqPath
+            }
+          );
           return ok({
-            started: false,
-            blocked: "port-conflict",
-            mode: install.mode,
-            message: "\u7AEF\u53E3\u88AB\u53E6\u4E00\u4E2A NapCat \u5B9E\u4F8B\u5360\u7528\uFF0C\u8FD9\u4E2A\u5B89\u88C5\u6682\u65F6\u542F\u52A8\u4E0D\u4E86\u3002\u53EF\u4EE5\u5148\u505C\u6389\u90A3\u4E2A\u5B9E\u4F8B\uFF0C\u6216\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u7ED9\u8FD9\u4E2A\u5B89\u88C5\u6362\u4E00\u7EC4\u7AEF\u53E3\u3002",
-            webuiPort: ports.webuiPort,
-            onebotPort: ports.onebotPort
+            started: true,
+            pid: started2.pid,
+            mode: started2.mode,
+            remapped: true,
+            message: `\u9ED8\u8BA4\u7AEF\u53E3\u88AB\u5360\u7528\uFF0C\u5DF2\u81EA\u52A8\u6539\u7528 WebUI ${remapped.webuiPort} / OneBot ${remapped.onebotPort} \u5E76\u542F\u52A8\u3002`,
+            warning: started2.warning,
+            webuiPort: remapped.webuiPort,
+            onebotPort: remapped.onebotPort
           });
         }
         const started = await startManagedHost(install, {
@@ -27087,13 +27193,22 @@ function registerHostTools(server2, state) {
         if (!install) {
           throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u6CA1\u6709\u53EF\u5378\u8F7D\u7684\u5BF9\u8C61\u3002");
         }
-        const r = h.uninstall(install.id);
+        let killed = 0;
+        let r;
+        try {
+          r = h.uninstall(install.id);
+        } catch (firstErr) {
+          if (!/EPERM|Permission denied|被占用/i.test(String(firstErr))) throw firstErr;
+          killed = await killProcessesUnder(install.dir);
+          r = h.uninstall(install.id);
+        }
         return ok({
           uninstalled: true,
           id: r.id,
           dir: r.dir,
           alreadyGone: r.alreadyGone,
           kept: r.kept,
+          killedProcesses: killed,
           message: r.kept ? `\u5DF2\u4ECE\u53F0\u8D26\u79FB\u9664\uFF08\u4FDD\u7559\u4F60\u7684\u5B89\u88C5\u76EE\u5F55\uFF09\uFF1A${r.dir}` : r.alreadyGone ? `\u76EE\u5F55\u5DF2\u4E0D\u5B58\u5728\uFF0C\u5DF2\u4ECE\u53F0\u8D26\u6E05\u7406\uFF1A${r.dir}` : `\u5DF2\u5220\u9664\u5B89\u88C5\u76EE\u5F55\u5E76\u6E05\u7406\u53F0\u8D26\uFF1A${r.dir}`
         });
       } catch (e) {
@@ -27117,26 +27232,26 @@ function registerHostTools(server2, state) {
           throw new Error("\u63A5\u7BA1\u5931\u8D25\uFF1AconfigDir \u5FC5\u987B\u662F\u7EDD\u5BF9\u8DEF\u5F84\u3002");
         }
         const napcatDir = dirname4(configDir);
-        const bootExe = join6(napcatDir, "NapCatWinBootMain.exe");
+        const bootExe = join7(napcatDir, "NapCatWinBootMain.exe");
         if (!existsSync4(bootExe)) {
           throw new Error(
             `\u63A5\u7BA1\u5931\u8D25\uFF1A${napcatDir} \u91CC\u6CA1\u6709 NapCatWinBootMain.exe\u3002\u8FD9\u79CD\u5B89\u88C5\u5E03\u5C40\u6682\u4E0D\u652F\u6301\u63A5\u7BA1\u3002`
           );
         }
         const rootDir = dirname4(napcatDir);
-        const qqExe = join6(rootDir, "QQ.exe");
+        const qqExe = join7(rootDir, "QQ.exe");
         const hasQq = existsSync4(qqExe);
         let version2 = "unknown";
         try {
-          const pkg = JSON.parse(readFileSync6(join6(napcatDir, "package.json"), "utf8"));
+          const pkg = JSON.parse(readFileSync7(join7(napcatDir, "package.json"), "utf8"));
           if (typeof pkg.version === "string" && pkg.version.trim() !== "") version2 = pkg.version.trim();
         } catch {
         }
         if (hasQq) {
-          const qp = join6(configDir, "qq_path.txt");
+          const qp = join7(configDir, "qq_path.txt");
           if (!existsSync4(qp)) {
             try {
-              writeFileSync5(qp, qqExe, "utf-8");
+              writeFileSync6(qp, qqExe, "utf-8");
             } catch (err) {
               throw new Error(`\u63A5\u7BA1\u5931\u8D25\uFF1A\u65E0\u6CD5\u5199 ${qp}\uFF08${err instanceof Error ? err.message : String(err)}\uFF09\u3002`);
             }
@@ -27662,7 +27777,7 @@ function registerTools(server2, state) {
 }
 
 // src/server/uiresource.ts
-import { readFileSync as readFileSync7 } from "node:fs";
+import { readFileSync as readFileSync8 } from "node:fs";
 var PANEL_URI2 = "ui://napcat-zcode/panel.html";
 var PANEL_MIME = "text/html;profile=mcp-app";
 var ERROR_HTML = "<!doctype html><html><body><p>panel.html missing \u2014 run `npm run build`</p></body></html>";
@@ -27670,7 +27785,7 @@ function registerPanelResource(server2, htmlPath) {
   server2.registerResource("panel", PANEL_URI2, { mimeType: PANEL_MIME }, async (uri) => {
     let html;
     try {
-      html = readFileSync7(htmlPath, "utf-8");
+      html = readFileSync8(htmlPath, "utf-8");
     } catch {
       html = ERROR_HTML;
     }
@@ -27771,9 +27886,9 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.12.3" });
+var server = new McpServer({ name: "napcat", version: "0.12.4" });
 registerTools(server, appState);
-registerPanelResource(server, join7(here, "ui", "panel.html"));
+registerPanelResource(server, join8(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);
 registerImageResource(server, imageFetch);
 await server.connect(new StdioServerTransport());

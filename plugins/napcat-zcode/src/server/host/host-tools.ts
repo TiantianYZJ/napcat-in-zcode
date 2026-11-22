@@ -31,6 +31,7 @@ import {
   type ManagedInstall,
 } from './manager.js';
 import { pollQrLogin } from './qrlogin.js';
+import { killProcessesUnder, findFreePorts, rewriteNapcatPorts, remapFreePorts } from './portfix.js';
 import { probeManagedHost, startManagedHost, stopManagedHost, type HostStatus } from './supervise.js';
 
 /** 面板资源 URI（必须与清单 `ui.surfaces[0].resourceUri` 一致）。 */
@@ -283,17 +284,29 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           });
         }
         // 端口冲突：另一个 NapCat 实例占着端口（不是本插件启动的）。
-        // 仍去 spawn 只会得到一个绑定失败、起不来的半成品进程——如实拒绝。
+        // 不再把用户堵在「停掉别的实例」这一条路上——受管安装可以改自己的配置，
+        // 自动换一组空闲端口并启动（各实例端口独立，互不抢）。
         if (probe.state === 'unknown') {
+          const remapped = await remapFreePorts(ports);
+          h.setPorts(install.id, remapped);
+          rewriteNapcatPorts(install.dir, remapped);
+          const started = await startManagedHost(
+            { ...install, webuiPort: remapped.webuiPort, onebotPort: remapped.onebotPort },
+            {
+              host: h,
+              desktopQqPath: state.config.managed?.desktopQqPath,
+            },
+          );
           return ok({
-            started: false,
-            blocked: 'port-conflict',
-            mode: install.mode,
+            started: true,
+            pid: started.pid,
+            mode: started.mode,
+            remapped: true,
             message:
-              '端口被另一个 NapCat 实例占用，这个安装暂时启动不了。' +
-              '可以先停掉那个实例，或在插件设置里给这个安装换一组端口。',
-            webuiPort: ports.webuiPort,
-            onebotPort: ports.onebotPort,
+              `默认端口被占用，已自动改用 WebUI ${remapped.webuiPort} / OneBot ${remapped.onebotPort} 并启动。`,
+            warning: started.warning,
+            webuiPort: remapped.webuiPort,
+            onebotPort: remapped.onebotPort,
           });
         }
         const started = await startManagedHost(install, {
@@ -367,13 +380,24 @@ export function registerHostTools(server: McpServer, state: AppState): void {
         if (!install) {
           throw new Error('还没有受管安装：没有可卸载的对象。');
         }
-        const r = h.uninstall(install.id);
+        let killed = 0;
+        let r;
+        try {
+          r = h.uninstall(install.id);
+        } catch (firstErr) {
+          // 残留进程锁着安装目录（NapCat/QQ 子进程）→ 只结束路径位于目录内的
+          // 进程（PowerShell 查询），然后重试一次；其它错误原样抛出
+          if (!/EPERM|Permission denied|被占用/i.test(String(firstErr))) throw firstErr;
+          killed = await killProcessesUnder(install.dir);
+          r = h.uninstall(install.id);
+        }
         return ok({
           uninstalled: true,
           id: r.id,
           dir: r.dir,
           alreadyGone: r.alreadyGone,
           kept: r.kept,
+          killedProcesses: killed,
           message: r.kept
             ? `已从台账移除（保留你的安装目录）：${r.dir}`
             : r.alreadyGone

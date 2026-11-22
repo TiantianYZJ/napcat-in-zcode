@@ -1025,6 +1025,16 @@ export class ManagedHost {
     return undefined;
   }
 
+  /** 更新一个安装的端口记录（端口自适应后回写台账）。 */
+  setPorts(id: string, ports: { webuiPort: number; onebotPort: number }): void {
+    const index = this.installs.findIndex((i) => i.id === id);
+    if (index < 0) return;
+    const next = [...this.installs];
+    next[index] = { ...this.installs[index], webuiPort: ports.webuiPort, onebotPort: ports.onebotPort };
+    this.installs = next;
+    this.persistRegistry(next);
+  }
+
   /** 取某个安装的 WebUI token **掩码**（对外唯一允许的形态）。 */
   maskWebuiToken(target: string): string | undefined {
     return maskSecret(this.webuiTokenOf(target));
