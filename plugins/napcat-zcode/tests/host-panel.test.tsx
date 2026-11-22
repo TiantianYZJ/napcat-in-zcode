@@ -144,8 +144,13 @@ describe('HostPanel', () => {
   });
 
   it('opens WebUI only when the host advertises openLinks', async () => {
+    // 已登录 → 引导卡收起，实例操作行里的「打开 WebUI」才出现
     mocks.hostStatus.mockResolvedValue(
-      hostState('running', { webuiPort: 6099, webuiReachable: true }),
+      hostState('running', {
+        webuiPort: 6099,
+        webuiReachable: true,
+        login: { user_id: '1', nickname: '已登录' },
+      }),
     );
     render(<HostPanel />);
     const button = await screen.findByTestId('host-open-webui');
@@ -299,9 +304,14 @@ describe('HostPanel', () => {
     expect(screen.getByTestId('qr-step-0').getAttribute('data-state')).toBe('done');
     expect(screen.getByTestId('qr-step-1').getAttribute('data-state')).toBe('now');
 
-    // 登录成功后：给出「去看聊天记录」出口与 OneBot 已开启的提示
+    // 登录成功后：给出「去看聊天记录」出口与「聊天数据已接上」的提示
     // （面板每 2 秒轮询一次 → 等待窗口要大于轮询间隔）
-    mocks.qrLogin.mockResolvedValue({ phase: 'logined', message: '登录成功', onebotEnabled: true });
+    mocks.qrLogin.mockResolvedValue({
+      phase: 'logined',
+      message: '登录成功',
+      onebotEnabled: true,
+      connected: true,
+    });
     await waitFor(() => expect(screen.getByTestId('qr-onebot-ok')).toBeTruthy(), { timeout: 4000 });
     fireEvent.click(screen.getByTestId('qr-open-records'));
     expect(onRecords).toHaveBeenCalledTimes(1);

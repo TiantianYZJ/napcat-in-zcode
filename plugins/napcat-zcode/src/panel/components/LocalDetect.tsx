@@ -118,7 +118,7 @@ export function LocalDetect({
           )}
           {!result.found && result.napcatRunning === true && (
             <div className="detect-nowebui" data-testid="detect-nowebui">
-              <div className="empty-title">NapCat 正在运行，还没有开启 OneBot</div>
+              <div className="empty-title">NapCat 正在运行，但聊天数据还没接上</div>
               <div className="empty-desc">打开 WebUI，在网络配置里启用 HTTP Server，再回这里连接</div>
               {typeof result.webuiPort === 'number' && (
                 <div className="host-acts">

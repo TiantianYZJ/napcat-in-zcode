@@ -15,6 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { connect } from 'node:net';
 import { promisify } from 'node:util';
 import qrLib from 'qrcode-generator';
 import type { QrFetcher as WebuiFetch } from './qrfetch.js';
@@ -33,6 +34,8 @@ export interface QrLoginResult {
   onebotEnabled?: boolean;
   /** OneBot 开启失败时的原因（成功则为空）。 */
   onebotMessage?: string;
+  /** OneBot 开启成功后的端点（插件据此把自己连上去）。 */
+  onebotEndpoint?: string;
 }
 
 /** 可注入的最小 fetch 形状（POST JSON）。 */
@@ -127,19 +130,35 @@ async function credentialFor(
  * 开启的 OneBot Server → 面板永远连不上。安装时写的全局配置会被账号级文件盖过优先级，
  * 靠重启 NapCat 生效对新手太重 —— WebUI 的 `OB11Config/SetConfig` 会热加载配置，
  * 这里直接用它开启（免重启）。
+ *
+ * **协议要点（NapCat 4.18.42 产物 bundle 内实测）**：
+ * - `POST /api/OB11Config/GetConfig` → 返回**配置对象**（已按账号级/全局优先级解析）；
+ * - `POST /api/OB11Config/SetConfig` → body 必须是 `{ config: "<JSON 字符串>" }`！
+ *   服务端内部是 `JSON.parse(t.body.config)`，**传对象会被判为「config is empty」**。
+ *   （早期版本传对象 → WebUI 回 `config is empty`，表现为「热开启永远失败」。）
+ *
+ * 写完配置 NapCat 会 `reloadNetwork` 热重载，但端口是**异步**开的 →
+ * 必须等它真的监听上才算成功（否则会出现「说开了、连不上」）。
  */
 async function ensureOneBotEnabled(
   fetcher: WebuiFetch,
   port: number,
   credential: string,
   onebotPort: number,
-): Promise<{ onebotEnabled?: boolean; onebotMessage?: string }> {
+  probe: (port: number) => Promise<boolean>,
+): Promise<{ onebotEnabled?: boolean; onebotMessage?: string; onebotEndpoint?: string }> {
   const base = `http://127.0.0.1:${port}`;
   let current: Record<string, unknown>;
   try {
     current = unwrap(await webuiPost(fetcher, `${base}/api/OB11Config/GetConfig`, credential, {}));
   } catch (err) {
-    return { onebotEnabled: false, onebotMessage: `读取 OneBot 配置失败：${err instanceof Error ? err.message : String(err)}` };
+    return {
+      onebotEnabled: false,
+      onebotMessage: `读取数据通道配置失败：${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (Object.keys(current).length === 0) {
+    return { onebotEnabled: false, onebotMessage: 'NapCat 没有返回数据通道配置' };
   }
   const network = (current.network ?? {}) as { httpServers?: unknown[] };
   const servers = Array.isArray(network.httpServers) ? [...network.httpServers] : [];
@@ -150,27 +169,75 @@ async function ensureOneBotEnabled(
       (s as { enable?: boolean }).enable === true &&
       (s as { port?: number }).port === onebotPort,
   );
-  if (already) return { onebotEnabled: true };
-  servers.push({
-    name: 'napcat-zcode',
-    enable: true,
-    port: onebotPort,
-    host: '127.0.0.1',
-    enableCors: false,
-    enableWebsocket: false,
-    messagePostFormat: 'array',
-    token: '',
-    debug: false,
-  });
-  try {
-    await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
-      ...current,
-      network: { ...network, httpServers: servers },
+  if (!already) {
+    servers.push({
+      name: 'napcat-zcode',
+      enable: true,
+      port: onebotPort,
+      host: '127.0.0.1',
+      enableCors: false,
+      enableWebsocket: false,
+      messagePostFormat: 'array',
+      token: '',
+      debug: false,
     });
-    return { onebotEnabled: true };
-  } catch (err) {
-    return { onebotEnabled: false, onebotMessage: `开启 OneBot 失败：${err instanceof Error ? err.message : String(err)}` };
+    try {
+      await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
+        // config 必须是 **JSON 字符串**（WebUI 内部按字符串解析）
+        config: JSON.stringify({ ...current, network: { ...network, httpServers: servers } }),
+      });
+    } catch (err) {
+      return {
+        onebotEnabled: false,
+        onebotMessage: `开启数据通道失败：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
+  // 等端口真的监听：热重载是异步的，立刻探会误判成失败
+  const listening = await waitPortListening(onebotPort, 5000, probe);
+  if (!listening) {
+    return {
+      onebotEnabled: false,
+      onebotMessage: `NapCat 没有在 ${onebotPort} 端口上开数据通道`,
+    };
+  }
+  return { onebotEnabled: true, onebotEndpoint: `http://127.0.0.1:${onebotPort}` };
+}
+
+/**
+ * 等某个端口真的开始监听（最多等 `timeoutMs`）。
+ *
+ * 「配置写成功」≠「端口开了」——NapCat 热重载网络是异步的。
+ * 提前返回会让面板说「已开启」而插件连不上，用户看到的是又一次死胡同。
+ */
+async function waitPortListening(
+  port: number,
+  timeoutMs: number,
+  probe: (port: number) => Promise<boolean>,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  const step = 250;
+  for (;;) {
+    if (await probe(port)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, step));
+  }
+}
+
+/** 默认的端口探活（真实 TCP 连接回环）。 */
+async function tcpProbe(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    const done = (ok: boolean): void => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(800);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
 }
 
 /**
@@ -178,12 +245,20 @@ async function ensureOneBotEnabled(
  * waiting → 展示二维码；accepted → 已扫码待确认；logined → 登录完成。
  *
  * `opts.refresh` = 强制换新凭证（重新登录 → 新的二维码；旧的扫码会话已作废时用）。
+ * `opts.probePort` = 端口探活（测试注入；默认真实 TCP 连回环）。
  */
 export async function pollQrLogin(
   fetcher: WebuiFetch,
-  opts: { webuiPort: number; token: string; refresh?: boolean; onebotPort?: number },
+  opts: {
+    webuiPort: number;
+    token: string;
+    refresh?: boolean;
+    onebotPort?: number;
+    probePort?: (port: number) => Promise<boolean>;
+  },
 ): Promise<QrLoginResult> {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
+  const probe = opts.probePort ?? tcpProbe;
   if (opts.refresh === true) credentialCache.delete(opts.webuiPort);
   let credential: string;
   try {
@@ -219,7 +294,13 @@ export async function pollQrLogin(
   if (status.isLogin === true || status.coreReady === true) {
     // 登录成功 → 顺手把 OneBot HTTP Server 热开启（NapCat 登录后自建的账号级配置
     // 不含 OneBot Server，不开就永远连不上；WebUI 的 SetConfig 会热加载，免重启）
-    const onebot = await ensureOneBotEnabled(fetcher, opts.webuiPort, credential, opts.onebotPort ?? 3000);
+    const onebot = await ensureOneBotEnabled(
+      fetcher,
+      opts.webuiPort,
+      credential,
+      opts.onebotPort ?? 3000,
+      probe,
+    );
     return { phase: 'logined', message: '登录成功', ...onebot };
   }
 

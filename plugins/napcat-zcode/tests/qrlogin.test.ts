@@ -150,12 +150,47 @@ describe('pollQrLogin（扫码登录轮询）', () => {
       },
       seen,
     );
-    const r = await pollQrLogin(fetcher, { webuiPort: 6108, token: PORT.token, onebotPort: 3000 });
+    const r = await pollQrLogin(fetcher, {
+      webuiPort: 6108,
+      token: PORT.token,
+      onebotPort: 3000,
+      probePort: async () => true,
+    });
     expect(r.phase).toBe('logined');
     expect(r.onebotEnabled).toBe(true);
+    expect(r.onebotEndpoint).toBe('http://127.0.0.1:3000');
     const setBody = seen.find((s) => s.startsWith('/api/OB11Config/SetConfig|')) ?? '';
-    expect(setBody).toContain('"port":3000');
-    expect(setBody).toContain('"enable":true');
+    expect(setBody).toContain('"port\\":3000');
+    expect(setBody).toContain('"enable\\":true');
+  });
+
+  it('SetConfig 的 config 必须是 JSON 字符串（传对象会被 WebUI 判为 config is empty）', async () => {
+    const seen: string[] = [];
+    const fetcher = fakeWebui(
+      {
+        ...baseRoutes({ isLogin: true }),
+        '/api/OB11Config/GetConfig': {
+          body: { code: 0, data: { network: { httpServers: [] } }, message: 'success' },
+        },
+        '/api/OB11Config/SetConfig': { body: { code: 0, data: {}, message: 'success' } },
+      },
+      seen,
+    );
+    await pollQrLogin(fetcher, {
+      webuiPort: 6110,
+      token: PORT.token,
+      onebotPort: 3000,
+      probePort: async () => true,
+    });
+    const raw = seen.find((s) => s.startsWith('/api/OB11Config/SetConfig|')) ?? '';
+    const bodyPart = raw.slice(raw.indexOf('|', raw.indexOf('|') + 1) + 1);
+    const body = JSON.parse(bodyPart) as { config?: unknown };
+    // config 是**字符串**（WebUI 内部按字符串解析），不是对象
+    expect(typeof body.config).toBe('string');
+    const cfg = JSON.parse(body.config as string) as {
+      network: { httpServers: Array<{ port: number; enable: boolean }> };
+    };
+    expect(cfg.network.httpServers.some((s) => s.port === 3000 && s.enable)).toBe(true);
   });
 
   it('OneBot 已开启时不重复写配置', async () => {
@@ -173,8 +208,33 @@ describe('pollQrLogin（扫码登录轮询）', () => {
       },
       seen,
     );
-    const r = await pollQrLogin(fetcher, { webuiPort: 6109, token: PORT.token, onebotPort: 3000 });
+    const r = await pollQrLogin(fetcher, {
+      webuiPort: 6109,
+      token: PORT.token,
+      onebotPort: 3000,
+      probePort: async () => true,
+    });
     expect(r.onebotEnabled).toBe(true);
     expect(seen.some((s) => s.startsWith('/api/OB11Config/SetConfig|'))).toBe(false);
   });
+
+  it('端口没真的监听 → 如实说没接上（不谎报「已开启」）', async () => {
+    const fetcher = fakeWebui({
+      ...baseRoutes({ isLogin: true }),
+      '/api/OB11Config/GetConfig': {
+        body: { code: 0, data: { network: { httpServers: [] } }, message: 'success' },
+      },
+      '/api/OB11Config/SetConfig': { body: { code: 0, data: {}, message: 'success' } },
+    });
+    const r = await pollQrLogin(fetcher, {
+      webuiPort: 6111,
+      token: PORT.token,
+      onebotPort: 3000,
+      probePort: async () => false,
+    });
+    expect(r.phase).toBe('logined');
+    expect(r.onebotEnabled).toBe(false);
+    expect(r.onebotMessage).toContain('没有在 3000 端口上开数据通道');
+    // 生产行为要等端口真的起来（5 秒）→ 给足超时
+  }, 12_000);
 });

@@ -3,18 +3,21 @@ import { friendlyError, type StatusInfo } from '../api.js';
 /**
  * 连接模式的中文标签。
  *
- * 服务端只报两种：`external`（外部 OneBot 端点）与 `unconfigured`（未配置）；
- * 配置文件里的 `connection.mode` 还可能是 `auto`（自动探测，M2 才落地）。
+ * 服务端只报两种：`external`（外部实例）与 `unconfigured`（未配置）；
+ * 配置文件里的 `connection.mode` 还可能是 `auto`（自动探测）。
  * 认不出来的值原样显示（不编造含义）。
+ *
+ * **不用内部协议名**：面板说「外部实例」而不是「外部 OneBot 端点」——
+ * 用户要的是「我的聊天记录从哪来」，不是协议栈。
  */
 export function modeLabel(mode: string): string {
   switch (mode) {
     case 'external':
-      return '外部端点';
+      return '外部实例';
     case 'auto':
       return '自动探测';
     case 'unconfigured':
-      return '未配置';
+      return '未连接';
     default:
       return mode;
   }
@@ -51,7 +54,7 @@ export function detectionSummary(
   if (detection.budgetExhausted === true) {
     return '探测未完成（扫描预算耗尽），结果可能不全 —— 不能据此判断本机没有 NapCat';
   }
-  if (detection.napcatRunning) return '检测到 NapCat（未开启 OneBot Server）';
+  if (detection.napcatRunning) return '检测到 NapCat（聊天数据未开启）';
   return '未检测到本机 NapCat';
 }
 
@@ -87,7 +90,7 @@ export function Statusbar({
     phase === 'ready' && status?.connected
       ? `已连接${status.login?.nickname ? ` · ${status.login.nickname}` : ''}${mode ? ` · ${modeLabel(mode)}` : ''}`
       : phase === 'unconfigured'
-        ? '未配置 OneBot 端点'
+        ? '还没连上'
         : phase === 'error'
           ? '未连接'
           : '正在连接宿主…';

@@ -217,7 +217,7 @@ describe('B3：NapCat 在跑但没开 OneBot Server', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     const box = await screen.findByTestId('detect-nowebui');
-    expect(box.textContent).toContain('还没有开启 OneBot');
+    expect(box.textContent).toContain('聊天数据还没接上');
     expect(box.textContent).toContain('打开 WebUI');
     expect(box.textContent).toContain('网络配置');
   });
@@ -229,7 +229,7 @@ describe('B3：NapCat 在跑但没开 OneBot Server', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     const box = await screen.findByTestId('detect-nowebui');
-    expect(box.textContent).toContain('还没有开启 OneBot');
+    expect(box.textContent).toContain('聊天数据还没接上');
     expect(box.textContent).not.toContain('http://127.0.0.1:');
   });
 });
@@ -421,7 +421,7 @@ describe('B7：状态条摘要行', () => {
     });
     await mount();
     const summary = await screen.findByTestId('detect-summary');
-    expect(summary.textContent).toContain('检测到 NapCat（未开启 OneBot Server）');
+    expect(summary.textContent).toContain('检测到 NapCat（聊天数据未开启）');
   });
 
   it('探测过但什么都没找到 → 摘要说「未检测到本机 NapCat」', async () => {
@@ -702,7 +702,7 @@ describe('N6：detectionSummary 的直接单元用例', () => {
       'NapCat 在跑但没开 OneBot Server',
       { found: false, napcatRunning: true },
       false,
-      (s: string) => s.includes('检测到 NapCat（未开启 OneBot Server）'),
+      (s: string) => s.includes('检测到 NapCat（聊天数据未开启）'),
     ],
     [
       '什么都没找到 → 未检测到本机 NapCat',

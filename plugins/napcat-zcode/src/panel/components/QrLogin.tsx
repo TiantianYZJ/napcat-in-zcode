@@ -27,6 +27,8 @@ export function QrLogin({
   const [desktopQq, setDesktopQq] = useState(false);
   const [onebotEnabled, setOnebotEnabled] = useState<boolean | undefined>(undefined);
   const [onebotMessage, setOnebotMessage] = useState('');
+  /** 插件自己有没有连上（连上了才真的能看到记录）。 */
+  const [connected, setConnected] = useState<boolean | undefined>(undefined);
   const alive = useRef(true);
   const loginedRef = useRef(false);
 
@@ -42,6 +44,7 @@ export function QrLogin({
         if (r.desktopQqRunning !== undefined) setDesktopQq(r.desktopQqRunning);
         if (r.onebotEnabled !== undefined) setOnebotEnabled(r.onebotEnabled);
         if (r.onebotMessage !== undefined) setOnebotMessage(r.onebotMessage);
+        if (r.connected !== undefined) setConnected(r.connected);
         if (r.phase === 'logined') {
           loginedRef.current = true;
           onLogined?.();
@@ -80,7 +83,8 @@ export function QrLogin({
       <div className="qr-side">
         <ol className="qr-steps" data-testid="qr-steps">
           {steps.map((label, i) => {
-            const state = i < step ? 'done' : i === step ? 'now' : 'todo';
+            // 登录成功后四步全部完成（最后一步不再显示成「进行中」）
+            const state = phase === 'logined' ? 'done' : i < step ? 'done' : i === step ? 'now' : 'todo';
             return (
               <li key={label} className={state} data-testid={`qr-step-${i}`} data-state={state}>
                 <span className="qr-dot" aria-hidden="true" />
@@ -94,9 +98,9 @@ export function QrLogin({
             检测到电脑 QQ 正在运行。同一账号不能登录两处，请先退出桌面 QQ 再扫。
           </div>
         )}
-        {phase === 'logined' && onebotEnabled === true && (
+        {phase === 'logined' && connected === true && (
           <div className="qr-ok-note" data-testid="qr-onebot-ok">
-            OneBot 已开启，现在可以去浏览聊天记录了。
+            聊天数据已接上，可以看聊天记录了。
           </div>
         )}
         {phase === 'logined' && onebotMessage && (
@@ -114,7 +118,7 @@ export function QrLogin({
         <div className="qr-acts">
           {phase === 'logined' && onOpenRecords && (
             <button className="btn primary" data-testid="qr-open-records" onClick={onOpenRecords}>
-              去看聊天记录
+              查看聊天记录
             </button>
           )}
           {phase === 'error' && (

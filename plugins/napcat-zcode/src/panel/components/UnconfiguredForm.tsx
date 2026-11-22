@@ -21,6 +21,7 @@ export function UnconfiguredForm({
   onDetected,
   initialEndpoint,
   onGoHost,
+  embedded,
 }: {
   onDone: () => void;
   /** 本机探测完成（用来刷新状态条上的探测摘要）。 */
@@ -28,6 +29,11 @@ export function UnconfiguredForm({
   initialEndpoint?: string;
   /** 跳到 NapCat 页：还没装 NapCat 时去那里下载安装，或接管检测到的安装。 */
   onGoHost?: () => void;
+  /**
+   * 嵌在别的页面里（旅程卡的折叠区）→ 不再自带页标题与副标题
+   * （外层已经有一份标题了，重复两遍标题会让页面显得碎）。
+   */
+  embedded?: boolean;
 }) {
   const [endpoint, setEndpoint] = useState(initialEndpoint ?? 'http://127.0.0.1:3000');
   const [token, setToken] = useState('');
@@ -70,10 +76,12 @@ export function UnconfiguredForm({
 
   return (
     <div className="setup" data-testid="setup-form">
-      <div className="page-head">
-        <div className="page-title">连接 NapCat</div>
-        <div className="page-desc">连上本机或远端的 OneBot 端点，就能浏览聊天记录</div>
-      </div>
+      {!embedded && (
+        <div className="page-head">
+          <div className="page-title">连接 NapCat</div>
+          <div className="page-desc">连上 NapCat，就能浏览聊天记录</div>
+        </div>
+      )}
       <div className="page-card">
         <div className="setup-detect">
           <LocalDetect
@@ -86,7 +94,7 @@ export function UnconfiguredForm({
         </div>
         <div className="setup-form">
           <label>
-            OneBot 端点
+            连接地址
             <input
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}

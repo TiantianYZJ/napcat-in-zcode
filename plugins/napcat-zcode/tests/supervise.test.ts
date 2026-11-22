@@ -273,7 +273,9 @@ describe('受管宿主的进程监管', () => {
         probeTimeoutMs: 500,
       });
       expect(status.state).toBe('degraded');
-      expect(status.message).toContain('OneBot Server 没开');
+      // 文案用用户语言（不说 OneBot 这种内部协议名）
+      expect(status.message).toContain('聊天数据还没接上');
+      expect(status.message).not.toContain('OneBot');
     } finally {
       await occupied.close();
     }

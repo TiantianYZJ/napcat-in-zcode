@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, bridge, friendlyError, handshake, msgKey, type Chat, type Msg, type StatusInfo } from './api.js';
 import type { HostCaps } from './bridge.js';
+import type { HostStatusResult } from './api.js';
+import { computeJourney, type JourneyAction } from './journey.js';
 import { Statusbar } from './components/Statusbar.js';
 import { ChatList } from './components/ChatList.js';
 import { MessageList } from './components/MessageList.js';
@@ -9,6 +11,7 @@ import { ActionBar, type Notice } from './components/ActionBar.js';
 import { SettingsPanel } from './components/SettingsPanel.js';
 import { UnconfiguredForm } from './components/UnconfiguredForm.js';
 import { HostPanel } from './components/HostPanel.js';
+import { JourneyCard } from './components/JourneyCard.js';
 
 /** 面板状态机。 */
 export type Phase = 'init' | 'unconfigured' | 'error' | 'ready';
@@ -168,6 +171,15 @@ export function App() {
    */
   const [tab, setTab] = useState<'records' | 'host'>('records');
   /**
+   * 受管宿主的状态（装没装、在不在跑、登录了没）。
+   *
+   * **旅程卡靠它算进度**：用户打开「记录」页时最先看到的是「第几步、下一步按哪」，
+   * 而「装没装 / 起没起 / 登没登」这些事实只有宿主知道。
+   */
+  const [hostState, setHostState] = useState<HostStatusResult | null>(null);
+  /** 旅程动作在途（按钮置灰，避免连点重复启动）。 */
+  const [journeyBusy, setJourneyBusy] = useState(false);
+  /**
    * 会话抽屉是否展开。
    *
    * 会话列表在窄侧栏里会吃掉消息流的宽度 → 收成抽屉：
@@ -249,6 +261,97 @@ export function App() {
       /* 状态刷新失败不影响其它功能 */
     }
   }, []);
+
+  /** 刷新受管宿主状态（旅程卡靠它算进度）。 */
+  const refreshHost = useCallback(async () => {
+    try {
+      setHostState(await api.hostStatus());
+    } catch {
+      /* 宿主状态读不到不影响其它功能（旅程卡会少一步信息） */
+    }
+  }, []);
+
+  /**
+   * 旅程进度跟着事实走：没连上时定期问一次宿主状态。
+   *
+   * 轮询只查本机回环端口与台账，很便宜；连上之后就不查了（记录页不再需要旅程）。
+   */
+  useEffect(() => {
+    if (phase === 'ready') return;
+    let alive = true;
+    const tick = async (): Promise<void> => {
+      try {
+        const h = await api.hostStatus();
+        if (alive) setHostState(h);
+      } catch {
+        /* 忽略：下一轮再问 */
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [phase]);
+
+  /** 旅程：用户现在在第几步、下一步按哪个。 */
+  const journey = useMemo(() => computeJourney(hostState, status), [hostState, status]);
+
+  /**
+   * 旅程动作：**永远只有一个主动作**，点它就往前走一步。
+   *
+   * - install / login → 切到 NapCat 页（那里的表单与二维码在等着）；
+   * - start → 启动受管实例；
+   * - connect → 重新连一次（连不上时唯一的出路）。
+   */
+  const onJourneyAction = useCallback(
+    async (action: JourneyAction): Promise<void> => {
+      if (action.kind === 'install' || action.kind === 'login') {
+        setTab('host');
+        return;
+      }
+      if (action.kind === 'connect') {
+        await reload();
+        return;
+      }
+      if (!action.installId) {
+        setTab('host');
+        return;
+      }
+      setJourneyBusy(true);
+      try {
+        await api.startHost(action.installId);
+        await refreshHost();
+        await refreshStatus();
+      } catch (e) {
+        showNotice(friendlyError(errText(e)));
+      } finally {
+        setJourneyBusy(false);
+      }
+    },
+    [reload, refreshHost, refreshStatus, showNotice],
+  );
+
+  /**
+   * 连上的那一刻：把人带回记录页。
+   *
+   * 用户在 NapCat 页扫码，扫完最想要的就是「看看记录」——
+   * 让他自己再点一次页签是白扔的一步（这正是「成功了，然后呢，页面呢？」的由来）。
+   */
+  const wasConnected = useRef(false);
+  useEffect(() => {
+    const connected = status?.connected === true;
+    if (connected && !wasConnected.current) {
+      wasConnected.current = true;
+      if (tab === 'host') {
+        setTab('records');
+        showNotice('已连接，可以看聊天记录了');
+      }
+      return;
+    }
+    if (!connected) wasConnected.current = false;
+  }, [status?.connected, tab, showNotice]);
 
   /**
    * 挂载：先握手，再拉状态。
@@ -563,12 +666,35 @@ export function App() {
           )}
           {/* 未配置/错误相位：连接与引导内容只出现在「记录」页签；
               「宿主」页签有自己的内容（安装 / 接管 / 启停），两者不叠加 */}
+          {/*
+            未配置相位（= 新用户首屏）：**先给旅程，再给表单**。
+            原来这里直接摊开一张「端点 + token」表单——新用户不知道该填什么，
+            也不知道填完了能干什么。现在首屏是三步引导 + 唯一的主动作，
+            手动连接收进折叠里（自己已经跑着 NapCat 的人才需要）。
+          */}
           {phase === 'unconfigured' && tab === 'records' && (
-            <UnconfiguredForm
-              onDone={() => void reload()}
-              onDetected={() => void refreshStatus()}
-              onGoHost={() => setTab('host')}
-            />
+            <div className="pane" data-testid="records-onboarding">
+              <div className="page-title">连接 QQ 聊天记录</div>
+              <div className="page-desc">
+                装好 NapCat、用手机 QQ 扫码登录你的账号，就能在这里挑会话看消息
+              </div>
+              <div className="page-card">
+                <JourneyCard
+                  journey={journey}
+                  onAction={(a) => void onJourneyAction(a)}
+                  busy={journeyBusy}
+                />
+              </div>
+              <details className="advanced" data-testid="advanced-connect">
+                <summary>已经自己跑着 NapCat？手动连接</summary>
+                <UnconfiguredForm
+                  embedded
+                  onDone={() => void reload()}
+                  onDetected={() => void refreshStatus()}
+                  onGoHost={() => setTab('host')}
+                />
+              </details>
+            </div>
           )}
           {phase === 'error' &&
             tab === 'records' &&
@@ -634,14 +760,20 @@ export function App() {
           {phase !== 'init' && tab === 'host' && (
             <div className="pane">
               <HostPanel
-                onChanged={() => void refreshStatus()}
+                onChanged={() => void reload()}
                 onOpenRecords={() => setTab('records')}
               />
             </div>
           )}
         </div>
       </div>
-      {!(phase !== 'init' && tab === 'host') && (
+      {/*
+        动作条**不在未配置相位出现**：
+        那是新用户的第一屏（旅程引导），摆一排灰按钮（还要选中消息才有意义）
+        只会让人以为自己点不动。init / error 相位保留——那两处用户正在排查，
+        灰置的按钮 + 禁用原因是有用信息。
+      */}
+      {phase !== 'unconfigured' && tab !== 'host' && (
         <ActionBar
           selected={selected}
           chat={active}

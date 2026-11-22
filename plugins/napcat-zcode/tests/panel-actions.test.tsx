@@ -216,7 +216,7 @@ describe('ActionBar 能力降级', () => {
     for (const [phase, word] of [
       ['init', '正在连接宿主'],
       ['error', '连接失败'],
-      ['unconfigured', '尚未配置'],
+      ['unconfigured', '还没连上'],
     ] as const) {
       cleanup();
       renderBar({ phase });

@@ -468,7 +468,7 @@ export function friendlyError(text: string): string {
     return '这个端点没有响应 WebSocket 连接：请确认端口正确、NapCat 已开启 WebSocket Server，token 也与设置一致。';
   }
   if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|socket hang up|ECONNRESET/i.test(text)) {
-    return '连不上 NapCat（连接被拒或超时）：请确认 NapCat 正在运行、OneBot 端口正确；若配置了 token 请核对。';
+    return '连不上 NapCat（连接被拒或超时）：请确认 NapCat 正在运行、连接地址正确；若配置了 token 请核对。';
   }
   if (/401|unauthorized|invalid token|access token/i.test(text)) {
     return 'NapCat 拒绝了访问（token 可能不对）：请核对 token 后重试；本机回环连接可以不设 token。';
@@ -707,6 +707,10 @@ export const api = {
       desktopQqRunning?: boolean;
       onebotEnabled?: boolean;
       onebotMessage?: string;
+      /** 登录成功后插件是否已经把自己连上（连上了才能看记录）。 */
+      connected?: boolean;
+      /** 连接结果的人话说明（失败时说明为什么）。 */
+      connectMessage?: string;
     }>(
       'napcat_qr_login',
       id === undefined ? {} : { id, ...(refresh === true ? { refresh: true } : {}) },

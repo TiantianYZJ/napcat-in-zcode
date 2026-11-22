@@ -729,3 +729,44 @@
   - 深度克制：先背景对比与描边，再阴影；消息气泡沿用原生 `ai-elements/message` 几何（右对齐 `bg-secondary`、无名字头）
 - [x] `npm run typecheck` / `npm test`（35 文件 / **756 通过 / 4 跳过**，新增 qrlogin 5、host-panel 3）/ `npm run build`（238.78 kB）/ `npm run smoke`（stdio 19/19、panel 15/15）
 - [x] 视觉复验：2× 截图确认步进条圆点为正圆、竖线连通、当前步高亮，大卡片保留连续曲率
+
+### 15.15 v0.16.0 增量验收记录（新用户首用路径 + 断链修复）
+
+用户真机反馈：「第一次进入到『记录』不知道该去哪，好不容易到了 NapCat，扫码后又蹦出来一个看不懂的 onebot，就此卡在这里？」——**这是产品缺陷，不是文案问题**。拆成两件事：断链（扫码成功 ≠ 能看记录）与迷路（首屏不告诉人该干什么）。
+
+#### A. 断链：扫码成功 → 真的能看记录
+
+- [x] **根因 1（协议写错）**：`OB11Config/SetConfig` 的 body 必须是 `{ config: "<JSON 字符串>" }`
+  （WebUI 内部 `JSON.parse(t.body.config)`），**传对象会被判为 `config is empty`** →
+  热开启永远失败 → 面板弹出「开启 OneBot 失败: config is empty」。
+  依据：NapCat 4.18.42 产物 `napcat.mjs` 内 `Rpe` 处理函数实测（`en(t.body.config)` → `te(e,'config is empty')`）
+- [x] **根因 2（漏掉最后一跳）**：把 NapCat 的 OneBot 打开**不等于**插件连上了——
+  插件的连接目标还指着别处（或空），记录页照样是空的。
+  → `napcat_qr_login` 在登录成功后：`ensureOneBotEnabled` → `state.setConnection(受管端点)`（落盘 + 重连）
+  - 已经连着别的端点就**不覆盖**（用户可能自己配了外部实例）
+  - 换了端点就清旧 token（旧 token 是给旧端点的，带过去必然鉴权失败）
+- [x] **端口要真监听才算成功**：NapCat 热重载网络是异步的 → 写完配置**等端口真的起来**（≤5s），
+  否则会出现「说开了、连不上」；没起来就如实说「没有在 3000 端口上开数据通道」
+- [x] **真机端到端验证**（真实 `dist/server.mjs` 子进程 + 用户机器上真实运行的 NapCat）：
+  `napcat_qr_login` → `phase: logined` + `onebotEnabled: true` + `onebotEndpoint: http://127.0.0.1:3000`
+  + **`connected: true`** → `napcat_status` → `connected: true, login: TiantianYZJ.(2350355494)`
+  → `napcat_list_chats` → 真实群列表；`config.json` 已写入 `connection.endpoint`
+
+#### B. 迷路：首屏按「用户要什么」组织，而不是按「内部概念」组织
+
+- [x] **「记录」页首屏 = 三步旅程**（新增 `src/panel/journey.ts` + `JourneyCard`）：
+  装好 NapCat → 登录 QQ → 查看聊天记录；当前步高亮、已完成步收敛、未到的灰着，
+  **永远只有一个主动作**（安装 / 启动 / 去扫码 / 重新连接）
+- [x] **手动连接收进折叠区**（「已经自己跑着 NapCat？手动连接」）：新用户首屏不再摊开端点+token 表单
+- [x] **术语清零**（用户可见文案）：OneBot → 聊天数据；端点 → 连接地址；
+  「未配置 OneBot 端点」→「还没连上」；「插件不会代开」（**曾是假话**）→ 改为如实说明
+- [x] **扫码成功即自动回到记录页**：`status.connected` 由 false 变 true → 切页签 + toast
+  （不必再问「然后呢，页面呢？」）；扫码卡登录成功后四步全部收敛为已完成
+- [x] **宿主卡层次重排**：扫码引导排在运维按钮**之前**；「停止/卸载」降为中性按钮
+  （红色只留给确认弹窗里的那一个）；安装目录（超长路径）折进「安装详情」；
+  事实网格只留 WebUI / 聊天数据 / 登录三行
+- [x] **degraded 也要出二维码**：没登录 QQ 时 NapCat 只起 WebUI、不开聊天数据通道
+  （状态是 degraded 而非 running）——原先只按 running 判断，「已装好但没登录」反而没有二维码
+- [x] **未配置相位不摆动作条**：一排灰按钮只会让人以为自己点不动（init/error 相位保留——那两处在排查）
+- [x] `npm run typecheck` / `npm test`（36 文件 / **751 通过 / 4 跳过**，新增 journey 6、qrlogin 3）/ `npm run build`（245.20 kB）/ `npm run smoke`（stdio 19/19、panel 15/15）
+- [x] 视觉复验：journey / journey-login / guide 三场景截图（800px，浅/深两版）确认层次与步进条

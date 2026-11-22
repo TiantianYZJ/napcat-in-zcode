@@ -26462,6 +26462,7 @@ function errText3(err) {
 // src/server/host/qrlogin.ts
 import { createHash as createHash3 } from "node:crypto";
 import { execFile } from "node:child_process";
+import { connect as connect2 } from "node:net";
 import { promisify } from "node:util";
 
 // node_modules/qrcode-generator/dist/qrcode.mjs
@@ -28151,43 +28152,84 @@ async function credentialFor(fetcher, port, token) {
   credentialCache.set(port, { credential, at: Date.now() });
   return credential;
 }
-async function ensureOneBotEnabled(fetcher, port, credential, onebotPort) {
+async function ensureOneBotEnabled(fetcher, port, credential, onebotPort, probe) {
   const base = `http://127.0.0.1:${port}`;
   let current;
   try {
     current = unwrap(await webuiPost(fetcher, `${base}/api/OB11Config/GetConfig`, credential, {}));
   } catch (err) {
-    return { onebotEnabled: false, onebotMessage: `\u8BFB\u53D6 OneBot \u914D\u7F6E\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+    return {
+      onebotEnabled: false,
+      onebotMessage: `\u8BFB\u53D6\u6570\u636E\u901A\u9053\u914D\u7F6E\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (Object.keys(current).length === 0) {
+    return { onebotEnabled: false, onebotMessage: "NapCat \u6CA1\u6709\u8FD4\u56DE\u6570\u636E\u901A\u9053\u914D\u7F6E" };
   }
   const network = current.network ?? {};
   const servers = Array.isArray(network.httpServers) ? [...network.httpServers] : [];
   const already = servers.some(
     (s) => typeof s === "object" && s !== null && s.enable === true && s.port === onebotPort
   );
-  if (already) return { onebotEnabled: true };
-  servers.push({
-    name: "napcat-zcode",
-    enable: true,
-    port: onebotPort,
-    host: "127.0.0.1",
-    enableCors: false,
-    enableWebsocket: false,
-    messagePostFormat: "array",
-    token: "",
-    debug: false
-  });
-  try {
-    await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
-      ...current,
-      network: { ...network, httpServers: servers }
+  if (!already) {
+    servers.push({
+      name: "napcat-zcode",
+      enable: true,
+      port: onebotPort,
+      host: "127.0.0.1",
+      enableCors: false,
+      enableWebsocket: false,
+      messagePostFormat: "array",
+      token: "",
+      debug: false
     });
-    return { onebotEnabled: true };
-  } catch (err) {
-    return { onebotEnabled: false, onebotMessage: `\u5F00\u542F OneBot \u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+    try {
+      await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
+        // config 必须是 **JSON 字符串**（WebUI 内部按字符串解析）
+        config: JSON.stringify({ ...current, network: { ...network, httpServers: servers } })
+      });
+    } catch (err) {
+      return {
+        onebotEnabled: false,
+        onebotMessage: `\u5F00\u542F\u6570\u636E\u901A\u9053\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}`
+      };
+    }
   }
+  const listening = await waitPortListening(onebotPort, 5e3, probe);
+  if (!listening) {
+    return {
+      onebotEnabled: false,
+      onebotMessage: `NapCat \u6CA1\u6709\u5728 ${onebotPort} \u7AEF\u53E3\u4E0A\u5F00\u6570\u636E\u901A\u9053`
+    };
+  }
+  return { onebotEnabled: true, onebotEndpoint: `http://127.0.0.1:${onebotPort}` };
+}
+async function waitPortListening(port, timeoutMs, probe) {
+  const deadline = Date.now() + timeoutMs;
+  const step = 250;
+  for (; ; ) {
+    if (await probe(port)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, step));
+  }
+}
+async function tcpProbe(port) {
+  return new Promise((resolve4) => {
+    const socket = connect2({ host: "127.0.0.1", port });
+    const done = (ok2) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve4(ok2);
+    };
+    socket.setTimeout(800);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
 }
 async function pollQrLogin(fetcher, opts) {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
+  const probe = opts.probePort ?? tcpProbe;
   if (opts.refresh === true) credentialCache.delete(opts.webuiPort);
   let credential;
   try {
@@ -28216,7 +28258,13 @@ async function pollQrLogin(fetcher, opts) {
     };
   }
   if (status.isLogin === true || status.coreReady === true) {
-    const onebot = await ensureOneBotEnabled(fetcher, opts.webuiPort, credential, opts.onebotPort ?? 3e3);
+    const onebot = await ensureOneBotEnabled(
+      fetcher,
+      opts.webuiPort,
+      credential,
+      opts.onebotPort ?? 3e3,
+      probe
+    );
     return { phase: "logined", message: "\u767B\u5F55\u6210\u529F", ...onebot };
   }
   const loginPhase = typeof status.loginPhase === "string" ? status.loginPhase : "";
@@ -28336,7 +28384,7 @@ async function killProcessesUnder(dir) {
 // src/server/host/supervise.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync3, readFileSync as readFileSync6 } from "node:fs";
-import { connect as connect2 } from "node:net";
+import { connect as connect3 } from "node:net";
 import { delimiter, join as join6 } from "node:path";
 var INJECT_MODE_WARNING = "\u6CE8\u5165\u6A21\u5F0F\u4F1A\u542F\u52A8\u684C\u9762 QQ \u5E76\u5411\u5176\u8FDB\u7A0B\u6CE8\u5165\u672C\u7EC4\u4EF6\u3002QQ 9.9.36 \u53CA\u4EE5\u4E0A\u7248\u672C\u5728\u542F\u52A8\u524D\u4F1A\u505A\u539F\u751F\u5B8C\u6574\u6027\u68C0\u67E5\uFF0C\u6CE8\u5165\u53EF\u80FD\u5BFC\u81F4\u5B83\u62A5\u300C\u6587\u4EF6\u5DF2\u635F\u574F\uFF0C\u8BF7\u91CD\u65B0\u5B89\u88C5\u300D\u5E76\u4E2D\u6B62\u542F\u52A8\u3002\u4E0D\u786E\u5B9A\u65F6\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002";
 function isProcessAlive(pid) {
@@ -28351,7 +28399,7 @@ function isProcessAlive(pid) {
 function tcpReachable(port, timeoutMs = 1200, host = "127.0.0.1") {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false);
   return new Promise((resolve4) => {
-    const socket = connect2({ host, port });
+    const socket = connect3({ host, port });
     let settled = false;
     const finish = (ok2) => {
       if (settled) return;
@@ -28541,7 +28589,7 @@ async function probeManagedHost(install, opts) {
     return {
       ...base,
       state: "degraded",
-      message: "NapCat \u5728\u8DD1\uFF0C\u4F46 OneBot Server \u6CA1\u5F00\uFF08\u9700\u8981\u5728 WebUI \u91CC\u5F00\u542F\uFF0C\u63D2\u4EF6\u4E0D\u4F1A\u4EE3\u5F00\uFF09\u3002"
+      message: "NapCat \u5728\u8DD1\uFF0C\u4F46\u804A\u5929\u6570\u636E\u8FD8\u6CA1\u63A5\u4E0A\uFF08\u626B\u7801\u767B\u5F55\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u6253\u5F00\uFF09\u3002"
     };
   }
   const login = await fetchLoginInfo(onebotPort, timeoutMs + 300);
@@ -29010,7 +29058,7 @@ function registerHostTools(server2, state) {
   server2.registerTool(
     "napcat_qr_login",
     {
-      description: "\u83B7\u53D6\u53D7\u7BA1 NapCat \u7684\u767B\u5F55\u4E8C\u7EF4\u7801\u4E0E\u626B\u7801\u72B6\u6001\uFF08\u9762\u677F\u8F6E\u8BE2\u7528\uFF09\u3002\u8FD4\u56DE phase: waiting\uFF08\u9644\u4E8C\u7EF4\u7801 data URL\uFF09/ accepted\uFF08\u5DF2\u626B\u7801\u5F85\u786E\u8BA4\uFF09/ logined / error\u3002\u82E5\u7535\u8111\u4E0A\u7684\u684C\u9762 QQ \u6B63\u767B\u5F55\u7740\u540C\u4E00\u8D26\u53F7\uFF0C\u626B\u7801\u4F1A\u88AB\u9876\u53F7\u2014\u2014error \u91CC\u4F1A\u8BF4\u660E\u539F\u56E0\u3002",
+      description: "\u83B7\u53D6\u53D7\u7BA1 NapCat \u7684\u767B\u5F55\u4E8C\u7EF4\u7801\u4E0E\u626B\u7801\u72B6\u6001\uFF08\u9762\u677F\u8F6E\u8BE2\u7528\uFF09\u3002\u8FD4\u56DE phase: waiting\uFF08\u9644\u4E8C\u7EF4\u7801 data URL\uFF09/ accepted\uFF08\u5DF2\u626B\u7801\u5F85\u786E\u8BA4\uFF09/ logined / error\u3002\u82E5\u7535\u8111\u4E0A\u7684\u684C\u9762 QQ \u6B63\u767B\u5F55\u7740\u540C\u4E00\u8D26\u53F7\uFF0C\u626B\u7801\u4F1A\u88AB\u9876\u53F7\u2014\u2014error \u91CC\u4F1A\u8BF4\u660E\u539F\u56E0\u3002\u767B\u5F55\u6210\u529F\u540E\u4F1A\u987A\u5E26\u70ED\u5F00\u542F\u6570\u636E\u901A\u9053\u5E76\u628A\u63D2\u4EF6\u81EA\u5DF1\u8FDE\u4E0A\u53BB\uFF08connected \u5B57\u6BB5\u8BF4\u660E\u7ED3\u679C\uFF09\u3002",
       inputSchema: {
         id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09"),
         refresh: external_exports.boolean().optional().describe("true = \u91CD\u65B0\u767B\u5F55\u6362\u65B0\u4E8C\u7EF4\u7801\uFF08\u65E7\u7684\u626B\u7801\u4F1A\u8BDD\u4F5C\u5E9F\u65F6\u7528\uFF09")
@@ -29035,12 +29083,33 @@ function registerHostTools(server2, state) {
           refresh: refresh === true,
           onebotPort
         });
+        if (r.phase === "logined" && r.onebotEnabled === true && r.onebotEndpoint) {
+          const link = await connectToManaged(state, r.onebotEndpoint);
+          return ok({ ...r, ...link });
+        }
         return ok(r);
       } catch (e) {
         return fail(state, e);
       }
     }
   );
+}
+async function connectToManaged(state, endpoint) {
+  try {
+    const st = await state.status();
+    if (st.connected) {
+      return { connected: true, connectMessage: "\u5DF2\u8FDE\u63A5" };
+    }
+    const current = state.config.connection.endpoint ?? "";
+    const switching = current !== "" && current !== endpoint;
+    await state.setConnection(endpoint, "", { clearToken: switching });
+    return { connected: true, connectMessage: "\u5DF2\u8FDE\u63A5\uFF0C\u53EF\u4EE5\u770B\u804A\u5929\u8BB0\u5F55\u4E86" };
+  } catch (e) {
+    return {
+      connected: false,
+      connectMessage: `QQ \u767B\u5F55\u6210\u529F\uFF0C\u4F46\u63D2\u4EF6\u8FDE\u4E0D\u4E0A\u804A\u5929\u6570\u636E\uFF1A${e instanceof Error ? e.message : String(e)}`
+    };
+  }
 }
 
 // src/server/tools.ts
@@ -29609,7 +29678,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.15.0" });
+var server = new McpServer({ name: "napcat", version: "0.16.0" });
 registerTools(server, appState);
 registerPanelResource(server, join8(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

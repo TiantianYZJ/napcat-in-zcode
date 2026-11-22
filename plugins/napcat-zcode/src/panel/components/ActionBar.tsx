@@ -59,7 +59,7 @@ export function disabledReason(
   precondition = '',
 ): string {
   if (phase === 'init') return '正在连接宿主…（握手未完成）';
-  if (phase === 'unconfigured') return '尚未配置 OneBot 端点';
+  if (phase === 'unconfigured') return '还没连上 QQ';
   if (phase === 'error') return '连接失败（可点「重试」重试连接）';
   if (!caps[cap]) return `宿主不支持 ${method}（缺少能力位 ${cap}）`;
   return precondition;

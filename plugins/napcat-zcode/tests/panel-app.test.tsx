@@ -135,11 +135,19 @@ describe('App 状态机', () => {
     expect(screen.getByTestId('statusbar').textContent).toContain('小明');
   });
 
-  it('未配置 → 显示配置表单', async () => {
+  it('未配置 → 首屏是旅程引导（手动连接收在折叠里）', async () => {
     mock.status.mockResolvedValue({ configured: false, connected: false, mode: 'unconfigured' });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未配置'));
-    expect(screen.getByTestId('connect-btn')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('还没连上'));
+    // 首屏 = 三步旅程 + 唯一主动作
+    await waitFor(() => expect(screen.getByTestId('journey-card')).toBeTruthy());
+    expect(screen.getByTestId('journey-steps').children.length).toBe(3);
+    expect(screen.getByTestId('journey-action')).toBeTruthy();
+    // 手动连接表单**不再摊在首屏**，收进折叠区（details 折叠时内容仍在 DOM 里，
+    // 但用户看不到、也不是首屏的主角）
+    const adv = screen.getByTestId('advanced-connect');
+    expect(adv).toBeTruthy();
+    expect(adv.querySelector('[data-testid="connect-btn"]')).toBeTruthy();
   });
 
   it('未连接 → 状态条显示服务端给的错误', async () => {
@@ -244,11 +252,12 @@ describe('App 能力降级', () => {
     await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
   });
 
-  it('未配置相位的不可用原因是「尚未配置 OneBot 端点」', async () => {
+  it('未配置相位：动作条不出现（首屏交给旅程引导），不摆一排灰按钮', async () => {
     mock.status.mockResolvedValue({ configured: false, connected: false, mode: 'unconfigured' });
     await mount();
-    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('未配置'));
-    expect(screen.getByTestId('act-export').getAttribute('data-reason')).toContain('尚未配置 OneBot 端点');
+    await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('还没连上'));
+    await waitFor(() => expect(screen.getByTestId('journey-card')).toBeTruthy());
+    expect(screen.queryByTestId('act-export')).toBeNull();
   });
 
   it('连接失败（error）相位的不可用原因是「连接失败」而不是「正在连接宿主」', async () => {
@@ -461,7 +470,7 @@ describe('App 状态条与设置', () => {
     await waitFor(() => expect(screen.getByTestId('statusbar').textContent).toContain('已连接'));
     const bar = screen.getByTestId('statusbar');
     expect(bar.getAttribute('data-mode')).toBe('external');
-    expect(bar.textContent).toContain('外部端点');
+    expect(bar.textContent).toContain('外部实例');
   });
 
   it('状态条有「设置」入口，点开后展示只读配置（token 不回显明文）', async () => {

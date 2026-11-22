@@ -129,7 +129,7 @@ export function SettingsPanel({
         <dl className="settings-list">
           <dt>连接模式</dt>
           <dd>{conn?.mode ? `${modeLabel(conn.mode)}（${conn.mode}）` : '（未知）'}</dd>
-          <dt>OneBot 端点</dt>
+          <dt>连接地址</dt>
           <dd>{conn?.endpoint || '（未设置）'}</dd>
           <dt>Token</dt>
           {/* token 一律不回显：服务端给的是 '***'，这里连 '***' 都不打印 */}

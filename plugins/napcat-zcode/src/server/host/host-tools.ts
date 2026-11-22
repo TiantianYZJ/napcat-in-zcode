@@ -504,7 +504,8 @@ export function registerHostTools(server: McpServer, state: AppState): void {
       description:
         '获取受管 NapCat 的登录二维码与扫码状态（面板轮询用）。' +
         '返回 phase: waiting（附二维码 data URL）/ accepted（已扫码待确认）/ logined / error。' +
-        '若电脑上的桌面 QQ 正登录着同一账号，扫码会被顶号——error 里会说明原因。',
+        '若电脑上的桌面 QQ 正登录着同一账号，扫码会被顶号——error 里会说明原因。' +
+        '登录成功后会顺带热开启数据通道并把插件自己连上去（connected 字段说明结果）。',
       inputSchema: {
         id: z.string().optional().describe('受管安装 id（不传 = 最近登记的那个）'),
         refresh: z.boolean().optional().describe('true = 重新登录换新二维码（旧的扫码会话作废时用）'),
@@ -529,12 +530,53 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           refresh: refresh === true,
           onebotPort,
         });
+        /**
+         * 登录成功 → **把插件自己连上去**。
+         *
+         * 这一步是「扫码成功 → 能看聊天记录」之间**唯一缺失的环节**：
+         * 光把 NapCat 的 OneBot 打开没用——插件的连接目标还指着别处（或空），
+         * 记录页照样是空的，用户会以为又卡住了。
+         *
+         * 不覆盖用户已有的可用连接：已经连着就不动它（用户可能自己配了外部端点）。
+         */
+        if (r.phase === 'logined' && r.onebotEnabled === true && r.onebotEndpoint) {
+          const link = await connectToManaged(state, r.onebotEndpoint);
+          return ok({ ...r, ...link });
+        }
         return ok(r);
       } catch (e) {
         return fail(state, e);
       }
     },
   );
+}
+
+/**
+ * 把插件的连接目标指向受管实例的 OneBot。
+ *
+ * - **已经连着** → 什么都不做（别动用户自己的配置）。
+ * - **没连着** → 切到受管端点并落盘（下次打开面板还是连它）。
+ *   换了端点就清掉旧 token：旧 token 是给旧端点的，带过去会让鉴权失败。
+ */
+async function connectToManaged(
+  state: AppState,
+  endpoint: string,
+): Promise<{ connected: boolean; connectMessage: string }> {
+  try {
+    const st = await state.status();
+    if (st.connected) {
+      return { connected: true, connectMessage: '已连接' };
+    }
+    const current = state.config.connection.endpoint ?? '';
+    const switching = current !== '' && current !== endpoint;
+    await state.setConnection(endpoint, '', { clearToken: switching });
+    return { connected: true, connectMessage: '已连接，可以看聊天记录了' };
+  } catch (e) {
+    return {
+      connected: false,
+      connectMessage: `QQ 登录成功，但插件连不上聊天数据：${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 }
 
 // `require` 不用了（统一顶层 import）

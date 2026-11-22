@@ -224,7 +224,7 @@ describe('friendlyError 的错误转译', () => {
   });
 
   it('连接拒绝 / 超时 → 指向运行状态与端口', () => {
-    expect(mod.friendlyError('connect ECONNREFUSED 127.0.0.1:3000')).toContain('OneBot 端口');
+    expect(mod.friendlyError('connect ECONNREFUSED 127.0.0.1:3000')).toContain('连接地址');
     expect(mod.friendlyError('ETIMEDOUT')).toContain('连不上 NapCat');
   });
 

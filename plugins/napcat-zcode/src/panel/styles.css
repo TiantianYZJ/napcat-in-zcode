@@ -1479,6 +1479,150 @@ textarea {
   font-weight: 500;
 }
 
+/* ── 旅程卡（首屏引导：第几步 / 下一步按哪） ───────────────────────── */
+
+.journey-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.journey {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.journey li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 0 18px 0;
+  color: var(--color-foreground-subtlest);
+  overflow-wrap: anywhere;
+}
+
+.journey li:last-child {
+  padding-bottom: 0;
+}
+
+.journey-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-foreground-subtlest);
+  background: transparent;
+}
+
+/* 进度线：最后一个不画 */
+.journey li:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 18px;
+  bottom: 4px;
+  width: 1.5px;
+  background: var(--color-border-hover);
+}
+
+.journey-text {
+  min-width: 0;
+}
+
+.journey-title {
+  font-size: var(--text-ui-sm);
+  font-weight: 500;
+  color: var(--color-foreground-subtle);
+}
+
+.journey-desc {
+  margin-top: 2px;
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  line-height: 1.5;
+}
+
+/* 已完成：收敛（弱标题 + 实心点） */
+.journey li.done .journey-dot {
+  background: var(--color-foreground-subtlest);
+  border-color: var(--color-foreground-subtlest);
+}
+
+.journey li.done .journey-title {
+  color: var(--color-foreground-subtle);
+  font-weight: 400;
+}
+
+/* 当前步：唯一抢眼的一步 */
+.journey li.now .journey-dot {
+  border-color: var(--color-foreground);
+  background: var(--color-foreground);
+  box-shadow: 0 0 0 3px var(--color-surface-hover);
+}
+
+.journey li.now .journey-title {
+  font-size: var(--text-ui-md);
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+.journey li.now .journey-desc {
+  color: var(--color-foreground-subtle);
+}
+
+.journey-acts {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+/* 折叠区（手动连接 / 安装详情）：弱化，不跟主线抢 */
+.advanced,
+.host-details {
+  margin-top: 12px;
+}
+
+.advanced > summary,
+.host-details > summary {
+  cursor: pointer;
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  list-style: none;
+}
+
+.advanced > summary::-webkit-details-marker,
+.host-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced > summary::before,
+.host-details > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+
+.advanced[open] > summary::before,
+.host-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.advanced > summary:hover,
+.host-details > summary:hover {
+  color: var(--color-foreground-subtle);
+}
+
+.advanced > .setup,
+.host-details > .host-grid {
+  margin-top: 12px;
+}
+
 @media (min-width: 560px) {
   .qr-login {
     flex-direction: row;

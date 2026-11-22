@@ -36,7 +36,8 @@ function stateBadge(state: HostStatus['state']): { text: string; cls: string } {
     case 'starting':
       return { text: '启动中', cls: '' };
     case 'degraded':
-      return { text: '未开 OneBot', cls: 'warn' };
+      // 不说 OneBot —— 那是内部协议名，用户只需要知道「聊天数据还没接上」
+      return { text: '聊天数据未就绪', cls: 'warn' };
     case 'unknown':
       return { text: '端口被占用', cls: 'warn' };
     case 'stopped':
@@ -227,6 +228,15 @@ export function HostPanel({
       {statuses.map((s) => {
         const badge = stateBadge(s.state);
         const id = s.install?.id;
+        /**
+         * 这一屏要不要出扫码引导。
+         *
+         * **degraded 也要出**：没登录 QQ 时 NapCat 只起 WebUI、不开聊天数据通道
+         * （状态是 degraded 而不是 running）—— 只按 running 判断的话，
+         * 「已装好但还没登录」这个最常见的场景反而没有二维码。
+         */
+        const showGuide =
+          (s.state === 'running' || s.state === 'degraded') && !s.login && s.webuiPort !== undefined;
         return (
           <div className="host-card" key={id ?? s.state} data-testid="host-card">
             <div className="host-head">
@@ -237,20 +247,20 @@ export function HostPanel({
                 {badge.text}
               </span>
             </div>
-            {/* 事实网格（ZCode 的 definition grid：定宽弱标签列 + 值列），把散行收成可扫读的层次 */}
+            {/* 事实网格（ZCode 的 definition grid：定宽弱标签列 + 值列），把散行收成可扫读的层次。
+                安装目录是运维信息（长路径、占两行），折进「安装详情」——主线只留
+                用户真正要判断的三件事：跑没跑、登录没、数据通没通。 */}
             <div className="host-grid" data-testid="host-facts">
-              <span className="k">目录</span>
-              <span className="v mono">{s.install?.dir ?? '—'}</span>
               <span className="k">WebUI</span>
               <span className="v mono">
                 {s.webuiPort
                   ? `127.0.0.1:${s.webuiPort}${s.webuiReachable ? ' · 已可达' : ' · 不可达'}`
                   : '—'}
               </span>
-              <span className="k">OneBot</span>
+              <span className="k">聊天数据</span>
               <span className="v mono">
                 {s.onebotPort
-                  ? `127.0.0.1:${s.onebotPort}${s.onebotPortReachable ? ' · 已监听' : ' · 未监听'}`
+                  ? `127.0.0.1:${s.onebotPort}${s.onebotPortReachable ? ' · 已就绪' : ' · 未就绪'}`
                   : '—'}
               </span>
               {s.login && (
@@ -262,57 +272,22 @@ export function HostPanel({
                 </>
               )}
             </div>
+            {s.install?.dir && (
+              <details className="host-details" data-testid="host-details">
+                <summary>安装详情</summary>
+                <div className="host-grid">
+                  <span className="k">目录</span>
+                  <span className="v mono">{s.install.dir}</span>
+                </div>
+              </details>
+            )}
             {s.message && <div className="host-msg">{s.message}</div>}
-            <div className="host-acts">
-              {s.state === 'running' || s.state === 'starting' || s.state === 'degraded' ? (
-                <button
-                  className="btn danger"
-                  data-testid="host-stop"
-                  disabled={busy !== ''}
-                  onClick={() => setConfirmStop(id ?? '')}
-                >
-                  停止
-                </button>
-              ) : (
-                <button
-                  className="btn primary"
-                  data-testid="host-start"
-                  disabled={busy !== '' || s.state === 'unknown'}
-                  title={s.state === 'unknown' ? '端口被外部实例占用，已阻止启动以免产生冲突' : undefined}
-                  onClick={() =>
-                    void run('start', async () => {
-                      await api.startHost(id);
-                      await refresh();
-                    })
-                  }
-                >
-                  {busy === 'start' ? '启动中…' : '启动'}
-                </button>
-              )}
-              {s.webuiPort && s.webuiReachable && (
-                <button
-                  className="btn"
-                  data-testid="host-open-webui"
-                  disabled={!bridge.capabilities.openLinks || busy !== ''}
-                  title={bridge.capabilities.openLinks ? '在默认浏览器打开本机 NapCat WebUI' : '宿主不支持打开外部链接'}
-                  onClick={() =>
-                    void run('open-webui', () => bridge.openLocalLink(`http://127.0.0.1:${s.webuiPort}`))
-                  }
-                >
-                  打开 WebUI
-                </button>
-              )}
-              <button
-                className="btn"
-                data-testid="host-uninstall"
-                disabled={busy !== ''}
-                title="删除安装目录并清理台账（不可恢复）"
-                onClick={() => setConfirmUninstall(id ?? '')}
-              >
-                卸载
-              </button>
-            </div>
-            {s.state === 'running' && !s.login && s.webuiPort && (
+            {/*
+              扫码引导。
+              **放在运维按钮之前**：这一屏的主线是「扫码登录」，
+              停止/卸载是运维动作，不该排在用户真正要做的事前面。
+            */}
+            {showGuide && (
               <div className="host-login-guide" data-testid="host-login-guide">
                 <div className="guide-title">扫码登录 QQ</div>
                 {id && (
@@ -355,6 +330,56 @@ export function HostPanel({
                 )}
               </div>
             )}
+            <div className="host-acts">
+              {s.state === 'running' || s.state === 'starting' || s.state === 'degraded' ? (
+                <button
+                  className="btn"
+                  data-testid="host-stop"
+                  disabled={busy !== ''}
+                  onClick={() => setConfirmStop(id ?? '')}
+                >
+                  停止
+                </button>
+              ) : (
+                <button
+                  className="btn primary"
+                  data-testid="host-start"
+                  disabled={busy !== '' || s.state === 'unknown'}
+                  title={s.state === 'unknown' ? '端口被外部实例占用，已阻止启动以免产生冲突' : undefined}
+                  onClick={() =>
+                    void run('start', async () => {
+                      await api.startHost(id);
+                      await refresh();
+                    })
+                  }
+                >
+                  {busy === 'start' ? '启动中…' : '启动'}
+                </button>
+              )}
+              {/* 扫码引导里已经有一个「打开 WebUI」，这里不再重复 */}
+              {!showGuide && s.webuiPort && s.webuiReachable && (
+                <button
+                  className="btn"
+                  data-testid="host-open-webui"
+                  disabled={!bridge.capabilities.openLinks || busy !== ''}
+                  title={bridge.capabilities.openLinks ? '在默认浏览器打开本机 NapCat WebUI' : '宿主不支持打开外部链接'}
+                  onClick={() =>
+                    void run('open-webui', () => bridge.openLocalLink(`http://127.0.0.1:${s.webuiPort}`))
+                  }
+                >
+                  打开 WebUI
+                </button>
+              )}
+              <button
+                className="btn"
+                data-testid="host-uninstall"
+                disabled={busy !== ''}
+                title="删除安装目录并清理台账（不可恢复）"
+                onClick={() => setConfirmUninstall(id ?? '')}
+              >
+                卸载
+              </button>
+            </div>
             {confirmStop === (id ?? '') && (
               <div className="host-confirm" role="group" aria-label="确认停止 NapCat">
                 <span>确认停止这个由插件启动的 NapCat 实例？</span>

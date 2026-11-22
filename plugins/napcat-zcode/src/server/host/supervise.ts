@@ -344,7 +344,7 @@ export async function probeManagedHost(
     return {
       ...base,
       state: 'degraded',
-      message: 'NapCat 在跑，但 OneBot Server 没开（需要在 WebUI 里开启，插件不会代开）。',
+      message: 'NapCat 在跑，但聊天数据还没接上（扫码登录成功后会自动打开）。',
     };
   }
   const login = await fetchLoginInfo(onebotPort, timeoutMs + 300);
