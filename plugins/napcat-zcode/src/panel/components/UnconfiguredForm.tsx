@@ -71,77 +71,81 @@ export function UnconfiguredForm({
   return (
     <div className="setup" data-testid="setup-form">
       <h2>连接 NapCat</h2>
-      <LocalDetect onPick={(ep, suspect) => void pickCandidate(ep, suspect)} onDetected={onDetected} />
-      <label>
-        OneBot 端点
-        <input
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder="http://127.0.0.1:3000 或 ws://127.0.0.1:3001"
-        />
-      </label>
-      <label>
-        Token（留空 = 保留已保存的 token）
-        {/* token 是凭据：输入框不回显（type=password），不落在明文 DOM 里 */}
-        <input
-          ref={tokenRef}
-          type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="已保存的 token 会被保留"
-        />
-      </label>
-      {tokenHint && (
-        <div className="warn" data-testid="token-hint">
-          {tokenHint}
-        </div>
-      )}
-      <label className="inline">
-        <input
-          type="checkbox"
-          checked={clearToken}
-          disabled={token.trim() !== ''}
-          onChange={(e) => setClearToken(e.target.checked)}
-          data-testid="clear-token"
-        />
-        清除已保存的 token
-      </label>
-      <button
-        className="btn primary"
-        disabled={busy || !endpoint}
-        data-testid="connect-btn"
-        onClick={async () => {
-          setBusy(true);
-          setErr('');
-          setWarn('');
-          try {
-            const r = await api.configure(
-              endpoint,
-              token,
-              clearToken && token.trim() === '',
-            );
-            // 服务端的非回环 + 无 token 警告：不是错误，但要让人看见
-            if (r.warning) setWarn(r.warning);
-            onDone();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        {busy ? '连接中…' : '连接'}
-      </button>
-      {err && (
-        <div className="err" data-testid="setup-error">
-          {err}
-        </div>
-      )}
-      {warn && (
-        <div className="warn" data-testid="setup-warning">
-          {warn}
-        </div>
-      )}
+      <div className="setup-detect">
+        <LocalDetect onPick={(ep, suspect) => void pickCandidate(ep, suspect)} onDetected={onDetected} />
+      </div>
+      <div className="setup-form">
+        <label>
+          OneBot 端点
+          <input
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            placeholder="http://127.0.0.1:3000 或 ws://127.0.0.1:3001"
+          />
+        </label>
+        <label>
+          Token
+          {/* token 是凭据：输入框不回显（type=password），不落在明文 DOM 里 */}
+          <input
+            ref={tokenRef}
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="留空 = 保留已保存的 token"
+          />
+        </label>
+        {tokenHint && (
+          <div className="warn" data-testid="token-hint">
+            {tokenHint}
+          </div>
+        )}
+        <label className="inline">
+          <input
+            type="checkbox"
+            checked={clearToken}
+            disabled={token.trim() !== ''}
+            onChange={(e) => setClearToken(e.target.checked)}
+            data-testid="clear-token"
+          />
+          清除已保存的 token
+        </label>
+        <button
+          className="btn primary"
+          disabled={busy || !endpoint}
+          data-testid="connect-btn"
+          onClick={async () => {
+            setBusy(true);
+            setErr('');
+            setWarn('');
+            try {
+              const r = await api.configure(
+                endpoint,
+                token,
+                clearToken && token.trim() === '',
+              );
+              // 服务端的非回环 + 无 token 警告：不是错误，但要让人看见
+              if (r.warning) setWarn(r.warning);
+              onDone();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? '连接中…' : '连接'}
+        </button>
+        {err && (
+          <div className="err" data-testid="setup-error">
+            {err}
+          </div>
+        )}
+        {warn && (
+          <div className="warn" data-testid="setup-warning">
+            {warn}
+          </div>
+        )}
+      </div>
       <p className="hint">
         先在 NapCat 的 WebUI 网络配置里启用 HTTP Server，再回到这里连接。本机使用可以不设 token。
       </p>

@@ -561,7 +561,9 @@ export function App() {
               <div className="desc">第一次连接可能需要十几秒</div>
             </div>
           )}
-          {phase === 'unconfigured' && (
+          {/* 未配置/错误相位：连接与引导内容只出现在「记录」页签；
+              「宿主」页签有自己的内容（安装 / 接管 / 启停），两者不叠加 */}
+          {phase === 'unconfigured' && tab === 'records' && (
             <UnconfiguredForm
               onDone={() => void reload()}
               onDetected={() => void refreshStatus()}
@@ -569,6 +571,7 @@ export function App() {
             />
           )}
           {phase === 'error' &&
+            tab === 'records' &&
             (reconfiguring ? (
               // 端点填错了/换机器了 → 让用户直接改（不预填，免得无声覆盖已有配置）
               <UnconfiguredForm

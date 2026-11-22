@@ -390,8 +390,7 @@ export function resolveDesktopQqPath(install: ManagedInstall, opts: SuperviseOpt
     }
   }
   throw new Error(
-    '注入模式需要桌面 QQ 的路径，但没能找到（插件设置里没填，安装目录里也没有 qq_path.txt）。' +
-      '请在设置里填上 QQ.exe 的路径，或改用独立模式（不影响桌面 QQ）。',
+    '没有找到桌面 QQ。请在插件设置里填写 QQ.exe 的路径，或改用独立模式（不影响桌面 QQ）。',
   );
 }
 

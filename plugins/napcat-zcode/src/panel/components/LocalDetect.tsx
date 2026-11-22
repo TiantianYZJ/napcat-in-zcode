@@ -69,10 +69,10 @@ export function LocalDetect({
       try {
         const started = await api.startHost(adopted.id);
         note = started.warning
-          ? `${started.message}（${started.warning}）`
+          ? `${started.message} ${started.warning}`
           : `${started.message} 已在注入模式启动。`;
       } catch (startErr) {
-        note = `${adopted.message}；但启动失败：${startErr instanceof Error ? startErr.message : String(startErr)}`;
+        note = `已接管，但启动失败：${startErr instanceof Error ? startErr.message : String(startErr)}`;
       }
       setAdoptNote(note);
       onDetected?.();

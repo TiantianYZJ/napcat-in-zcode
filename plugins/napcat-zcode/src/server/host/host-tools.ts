@@ -378,7 +378,7 @@ export function registerHostTools(server: McpServer, state: AppState): void {
         const bootExe = join(napcatDir, 'NapCatWinBootMain.exe');
         if (!existsSync(bootExe)) {
           throw new Error(
-            `接管失败：${napcatDir} 里找不到 NapCatWinBootMain.exe —— 只支持带启动器的 NapCat 独立布局。`,
+            `接管失败：${napcatDir} 里没有 NapCatWinBootMain.exe。这种安装布局暂不支持接管。`,
           );
         }
         const rootDir = dirname(napcatDir);
@@ -409,7 +409,7 @@ export function registerHostTools(server: McpServer, state: AppState): void {
             adopted: true,
             id: existing.id,
             dir: rootDir,
-            message: '这个目录已经在受管台账里，无需重复接管。',
+            message: '已在受管台账中。',
           });
         }
         const install: ManagedInstall = {
@@ -430,8 +430,8 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           mode: 'inject',
           qqPathFound: hasQq,
           message: hasQq
-            ? `已接管（注入模式，QQ 本体：${qqExe}）。napcat_start 即可启动。`
-            : `已接管（注入模式），但没找到 QQ.exe —— 启动前请在插件设置里配置「桌面 QQ 路径」。`,
+            ? '已接管，可以启动了。'
+            : '已接管。还没找到 QQ，启动前请在插件设置里填写 QQ 路径。',
         });
       } catch (e) {
         return fail(state, e);

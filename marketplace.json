@@ -7,7 +7,7 @@
     {
       "name": "napcat-zcode",
       "source": "./plugins/napcat-zcode",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "description": "Inject selected QQ chat records into ZCode context and save them as attachments via NapCat (OneBot 11).",
       "displayName": "Napcat in ZCode",
       "displayName_i18n": {

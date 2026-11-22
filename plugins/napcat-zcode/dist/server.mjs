@@ -26672,7 +26672,7 @@ function resolveDesktopQqPath(install, opts) {
     }
   }
   throw new Error(
-    "\u6CE8\u5165\u6A21\u5F0F\u9700\u8981\u684C\u9762 QQ \u7684\u8DEF\u5F84\uFF0C\u4F46\u6CA1\u80FD\u627E\u5230\uFF08\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u6CA1\u586B\uFF0C\u5B89\u88C5\u76EE\u5F55\u91CC\u4E5F\u6CA1\u6709 qq_path.txt\uFF09\u3002\u8BF7\u5728\u8BBE\u7F6E\u91CC\u586B\u4E0A QQ.exe \u7684\u8DEF\u5F84\uFF0C\u6216\u6539\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002"
+    "\u6CA1\u6709\u627E\u5230\u684C\u9762 QQ\u3002\u8BF7\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u586B\u5199 QQ.exe \u7684\u8DEF\u5F84\uFF0C\u6216\u6539\u7528\u72EC\u7ACB\u6A21\u5F0F\uFF08\u4E0D\u5F71\u54CD\u684C\u9762 QQ\uFF09\u3002"
   );
 }
 async function waitForSpawn(child) {
@@ -26998,7 +26998,7 @@ function registerHostTools(server2, state) {
         const bootExe = join6(napcatDir, "NapCatWinBootMain.exe");
         if (!existsSync4(bootExe)) {
           throw new Error(
-            `\u63A5\u7BA1\u5931\u8D25\uFF1A${napcatDir} \u91CC\u627E\u4E0D\u5230 NapCatWinBootMain.exe \u2014\u2014 \u53EA\u652F\u6301\u5E26\u542F\u52A8\u5668\u7684 NapCat \u72EC\u7ACB\u5E03\u5C40\u3002`
+            `\u63A5\u7BA1\u5931\u8D25\uFF1A${napcatDir} \u91CC\u6CA1\u6709 NapCatWinBootMain.exe\u3002\u8FD9\u79CD\u5B89\u88C5\u5E03\u5C40\u6682\u4E0D\u652F\u6301\u63A5\u7BA1\u3002`
           );
         }
         const rootDir = dirname4(napcatDir);
@@ -27026,7 +27026,7 @@ function registerHostTools(server2, state) {
             adopted: true,
             id: existing.id,
             dir: rootDir,
-            message: "\u8FD9\u4E2A\u76EE\u5F55\u5DF2\u7ECF\u5728\u53D7\u7BA1\u53F0\u8D26\u91CC\uFF0C\u65E0\u9700\u91CD\u590D\u63A5\u7BA1\u3002"
+            message: "\u5DF2\u5728\u53D7\u7BA1\u53F0\u8D26\u4E2D\u3002"
           });
         }
         const install = {
@@ -27046,7 +27046,7 @@ function registerHostTools(server2, state) {
           dir: rootDir,
           mode: "inject",
           qqPathFound: hasQq,
-          message: hasQq ? `\u5DF2\u63A5\u7BA1\uFF08\u6CE8\u5165\u6A21\u5F0F\uFF0CQQ \u672C\u4F53\uFF1A${qqExe}\uFF09\u3002napcat_start \u5373\u53EF\u542F\u52A8\u3002` : `\u5DF2\u63A5\u7BA1\uFF08\u6CE8\u5165\u6A21\u5F0F\uFF09\uFF0C\u4F46\u6CA1\u627E\u5230 QQ.exe \u2014\u2014 \u542F\u52A8\u524D\u8BF7\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u914D\u7F6E\u300C\u684C\u9762 QQ \u8DEF\u5F84\u300D\u3002`
+          message: hasQq ? "\u5DF2\u63A5\u7BA1\uFF0C\u53EF\u4EE5\u542F\u52A8\u4E86\u3002" : "\u5DF2\u63A5\u7BA1\u3002\u8FD8\u6CA1\u627E\u5230 QQ\uFF0C\u542F\u52A8\u524D\u8BF7\u5728\u63D2\u4EF6\u8BBE\u7F6E\u91CC\u586B\u5199 QQ \u8DEF\u5F84\u3002"
         });
       } catch (e) {
         return fail(state, e);

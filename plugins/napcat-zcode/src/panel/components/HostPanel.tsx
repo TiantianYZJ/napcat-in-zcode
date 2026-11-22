@@ -414,49 +414,51 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
           <div className="host-head">
             <span className="host-name">安装 NapCat</span>
           </div>
-          <label className="host-msg">
-            版本
-            <select value={version} onChange={(e) => setVersion(e.target.value)} data-testid="host-version">
-              <option value="">默认（{versions[0] ?? '4.18.42'}）</option>
-              {versions.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="host-msg">
-            运行模式
-            <select value={startMode} onChange={(e) => setStartMode(e.target.value as 'standalone' | 'inject')} data-testid="host-mode">
-              <option value="standalone">独立模式（不影响桌面 QQ，推荐）</option>
-              <option value="inject">注入桌面 QQ（较新版本可能无法启动）</option>
-            </select>
-          </label>
+          <div className="install-grid">
+            <label className="host-msg">
+              版本
+              <select value={version} onChange={(e) => setVersion(e.target.value)} data-testid="host-version">
+                <option value="">默认（{versions[0] ?? '4.18.42'}）</option>
+                {versions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="host-msg">
+              运行模式
+              <select value={startMode} onChange={(e) => setStartMode(e.target.value as 'standalone' | 'inject')} data-testid="host-mode">
+                <option value="standalone">独立模式（不影响桌面 QQ，推荐）</option>
+                <option value="inject">注入桌面 QQ（较新版本可能无法启动）</option>
+              </select>
+            </label>
+            <label className="host-msg">
+              安装目录
+              <input
+                type="text"
+                value={dir}
+                onChange={(e) => setDir(e.target.value)}
+                placeholder="默认用插件数据目录"
+                data-testid="host-dir"
+              />
+            </label>
+            <label className="host-msg">
+              下载代理
+              <input
+                type="text"
+                value={proxy}
+                onChange={(e) => setProxy(e.target.value)}
+                placeholder="可选，如 http://127.0.0.1:7897"
+                data-testid="host-proxy"
+              />
+            </label>
+          </div>
           {startMode === 'inject' && (
             <div className="host-warn" data-testid="host-inject-warning">
-              注入模式可能触发 QQ 完整性检查并导致「文件已损坏」错误。安装前请确认兼容性。
+              注入模式会操作桌面 QQ，较新版本可能无法启动。
             </div>
           )}
-          <label className="host-msg">
-            安装目录（留空 = 插件数据目录）
-            <input
-              type="text"
-              value={dir}
-              onChange={(e) => setDir(e.target.value)}
-              placeholder="D:\\NapCat"
-              data-testid="host-dir"
-            />
-          </label>
-          <label className="host-msg">
-            下载代理（可留空；本机 github 直连不通时填 http://127.0.0.1:7897）
-            <input
-              type="text"
-              value={proxy}
-              onChange={(e) => setProxy(e.target.value)}
-              placeholder="http://127.0.0.1:7897"
-              data-testid="host-proxy"
-            />
-          </label>
           <div className="host-acts">
             <button
               className="btn primary"

@@ -671,3 +671,13 @@
 - [x] **宽度适配**：≤420px 事实网格降单列、接管行卡按钮换行；既有 380px 宿主卡降级与工具栏/动作条换行保持；侧栏任意宽度可用
 - [x] `npm run typecheck` / `npm test`（31 文件 / **730 通过 / 4 跳过**；文案断言同步）/ `npm run build`（227 kB）/ `npm run smoke`（stdio 19/19、panel 15/15——登录者 fixture 改为群友，自己的消息组不再渲染名字头）
 - [x] 视口复验：chat 场景新气泡形态（右对齐灰底 + 左对齐 + 图片占位）在深浅两主题、640px 宽度下符合原生观感
+
+### 15.10 v0.10.0 增量验收记录（修叠加 bug + 高密度重排）
+
+用户真机截图（宽侧栏、内容左对齐 + 右侧大片空白 + 连接表单与宿主卡叠在一起）驱动：
+
+- [x] **叠加 bug（截图根因）**：unconfigured/error 相位下 UnconfiguredForm 不分页签渲染，放宽的宿主页签又叠加 HostPanel → 连接/引导内容只在 `records` 页签渲染，宿主页签只渲染 HostPanel
+- [x] **高密度重排**（对齐原生侧栏）：小节标题降为 xs 弱色（对齐原生「任务列表」分组标题密度）；未配置相位宽侧栏（≥760px）改**两列**——左列本机检测与接管、右列连接表单，填满宽度；安装表单 ≥560px 两列；连接按钮满宽
+- [x] **长文案精简**：`resolveDesktopQqPath` 失败、adopt 幂等/成功/QQ 缺失、接管不支持布局的 server 文案全部缩短；面板 adoptNote 拼接改为失败时只报「已接管，但启动失败：…」；Token label 拆出说明进 placeholder；安装目录/代理说明进 placeholder
+- [x] `npm run typecheck` / `npm test`（34 文件 / **730 通过 / 4 跳过**）/ `npm run build` / `npm run smoke`（stdio 19/19、panel 15/15）
+- [x] 视口复验：808px 宽、dark 主题下两列布局填满宽度、无叠加、密度对齐原生

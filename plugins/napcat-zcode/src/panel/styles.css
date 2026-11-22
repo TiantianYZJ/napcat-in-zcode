@@ -959,16 +959,35 @@ textarea {
 .setup {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  max-width: 460px;
+  gap: 10px;
+  padding: 4px 16px 16px;
 }
 
 .setup h2 {
   margin: 0;
-  font-size: var(--text-ui-lg);
-  font-weight: 500;
+  font-size: var(--text-ui-base);
+  font-weight: 600;
   letter-spacing: 0;
+}
+
+/* 宽侧栏：连接表单与本机检测并排（填满宽度，不留大片空白） */
+.setup-form .btn.primary {
+  width: 100%;
+}
+
+@media (min-width: 760px) {
+  .setup {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px 24px;
+    align-items: start;
+  }
+
+  .setup h2,
+  .setup .hint,
+  .setup .btn[data-testid='go-host-btn'] {
+    grid-column: 1 / -1;
+  }
 }
 
 .setup label {
@@ -1011,10 +1030,11 @@ textarea {
   gap: 8px;
 }
 
+/* 小节标题：对齐原生侧栏的分组标题密度（xs 弱色，不是大标题） */
 .detect .section-title {
-  font-size: var(--text-ui-base);
+  font-size: var(--text-ui-xs);
   font-weight: 500;
-  color: var(--color-foreground);
+  color: var(--color-foreground-subtlest);
 }
 
 .detect .detect-result {
@@ -1211,6 +1231,19 @@ textarea {
 .host-card .host-grid .mono {
   font-family: var(--font-mono);
   font-size: var(--text-ui-xs);
+}
+
+/* 安装表单：宽屏两列，窄屏单列 */
+.install-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px;
+}
+
+@media (min-width: 560px) {
+  .install-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .host-card .host-confirm {
