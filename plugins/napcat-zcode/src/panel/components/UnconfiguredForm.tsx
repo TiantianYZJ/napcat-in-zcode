@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { api } from '../api.js';
+import { api, bridge, friendlyError } from '../api.js';
 import { LocalDetect } from './LocalDetect.js';
 
 /**
@@ -54,7 +54,7 @@ export function UnconfiguredForm({
     setEndpoint(ep);
     setErr('');
     if (suspectToken) {
-      setTokenHint('该端点可能需要 access token：请在下方填入 access token 后再连接');
+      setTokenHint('这个端点需要 token，填好后点「连接」');
       tokenRef.current?.focus();
     }
     try {
@@ -62,7 +62,7 @@ export function UnconfiguredForm({
       if (r.warning) setWarn(r.warning);
       onDone();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(friendlyError(e instanceof Error ? e.message : String(e)));
     } finally {
       picking.current = false;
     }
@@ -76,7 +76,13 @@ export function UnconfiguredForm({
       </div>
       <div className="page-card">
         <div className="setup-detect">
-          <LocalDetect onPick={(ep, suspect) => void pickCandidate(ep, suspect)} onDetected={onDetected} />
+          <LocalDetect
+            onPick={(ep, suspect) => void pickCandidate(ep, suspect)}
+            onDetected={onDetected}
+            onOpenWebui={(port) =>
+              void bridge.openLocalLink(`http://127.0.0.1:${port}`).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+            }
+          />
         </div>
         <div className="setup-form">
           <label>
@@ -131,7 +137,7 @@ export function UnconfiguredForm({
                 if (r.warning) setWarn(r.warning);
                 onDone();
               } catch (e) {
-                setErr(e instanceof Error ? e.message : String(e));
+                setErr(friendlyError(e instanceof Error ? e.message : String(e)));
               } finally {
                 setBusy(false);
               }

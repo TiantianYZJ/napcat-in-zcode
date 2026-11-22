@@ -1,28 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type DetectEntry, type DetectResult } from '../api.js';
+import { api, bridge, type DetectEntry, type DetectResult } from '../api.js';
 
 /**
- * 「检测本机 NapCat」区块。
+ * 「本机 NapCat」区块：打开面板就自动检测，把发现变成**可执行的下一步**。
  *
- * **检测不自动连接**：只列候选，由用户点「使用这个」。
- * （自动连接会把「探测」变成「替用户做决定」——探测失败时用户连是哪台机器都不知道。）
+ * 信息分层（对齐原生设置页的克制）：
+ * - 能连接的端点 = 建议行动（「使用这个」）；
+ * - 没开 OneBot = 一个动作（「打开 WebUI」）；
+ * - 本机安装 = 可接管；
+ * - 失败地址 / 扫描细节 = 默认折叠的细节，不再占屏。
  *
- * 文案口径（来自 M2 Task 4 的复审裁定，逐条照做）：
- * - `budgetExhausted === true` → **绝不可**说「未检测到本机 NapCat」（那是假阴性）；
- * - `detection` 键不存在 → 「尚未检测」（不是「未检测到」）；
- * - 超时类失败（「目标无响应」）与其它失败（「连不上」）分开说，不合并成一句；
- * - `tokenRequired` 只作**角标**，措辞是「可能」——探测从不带 token，
- *   且 WebUI 自己的 token ≠ OneBot access token；
- * - `notes` **原样渲染**：面板不自己重算数量（候选/端口都被截到上限，计数只在 notes 里）。
+ * 文案口径（M2 复审裁定）：预算耗尽不说「未检测到」；探测从不带 token，
+ * token 角标只说「可能」；notes 原样保留在折叠详情里。
  */
 export function LocalDetect({
   onPick,
   onDetected,
+  onOpenWebui,
 }: {
   /** 用户点了「使用这个」：`suspectToken` = 该候选疑似需要 access token。 */
   onPick: (endpoint: string, suspectToken: boolean) => void;
   /** 探测完成（用来刷新状态条上的探测摘要）。 */
   onDetected?: () => void;
+  /** 检测到 NapCat 在跑但没开 OneBot 时，给一个「打开 WebUI」的动作。 */
+  onOpenWebui?: (port: number) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DetectResult | null>(null);
@@ -37,7 +38,7 @@ export function LocalDetect({
   const inflight = useRef(false);
 
   const run = async (): Promise<void> => {
-    if (inflight.current) return; // 并发重复触发：直接忽略
+    if (inflight.current) return;
     inflight.current = true;
     setBusy(true);
     setErr('');
@@ -53,19 +54,16 @@ export function LocalDetect({
     }
   };
 
-  /**
-   * 接管并启动：登记进受管台账（不重新下载）→ 注入模式启动。
-   * 启动后 OneBot 端点才活，用户回上方表单连接（或点候选的「使用这个」）。
-   */
+  /** 接管并启动：登记进受管台账（不重新下载）→ 注入模式启动。 */
   const adoptAndStart = async (configDir: string, webuiPort?: number): Promise<void> => {
     setAdoptBusy(configDir);
     setAdoptNote('');
     try {
       const adopted = await api.adoptHost(configDir, webuiPort);
-      let note = adopted.message;
       if (!('id' in adopted) || typeof adopted.id !== 'string' || adopted.id === '') {
         throw new Error('接管结果缺少安装 id。');
       }
+      let note = adopted.message;
       try {
         const started = await api.startHost(adopted.id);
         note = started.warning
@@ -85,21 +83,27 @@ export function LocalDetect({
 
   const candidates = candidatesOf(result);
   const failures = failuresOf(result);
+  const installs = result?.installs ?? [];
+  const canOpenWebui = bridge.capabilities.openLinks;
+  const detailNotes = result?.notes ?? [];
 
-  // 打开面板就自动检测一次：新用户不用理解「要先点检测」（初次体验的关键一步）
+  // 打开面板就自动检测一次：新用户不用理解「要先点检测」
   const autoRan = useRef(false);
   useEffect(() => {
     if (autoRan.current) return;
     autoRan.current = true;
     void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <div className="detect" data-testid="detect-panel">
-      <div className="section-title">本机已装的 NapCat</div>
-      <button className="btn" data-testid="detect-btn" disabled={busy} onClick={() => void run()}>
-        {busy ? '检测中…' : '重新检测'}
-      </button>
+      <div className="detect-toolbar">
+        <div className="section-title">本机 NapCat</div>
+        <button className="btn ghost" data-testid="detect-btn" disabled={busy} onClick={() => void run()}>
+          {busy ? '检测中…' : '重新检测'}
+        </button>
+      </div>
       {err && (
         <div className="detect-budget" data-testid="detect-error">
           {err}
@@ -109,17 +113,26 @@ export function LocalDetect({
         <div className="detect-result" data-testid="detect-result">
           {result.budgetExhausted === true && (
             <div className="detect-budget" data-testid="detect-budget">
-              探测未完成（扫描预算耗尽），结果可能不全 —— 不能据此判断本机没有 NapCat。
-              请调大 autoDetect.probeTimeoutMs 或减少扫描端口后重试。
+              扫描没有完成，结果可能不全，不能据此判断本机没有 NapCat。
             </div>
           )}
           {!result.found && result.napcatRunning === true && (
             <div className="detect-nowebui" data-testid="detect-nowebui">
-              检测到 NapCat 正在运行，但没有开启 OneBot Server。
+              <div className="empty-title">NapCat 正在运行，还没有开启 OneBot</div>
+              <div className="empty-desc">打开 WebUI，在网络配置里启用 HTTP Server，再回这里连接</div>
               {typeof result.webuiPort === 'number' && (
-                <div>WebUI 地址：http://127.0.0.1:{result.webuiPort}</div>
+                <div className="host-acts">
+                  <button
+                    className="btn"
+                    data-testid="detect-open-webui"
+                    disabled={!canOpenWebui}
+                    title={canOpenWebui ? '在浏览器打开 NapCat WebUI' : '当前环境不支持打开网页'}
+                    onClick={() => void onOpenWebui?.(result.webuiPort as number)}
+                  >
+                    打开 WebUI
+                  </button>
+                </div>
               )}
-              <div>请在 NapCat WebUI → 网络配置 → 开启 HTTP Server 后再检测。</div>
             </div>
           )}
           {!result.found && result.napcatRunning !== true && result.budgetExhausted !== true && (
@@ -134,15 +147,13 @@ export function LocalDetect({
                 <div className="detect-candidate" key={c.entry.endpoint} data-testid={`detect-candidate-${i}`}>
                   <span className="ep">{c.entry.endpoint}</span>
                   {c.entry.login?.nickname && <span className="nick">{c.entry.login.nickname}</span>}
-                  {c.entry.unresponsive === true && (
-                    <span className="label">目标无响应（超时）</span>
-                  )}
+                  {c.entry.unresponsive === true && <span className="label">连接超时</span>}
                   {c.suspectToken && (
-                    <span className="badge warn" data-testid={`detect-token-badge-${i}`}>
-                      {tokenBadge(c.entry.endpoint)}
+                    <span className="badge warn" data-testid={`detect-token-badge-${i}`} title={tokenBadge(c.entry.endpoint)}>
+                      可能需要 token
                     </span>
                   )}
-                  {c.entry.error && <span className="detail">{c.entry.error}</span>}
+                  {c.entry.error && <span className="detail" title={c.entry.error}>{c.entry.error}</span>}
                   <button
                     className="btn"
                     data-testid={`detect-use-${i}`}
@@ -156,24 +167,16 @@ export function LocalDetect({
           )}
           {failures.length > 0 && (
             <div className="detect-failed" data-testid="detect-failed">
-              {/* 默认只给一行摘要：失败端点逐个摆出来全是噪音 */}
               <button
                 className="detect-failed-toggle"
                 data-testid="detect-failed-toggle"
                 onClick={() => setShowFailed((v) => !v)}
               >
-                {showFailed
-                  ? '收起失败的地址'
-                  : `${failures.length} 个地址没有响应，NapCat 可能没有运行`}
+                {showFailed ? '收起失败的地址' : `${failures.length} 个地址没有响应，NapCat 可能没有运行`}
               </button>
               {showFailed &&
                 failures.map((f, i) => (
                   <div className="detect-fail" key={`${f.endpoint}-${i}`} data-testid={`detect-fail-${i}`}>
-                    {/*
-                      超时（目标在那儿但不答话）与其它失败是**两回事**，不能合并成一句。
-                      其它失败里既有「根本连不上」，也有「连上了但被拒绝（鉴权/无权限）」——
-                      后者可能因裁剪没进 tokenRequired，所以措辞要**同时覆盖两种**。
-                    */}
                     <span className="label">{f.unresponsive === true ? '连接超时' : '无法连接'}</span>
                     <span className="ep">{f.endpoint}</span>
                     {f.error && <span className="detail">{f.error}</span>}
@@ -181,10 +184,10 @@ export function LocalDetect({
                 ))}
             </div>
           )}
-          {(result.installs ?? []).length > 0 && (
+          {installs.length > 0 && (
             <div className="detect-installs" data-testid="detect-installs">
               <div className="detect-installs-title">检测到本机安装，可以接管后直接启动</div>
-              {result.installs.map((inst, i) => (
+              {installs.map((inst, i) => (
                 <div className="detect-install" key={`${inst.configDir}-${i}`} data-testid={`detect-install-${i}`}>
                   <div className="detect-install-info">
                     <span className="ep mono">{inst.configDir}</span>
@@ -210,19 +213,16 @@ export function LocalDetect({
               )}
             </div>
           )}
-          {(result.droppedEndpoints ?? []).length > 0 && (
-            <div className="detect-dropped" data-testid="detect-dropped">
-              {result.droppedEndpoints.map((d, i) => (
+          {((result.droppedEndpoints ?? []).length > 0 || detailNotes.length > 0) && (
+            <details className="detect-notes" data-testid="detect-notes">
+              <summary>检测详情</summary>
+              {(result.droppedEndpoints ?? []).map((d, i) => (
                 <div key={`${d.endpoint}-${i}`}>已跳过 {d.endpoint}（不是回环地址）</div>
               ))}
-            </div>
-          )}
-          {(result.notes ?? []).length > 0 && (
-            <div className="detect-notes" data-testid="detect-notes">
-              {result.notes.map((n, i) => (
+              {detailNotes.map((n, i) => (
                 <div key={`${i}-${n}`}>{n}</div>
               ))}
-            </div>
+            </details>
           )}
         </div>
       )}
@@ -234,7 +234,7 @@ export function LocalDetect({
 function tokenBadge(endpoint: string): string {
   if (endpoint.startsWith('ws')) {
     // WS 握手被拒也可能是「该端口压根不是 WebSocket 服务」→ 不许断言「需要 access token」
-    return '该端点可能需要 access token（也可能该端口不是 WebSocket 服务）';
+    return '该端口可能需要 access token，也可能不是 WebSocket 服务';
   }
   return '该端点可能需要 access token';
 }

@@ -464,6 +464,9 @@ export function friendlyError(text: string): string {
   if (/fetch failed/i.test(text)) {
     return '连不上 NapCat（网络错误）：请确认 NapCat 正在运行、端点地址与 token 正确，然后点「重试」。';
   }
+  if (/websocket connect failed|handshake/i.test(text)) {
+    return '这个端点没有响应 WebSocket 连接：请确认端口正确、NapCat 已开启 WebSocket Server，token 也与设置一致。';
+  }
   if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|ETIMEDOUT|socket hang up|ECONNRESET/i.test(text)) {
     return '连不上 NapCat（连接被拒或超时）：请确认 NapCat 正在运行、OneBot 端口正确；若配置了 token 请核对。';
   }

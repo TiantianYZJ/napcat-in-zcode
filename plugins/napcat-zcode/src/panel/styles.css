@@ -1064,11 +1064,40 @@ textarea {
   color: var(--color-foreground-subtlest);
 }
 
+.detect-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .detect .detect-result {
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: var(--text-ui-sm);
+}
+
+/* 空态行（如「NapCat 在跑但没开 OneBot」）：标题 + 引导 + 动作，不再是橙字堆 */
+.detect .detect-nowebui,
+.detect .detect-notfound {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.detect .detect-nowebui .host-acts {
+  margin-top: 4px;
+}
+
+/* token 需求提示：helper 文本，不是警报 */
+.setup .warn {
+  color: var(--color-foreground-subtle);
+  font-size: var(--text-ui-xs);
+  word-break: break-word;
 }
 
 /* 行卡（对齐原生模型列表行）：surface 填充 + 大圆角，无边框 */
@@ -1159,11 +1188,6 @@ textarea {
   font-size: var(--text-ui-xs);
   color: var(--color-foreground-subtle);
   overflow-wrap: anywhere;
-}
-
-.detect .detect-nowebui,
-.detect .detect-notfound {
-  color: var(--color-foreground-subtlest);
 }
 
 .detect .detect-notes,

@@ -201,7 +201,7 @@ describe('B2：候选列表与「使用这个」', () => {
       fireEvent.click(screen.getByTestId('detect-use-0'));
     });
     await waitFor(() => expect(screen.getByTestId('token-hint')).toBeTruthy());
-    expect(screen.getByTestId('token-hint').textContent).toContain('access token');
+    expect(screen.getByTestId('token-hint').textContent).toContain('需要 token');
     const tokenInput = document.querySelector('input[type="password"]') as HTMLInputElement;
     expect(document.activeElement).toBe(tokenInput);
   });
@@ -217,8 +217,8 @@ describe('B3：NapCat 在跑但没开 OneBot Server', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     const box = await screen.findByTestId('detect-nowebui');
-    expect(box.textContent).toContain('没有开启 OneBot Server');
-    expect(box.textContent).toContain('http://127.0.0.1:6099');
+    expect(box.textContent).toContain('还没有开启 OneBot');
+    expect(box.textContent).toContain('打开 WebUI');
     expect(box.textContent).toContain('网络配置');
   });
 
@@ -229,7 +229,7 @@ describe('B3：NapCat 在跑但没开 OneBot Server', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     const box = await screen.findByTestId('detect-nowebui');
-    expect(box.textContent).toContain('没有开启 OneBot Server');
+    expect(box.textContent).toContain('还没有开启 OneBot');
     expect(box.textContent).not.toContain('http://127.0.0.1:');
   });
 });
@@ -289,9 +289,9 @@ describe('B6：文案规则', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     const box = await screen.findByTestId('detect-budget');
-    expect(box.textContent).toContain('探测未完成');
+    expect(box.textContent).toContain('扫描没有完成');
     expect(box.textContent).toContain('不能据此判断本机没有 NapCat');
-    expect(box.textContent).toContain('probeTimeoutMs');
+    expect(box.textContent).not.toContain('probeTimeoutMs');
     expect(screen.queryByTestId('detect-notfound')).toBeNull();
     // 整个面板上都不许出现这句
     expect(document.body.textContent).not.toContain('未检测到本机 NapCat');
@@ -351,7 +351,7 @@ describe('B6：文案规则', () => {
     });
     await waitFor(() => expect(screen.getByTestId('detect-candidates')).toBeTruthy());
     const text = document.body.textContent ?? '';
-    expect(text).toContain('access token');
+    expect(text).toContain('可能需要 token');
     // 「可能需要 access token」可以；断言式的「（没被「可能」修饰的）需要 access token」不行
     expect(text).not.toMatch(/(?<!可能)需要 access token/);
   });
@@ -376,7 +376,7 @@ describe('B6：文案规则', () => {
       fireEvent.click(screen.getByTestId('detect-btn'));
     });
     await waitFor(() => expect(screen.getByTestId('detect-candidate-0')).toBeTruthy());
-    expect(screen.getByTestId('detect-candidate-0').textContent).toContain('目标无响应（超时）');
+    expect(screen.getByTestId('detect-candidate-0').textContent).toContain('连接超时');
   });
 
   it('notes 原样渲染（面板不自己重算数量）', async () => {
