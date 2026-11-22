@@ -193,9 +193,9 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
     });
 
   return (
-    <div className="detect" data-testid="host-panel">
-      <div className="section-title">NapCat 宿主</div>
-      <div className="section-desc">在这里安装 NapCat，随时启动和停止</div>
+    <div className="host-page" data-testid="host-panel">
+      <div className="page-title">NapCat 宿主</div>
+      <div className="page-desc">在这里安装 NapCat，随时启动和停止</div>
 
       {installs.length > 0 && (
         <div className="host-summary" data-testid="host-summary">
@@ -204,6 +204,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
         </div>
       )}
 
+      <div className="page-card">
       {installs.length === 0 && !job && (
         <div className="detect-notfound" data-testid="host-empty">
           <div className="empty-title">还没有安装 NapCat</div>
@@ -515,6 +516,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
           </div>
         </div>
       ) : null}
+      </div>
 
       {err && (
         <div className="detect-budget" data-testid="host-error">

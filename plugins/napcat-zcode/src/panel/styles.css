@@ -54,11 +54,11 @@
   --text-ui-sm: var(--font-text-sm-size, calc(var(--ui-font-size) - 2px));
   --text-ui-xs: var(--font-text-xs-size, calc(var(--ui-font-size) - 4px));
 
-  /* ── 圆角层级（宿主 --border-radius-* → 面板 --radius-*） ───────── */
-  --radius-xl: var(--border-radius-xl, 12px);
-  --radius-lg: var(--border-radius-lg, 8px);
-  --radius-md: var(--border-radius-md, 6px);
-  --radius-sm: var(--border-radius-sm, 4px);
+  /* ── 圆角层级：比宿主默认再大两档（max() 保证不小于这个下限） ── */
+  --radius-xl: max(var(--border-radius-xl, 12px), 20px);
+  --radius-lg: max(var(--border-radius-lg, 8px), 16px);
+  --radius-md: max(var(--border-radius-md, 6px), 12px);
+  --radius-sm: max(var(--border-radius-sm, 4px), 10px);
 
   /* ── 表面与文字（Zai Light 回退；有宿主令牌时用宿主值） ─────────── */
   --color-background: var(--color-background-primary, #f8f8f8);
@@ -308,7 +308,7 @@ input[type='search'],
 textarea,
 select {
   width: 100%;
-  padding: 5px 8px;
+  padding: 7px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-input);
@@ -983,30 +983,37 @@ textarea {
   padding: 4px 16px 16px;
 }
 
-.setup h2 {
-  margin: 0;
-  font-size: var(--text-ui-base);
-  font-weight: 600;
-  letter-spacing: 0;
+.setup .page-head {
+  margin-bottom: 2px;
 }
 
-/* 宽侧栏：连接表单与本机检测并排（填满宽度，不留大片空白） */
+/* 表单字段间距宽松（对齐原生设置页的节奏） */
+.setup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* 宽侧栏：连接表单与本机检测在一张大卡内左右两栏（栏间一条分隔线） */
 .setup-form .btn.primary {
   width: 100%;
 }
 
 @media (min-width: 760px) {
-  .setup {
+  .setup .page-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 14px 24px;
+    gap: 16px 0;
     align-items: start;
   }
 
-  .setup h2,
-  .setup .hint,
-  .setup .btn[data-testid='go-host-btn'] {
-    grid-column: 1 / -1;
+  .setup .setup-detect {
+    padding-right: 24px;
+  }
+
+  .setup .setup-form {
+    border-left: 1px solid var(--color-border);
+    padding-left: 28px;
   }
 }
 
@@ -1064,21 +1071,16 @@ textarea {
   font-size: var(--text-ui-sm);
 }
 
-/* 原生列表行语言：无边框盒、hover 弱背景（对齐 ZCode 文件树/任务列表行） */
+/* 行卡（对齐原生模型列表行）：surface 填充 + 大圆角，无边框 */
 .detect .detect-candidate,
 .detect .detect-fail {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  background: transparent;
-}
-
-.detect .detect-candidate:hover,
-.detect .detect-fail:hover {
-  background: var(--color-hover);
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
 }
 
 .detect .ep {
@@ -1134,13 +1136,9 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  background: transparent;
-}
-
-.detect .detect-install:hover {
-  background: var(--color-hover);
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
 }
 
 .detect .detect-install-info {
@@ -1175,14 +1173,25 @@ textarea {
   word-break: break-all;
 }
 
-/* 受管宿主：一条卡片说清「装在哪 / 在不在跑 / 能做什么」 */
+/* 受管宿主区块：在大卡内以分隔线分区（对齐原生设置页的卡内分组） */
+.page-card .host-card,
+.page-card [data-testid='host-install'] {
+  padding: 12px 4px;
+  gap: 10px;
+}
+
+.page-card .host-card + .host-card,
+.page-card .host-card + [data-testid='host-job'],
+.page-card [data-testid='host-job'] + .host-card,
+.page-card .host-card + [data-testid='host-install'],
+.page-card [data-testid='host-install'] {
+  border-top: 1px solid var(--color-border);
+}
+
 .host-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
-  border-radius: var(--radius-xl);
-  background: var(--color-card); /* 靠背景对比分层，不加边框（盒子少才安静） */
 }
 
 .host-card .host-head {
@@ -1220,14 +1229,31 @@ textarea {
   margin-top: 4px;
 }
 
-/* 事实网格：定宽弱标签列 + 值列（ZCode 的 definition grid 模式，
-   信息网格 `grid-cols-[8rem_minmax(0,1fr)]`）；端口/路径是技术内容 → mono */
+/* 页面骨架（对齐原生设置页）：醒目大标题 + 副说明 + 一张大圆角卡包住全部内容 */
+.page-title {
+  font-size: var(--text-ui-xl);
+  font-weight: 700;
+  color: var(--color-foreground);
+}
+
+.page-desc {
+  font-size: var(--text-ui-sm);
+  color: var(--color-foreground-subtle);
+  margin: 2px 0 10px;
+}
+
+.page-card {
+  background: var(--color-card);
+  border-radius: var(--radius-xl);
+  padding: 6px 16px;
+}
+
 .host-summary {
   display: inline-flex;
   align-items: center;
   width: fit-content;
   padding: 3px 10px;
-  margin-bottom: 2px;
+  margin: 2px 0 10px;
   border: 1px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-surface);
