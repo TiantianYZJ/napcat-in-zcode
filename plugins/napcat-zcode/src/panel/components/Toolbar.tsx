@@ -35,7 +35,12 @@ export function Toolbar({
   return (
     <div className="toolbar">
       {onToggleChats && (
-        <button className="btn pill" data-testid="toggle-chats" onClick={onToggleChats} title="切换会话列表">
+        <button
+          className="btn pill toggle-chats"
+          data-testid="toggle-chats"
+          onClick={onToggleChats}
+          title="切换会话列表"
+        >
           会话{chatName ? ` · ${chatName}` : ''}
         </button>
       )}

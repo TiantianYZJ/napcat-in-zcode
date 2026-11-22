@@ -630,6 +630,17 @@ textarea {
   flex-direction: column;
   gap: 2px;
   padding: 12px;
+  /**
+   * 消息流**自己滚**。
+   *
+   * 面板是 `.app { height: 100vh; overflow: hidden }` —— 不给这里一个
+   * 带 `overflow-y: auto` 的滚动容器，消息超出视口就被裁掉，
+   * **整页根本滚不动**（用户反馈「现在滚动不了」）。
+   */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .msggroup {
@@ -784,6 +795,23 @@ textarea {
 .toolbar .grow {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/**
+ * 工具栏里的控件**不跟随全局的 width:100%**。
+ *
+ * 全局给 input/select 设了 `width: 100%`（表单里需要那样），
+ * 工具栏是横排的：每个控件都占满一行 → 五个控件五行，
+ * 消息区被压得只剩一条缝。改成按内容宽度排布，一行放得下就一行。
+ */
+.toolbar select,
+.toolbar input.grow {
+  width: auto;
+}
+
+.toolbar select {
+  flex: 0 1 auto;
+  max-width: 168px;
 }
 
 .toolbar .images {
@@ -1022,6 +1050,41 @@ textarea {
   .setup .setup-form {
     border-left: 1px solid var(--color-border);
     padding-left: 28px;
+  }
+}
+
+/**
+ * 宽面板：会话列表**常驻左侧**，不再是需要点开的抽屉。
+ *
+ * 「挑一个群/好友看记录」是进到记录页后的第一件事——
+ * 藏在一个胶囊按钮后面（用户原话：「选聊天记录没发现有侧栏」）
+ * 等于没有这个功能。窄面板（<760px）仍然用抽屉（消息流更值钱）。
+ */
+@media (min-width: 760px) {
+  .main {
+    flex-direction: row;
+  }
+
+  .drawer {
+    position: static;
+    transform: none;
+    z-index: auto;
+    width: 236px;
+    flex: 0 0 236px;
+    max-width: none;
+    padding: 12px 8px 12px 12px;
+    border-right: 1px solid var(--color-border);
+    box-shadow: none;
+  }
+
+  .drawer .chatlist {
+    height: 100%;
+    overflow-y: auto;
+  }
+
+  /* 列表常驻后，工具栏里那个「会话」开关就没有意义了 */
+  .toolbar .toggle-chats {
+    display: none;
   }
 }
 

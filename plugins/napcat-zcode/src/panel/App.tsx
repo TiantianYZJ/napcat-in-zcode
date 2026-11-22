@@ -752,6 +752,8 @@ export function App() {
                 note={olderNote}
                 onDragSelect={dragSelect}
                 selfId={status?.login?.user_id}
+                scrollKey={active ? `${active.kind}:${active.id}` : undefined}
+                hasChat={active !== null}
               />
             </>
           )}

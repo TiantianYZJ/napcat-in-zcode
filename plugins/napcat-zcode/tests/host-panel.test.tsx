@@ -246,6 +246,33 @@ describe('HostPanel', () => {
     expect(mocks.startHost).toHaveBeenCalledTimes(1);
   });
 
+  it('同一个实例只出现一个二维码（作业卡与宿主卡不重复出）', async () => {
+    // 装完自动启动 → 宿主在跑但还没登录（degraded）+ 安装作业已成功
+    // 这两个条件同时成立时，作业卡与宿主卡都会想出二维码 —— 只能出一张
+    mocks.hostStatus.mockResolvedValue(
+      result({
+        installs: [install],
+        status: [{ state: 'degraded', install, webuiPort: 6099, webuiReachable: true }],
+        jobs: [
+          {
+            id: 'job-done',
+            startedAt: '2026-11-22T00:00:00.000Z',
+            state: 'succeeded',
+            phase: 'done',
+            bytesReceived: 1,
+            install,
+          },
+        ],
+      }),
+    );
+    render(<HostPanel />);
+    await waitFor(() => expect(screen.getByTestId('host-job')).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByTestId('qr-login').length).toBeGreaterThan(0));
+    // **只有一张**二维码
+    expect(screen.getAllByTestId('qr-login')).toHaveLength(1);
+    expect(screen.getAllByTestId('qr-frame')).toHaveLength(1);
+  });
+
   it('does not auto-start when another instance is already running, and says why', async () => {
     const adopted = { ...install, id: 'napcat-adopted', version: '0.0.1' };
     mocks.hostStatus.mockResolvedValue(

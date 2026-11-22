@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { msgKey, type Msg, type Seg } from '../api.js';
 import { ChatImage } from './ChatImage.js';
 
@@ -81,6 +81,8 @@ export function MessageList({
   note,
   onDragSelect,
   selfId,
+  scrollKey,
+  hasChat,
 }: {
   messages: Msg[];
   selection: Set<string>;
@@ -95,6 +97,15 @@ export function MessageList({
   onDragSelect?: (fromId: string, toId: string, additive: boolean) => void;
   /** 本机登录账号（用来区分「我发的」与「别人发的」；不传则不区分）。 */
   selfId?: string;
+  /**
+   * 当前会话的标识（`kind:id`）。
+   *
+   * 变了就**滚到底部**——服务端给的是「最近 N 条、时间正序」，
+   * 最新的在末尾；不滚过去的话用户看到的是这一页最旧的几条。
+   */
+  scrollKey?: string;
+  /** 有没有选中会话（空态文案要区分「没挑会话」与「这个会话没消息」）。 */
+  hasChat?: boolean;
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
   const listwrap = useRef<HTMLDivElement>(null);
@@ -143,15 +154,41 @@ export function MessageList({
   // 顶部插入更早的消息时保持视口不跳（否则用户会被甩到列表中间）。
   const prevHeight = useRef(0);
   const prevCount = useRef(0);
+  /** 当前是否贴着底部（滚动事件维护；布局阶段读它才知道「该不该继续跟到底」）。 */
+  const atBottom = useRef(true);
+  /** 滚动时更新「贴底」标记。 */
+  const handleScroll = useCallback((): void => {
+    const el = listwrap.current;
+    if (!el) return;
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }, []);
   useLayoutEffect(() => {
     const el = listwrap.current;
     if (!el) return;
     if (messages.length > prevCount.current && prevHeight.current > 0) {
-      el.scrollTop += el.scrollHeight - prevHeight.current;
+      if (atBottom.current) {
+        // 本来就贴着底 → 新消息继续贴底（聊天软件的常规行为）
+        el.scrollTop = el.scrollHeight;
+      } else {
+        el.scrollTop += el.scrollHeight - prevHeight.current;
+      }
     }
     prevHeight.current = el.scrollHeight;
     prevCount.current = messages.length;
   }, [messages]);
+
+  /**
+   * 打开一个新会话 → **滚到底部**（最新的一条要立刻可见）。
+   *
+   * 服务端返回的是「最近 N 条、时间正序」——所以**最新的在列表末尾**。
+   * 不主动滚到底的话，用户看到的是这一页里**最旧**的几条，
+   * 还得自己往下拖才知道刚才发生了什么（用户原话：「聊天记录应该加载最新的底下的」）。
+   */
+  useLayoutEffect(() => {
+    const el = listwrap.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [scrollKey]);
 
   /** 连续同一发言者归一组。 */
   const groups: { senderId: string; senderName: string; items: { m: Msg; key: string; index: number }[] }[] = [];
@@ -171,7 +208,7 @@ export function MessageList({
   }
 
   return (
-    <div className="listwrap" ref={listwrap}>
+    <div className="listwrap" ref={listwrap} onScroll={handleScroll}>
       <div ref={sentinel} className="sentinel" data-testid="older-sentinel">
         {note && <span className="note">{note}</span>}
         {!noMore && (
@@ -241,9 +278,18 @@ export function MessageList({
         );
       })}
       {messages.length === 0 && (
-        <div className="empty">
-          <div className="title">还没有消息</div>
-          <div className="desc">选择一个会话，查看这里的聊天记录</div>
+        <div className="empty" data-testid="msg-empty">
+          {hasChat ? (
+            <>
+              <div className="title">这个会话还没有消息</div>
+              <div className="desc">往上翻可以加载更早的记录</div>
+            </>
+          ) : (
+            <>
+              <div className="title">先挑一个会话</div>
+              <div className="desc">在左边的列表里选一个群或好友，就能看它的聊天记录</div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -86,6 +86,19 @@ export function HostPanel({
   const liveHost = hasLiveHost(statuses);
   const isStopping = busy === 'stop';
 
+  /**
+   * 安装作业卡正在出二维码？（刚装完的那张卡）
+   *
+   * **同一个实例只允许出现一张二维码**：作业卡和宿主卡都会渲染扫码引导，
+   * 两张都出的话用户会看到两个二维码（真机反馈：「扫码弹出两个二维码」）。
+   */
+  const jobInstallId = job?.state === 'succeeded' ? (job.install?.id ?? '') : '';
+  const jobShowsQr = jobInstallId !== '' && busy !== 'autostart';
+  /** 已经登录的安装（引导卡对它们不再出现）。 */
+  const loggedInIds = new Set(
+    statuses.filter((s) => s.login !== undefined).map((s) => s.install?.id ?? ''),
+  );
+
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const r = await api.hostStatus();
@@ -236,7 +249,11 @@ export function HostPanel({
          * 「已装好但还没登录」这个最常见的场景反而没有二维码。
          */
         const showGuide =
-          (s.state === 'running' || s.state === 'degraded') && !s.login && s.webuiPort !== undefined;
+          (s.state === 'running' || s.state === 'degraded') &&
+          !s.login &&
+          s.webuiPort !== undefined &&
+          // 作业卡已经在出这张二维码了 → 宿主卡不再重复出
+          !(jobShowsQr && jobInstallId === (s.install?.id ?? ''));
         return (
           <div className="host-card" key={id ?? s.state} data-testid="host-card">
             <div className="host-head">
@@ -440,11 +457,17 @@ export function HostPanel({
                 : job.state === 'succeeded'
                   ? busy === 'autostart'
                     ? '正在启动 NapCat…'
-                    : '正在等你扫码登录'
+                    : loggedInIds.has(jobInstallId)
+                      ? 'NapCat 已就绪'
+                      : '正在等你扫码登录'
                   : '安装失败'}
             </span>
             <span className={`badge ${job.state === 'succeeded' ? 'ok' : job.state === 'failed' ? 'bad' : ''}`}>
-              {job.state === 'succeeded' && busy !== 'autostart' ? '待扫码' : PHASE_TEXT[job.phase] ?? job.phase}
+              {job.state === 'succeeded' && busy !== 'autostart'
+                ? loggedInIds.has(jobInstallId)
+                  ? '已登录'
+                  : '待扫码'
+                : (PHASE_TEXT[job.phase] ?? job.phase)}
             </span>
           </div>
           {job.state === 'running' && (
@@ -462,15 +485,20 @@ export function HostPanel({
               </div>
             </>
           )}
-          {job.state === 'succeeded' && job.install?.id && busy !== 'autostart' && (
+          {jobShowsQr && !loggedInIds.has(jobInstallId) && (
             <QrLogin
-              installId={job.install.id}
+              installId={job.install?.id as string}
               onLogined={() => {
                 void refresh();
                 onChangedRef.current?.();
               }}
               onOpenRecords={onOpenRecords}
             />
+          )}
+          {jobShowsQr && loggedInIds.has(jobInstallId) && (
+            <div className="host-msg" data-testid="job-logined">
+              已登录，去「记录」页挑一个会话就能看聊天记录。
+            </div>
           )}
           {job.state === 'succeeded' && otherRunning && (
             <div className="host-msg" data-testid="autostart-skipped">
