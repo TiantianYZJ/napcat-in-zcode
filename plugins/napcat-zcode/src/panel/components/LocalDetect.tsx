@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type DetectEntry, type DetectResult } from '../api.js';
 
 /**
@@ -86,11 +86,19 @@ export function LocalDetect({
   const candidates = candidatesOf(result);
   const failures = failuresOf(result);
 
+  // 打开面板就自动检测一次：新用户不用理解「要先点检测」（初次体验的关键一步）
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (autoRan.current) return;
+    autoRan.current = true;
+    void run();
+  }, []);
+
   return (
     <div className="detect" data-testid="detect-panel">
       <div className="section-title">本机已装的 NapCat</div>
       <button className="btn" data-testid="detect-btn" disabled={busy} onClick={() => void run()}>
-        {busy ? '检测中…' : '检测本机 NapCat'}
+        {busy ? '检测中…' : '重新检测'}
       </button>
       {err && (
         <div className="detect-budget" data-testid="detect-error">

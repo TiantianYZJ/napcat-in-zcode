@@ -30,6 +30,7 @@ import {
   type InstallJob,
   type ManagedInstall,
 } from './manager.js';
+import { pollQrLogin } from './qrlogin.js';
 import { probeManagedHost, startManagedHost, stopManagedHost, type HostStatus } from './supervise.js';
 
 /** 面板资源 URI（必须与清单 `ui.surfaces[0].resourceUri` 一致）。 */
@@ -433,6 +434,38 @@ export function registerHostTools(server: McpServer, state: AppState): void {
             ? '已接管，可以启动了。'
             : '已接管。还没找到 QQ，启动前请在插件设置里填写 QQ 路径。',
         });
+      } catch (e) {
+        return fail(state, e);
+      }
+    },
+  );
+
+  // ── 扫码登录（0.11.0）：面板轮询拿二维码与状态，WebUI token 不出服务端 ──
+  server.registerTool(
+    'napcat_qr_login',
+    {
+      description:
+        '获取受管 NapCat 的登录二维码与扫码状态（面板轮询用）。' +
+        '返回 phase: waiting（附二维码 data URL）/ accepted（已扫码待确认）/ logined / error。',
+      inputSchema: {
+        id: z.string().optional().describe('受管安装 id（不传 = 最近登记的那个）'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error('还没有受管安装：先安装或接管一个 NapCat。');
+        }
+        const { webuiPort } = portsOf(install);
+        const token = h.webuiTokenOf(install.id);
+        if (!token) {
+          throw new Error('拿不到这个实例的 WebUI 访问令牌。');
+        }
+        const r = await pollQrLogin((url, init) => fetch(url, init), { webuiPort, token });
+        return ok(r);
       } catch (e) {
         return fail(state, e);
       }

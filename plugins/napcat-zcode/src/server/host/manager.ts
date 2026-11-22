@@ -1004,7 +1004,25 @@ export class ManagedHost {
    */
   webuiTokenOf(target: string): string | undefined {
     const key = this.secretKeyOf(target);
-    return key ? this.secrets.get(key) : undefined;
+    const cached = key ? this.secrets.get(key) : undefined;
+    if (cached) return cached;
+    // 接管的安装没有插件生成的 token——token 在它自己的 webui.json 里。
+    // 这里只在服务端内存里用（调 WebUI API），不落台账、不给出参。
+    const install = this.get(target);
+    const dir = install?.dir ?? target;
+    for (const rel of [
+      ['napcat', 'config', 'webui.json'],
+      ['config', 'webui.json'],
+      ['webui.json'],
+    ]) {
+      try {
+        const cfg = JSON.parse(readFileSync(join(dir, ...rel), 'utf8')) as { token?: unknown };
+        if (typeof cfg.token === 'string' && cfg.token !== '') return cfg.token;
+      } catch {
+        /* 没有这个位置就试下一个 */
+      }
+    }
+    return undefined;
   }
 
   /** 取某个安装的 WebUI token **掩码**（对外唯一允许的形态）。 */
@@ -1156,25 +1174,28 @@ export class ManagedHost {
     };
     this.writeJson(join(configDir, 'webui.json'), webui);
 
-    // ② OneBot 配置：文件名要带 uin，不知道 uin 就跳过（NapCat 首次启动会自己生成）
+    // ② OneBot 配置：带 uin 写账号级配置；没有 uin 就写**全局** onebot11.json——
+    // NapCat 在账号级配置缺失时回退读全局文件，登录后 OneBot Server 立即可用，
+    // 不需要用户再去 WebUI 手动开启（初次体验的闭环关键）
     const uin = typeof req.uin === 'string' ? req.uin.trim() : '';
+    const onebot = {
+      network: {
+        httpServers: [
+          {
+            name: 'napcat-zcode',
+            enable: true,
+            host: '127.0.0.1',
+            port: req.onebotPort ?? DEFAULT_ONEBOT_PORT,
+          },
+        ],
+        websocketServers: [],
+      },
+    };
     if (uin !== '') {
-      const onebot = {
-        network: {
-          httpServers: [
-            {
-              name: 'napcat-zcode',
-              enable: true,
-              host: '127.0.0.1',
-              port: req.onebotPort ?? DEFAULT_ONEBOT_PORT,
-            },
-          ],
-          websocketServers: [],
-        },
-      };
       this.writeJson(join(configDir, `onebot11_${uin}.json`), onebot);
     } else {
-      this.note(job, '未提供 QQ 号（uin），已跳过 OneBot 账号配置的写入：NapCat 首次启动后会自行生成。');
+      this.writeJson(join(configDir, 'onebot11.json'), onebot);
+      this.note(job, 'OneBot 已预配置：扫码登录后就能直接连接，无需再去 WebUI 手动开启。');
     }
 
     // ③ 注入模式：qqnt.json 必须以本机桌面 QQ 的 package.json 为底

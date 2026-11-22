@@ -166,6 +166,7 @@ describe('mcp tool registration', () => {
       'napcat_install_status',
       'napcat_list_chats',
       'napcat_open_panel',
+      'napcat_qr_login',
       'napcat_search_messages',
       'napcat_start',
       'napcat_status',

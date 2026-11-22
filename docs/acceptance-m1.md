@@ -681,3 +681,14 @@
 - [x] **长文案精简**：`resolveDesktopQqPath` 失败、adopt 幂等/成功/QQ 缺失、接管不支持布局的 server 文案全部缩短；面板 adoptNote 拼接改为失败时只报「已接管，但启动失败：…」；Token label 拆出说明进 placeholder；安装目录/代理说明进 placeholder
 - [x] `npm run typecheck` / `npm test`（34 文件 / **730 通过 / 4 跳过**）/ `npm run build` / `npm run smoke`（stdio 19/19、panel 15/15）
 - [x] 视口复验：808px 宽、dark 主题下两列布局填满宽度、无叠加、密度对齐原生
+
+### 15.11 v0.11.0 增量验收记录（初次体验闭环：自动检测 → 安装 → 内嵌扫码 → 即连）
+
+用户裁定「新来就检测，没检测到就推荐安装，装完给 token 指导或截获二维码让 QQ 扫码，持续检测扫码状态」后的闭环交付：
+
+- [x] **查证**（NapCat 4.18.42 产物 bundle 内实测）：WebUI 路由 `POST /api/QQLogin/GetQQLoginQrcode`（返回 `{qrcode}`）与 `POST /api/QQLogin/CheckLoginStatus`（返回 `{isLogin, qrLoginAccepted, loginPhase, …}`，Bearer WebUI token 鉴权）；onebot11 配置在账号级缺失时**回退读全局 `onebot11.json`**
+- [x] **OneBot 预配置**：未知 uin 时写全局 `onebot11.json`（HTTP Server 127.0.0.1:3000）——扫码登录完成后 OneBot 立即可用，消除「登录了但没开 OneBot」的断链
+- [x] **`napcat_qr_login`**（第 18 个工具，fetch 可注入）：轮询受管实例 WebUI 拿二维码（data URL 直传；本机图片地址则带 token 拉取转 base64）与状态（waiting / accepted / logined / error）；**WebUI token 只在服务端使用，不出面板、不进模型上下文**；目标固定为实例自己的 127.0.0.1 WebUI
+- [x] **面板闭环**：挂载自动检测（去掉「先点检测」的理解成本）；安装作业完成**自动启动**并内嵌二维码轮询卡（白底二维码 + 状态行 + 打开 WebUI / 手动登录回退）；登录成功自动刷新
+- [x] `npm run typecheck` / `npm test`（35 文件 / **735 通过 / 4 跳过**；新增 qrlogin 5）/ `npm run build` / `npm run smoke`（stdio 19/19、panel 15/15，**18 个工具**）
+- [x] 视觉复验：扫码卡（白底二维码居中 + 引导行 + 回退入口）dark 主题截图确认

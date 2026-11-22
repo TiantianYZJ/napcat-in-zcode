@@ -597,6 +597,7 @@ describe('mcp tool registration (T10)', () => {
       'napcat_install_status',
       'napcat_list_chats',
       'napcat_open_panel',
+      'napcat_qr_login',
       'napcat_search_messages',
       'napcat_start',
       'napcat_status',
@@ -612,6 +613,7 @@ describe('mcp tool registration (T10)', () => {
     expect(props('napcat_export')).toEqual(['chat', 'chatId', 'chatKind', 'dir', 'fromTime', 'includeImages', 'messages', 'toTime', 'workspaceDir']);
     expect(props('napcat_get_config')).toEqual([]);
     expect(props('napcat_start')).toEqual(['id']);
+    expect(props('napcat_qr_login')).toEqual(['id']);
     expect(props('napcat_uninstall')).toEqual(['id']);
     expect(props('napcat_adopt')).toEqual(['configDir', 'webuiPort']);
   });

@@ -123,24 +123,24 @@ async function mount(): Promise<void> {
 }
 
 describe('B1：未配置态的「检测本机 NapCat」入口', () => {
-  it('有检测按钮；点它调 napcat_detect_local，且**不自动连接**', async () => {
+  it('挂载自动检测一次；点按钮再检测一次，且**不自动连接**', async () => {
     await mount();
+    // 挂载即自动检测（初次体验：不用理解「要先点检测」）
+    await waitFor(() => expect(mock.detectLocal).toHaveBeenCalledTimes(1));
     const btn = screen.getByTestId('detect-btn');
-    expect(btn.textContent).toContain('检测');
+    expect(btn.textContent).toContain('重新检测');
     await act(async () => {
       fireEvent.click(btn);
     });
-    await waitFor(() => expect(mock.detectLocal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mock.detectLocal).toHaveBeenCalledTimes(2));
     // 检测只是「列候选」，不许顺手连上
     expect(mock.configure).not.toHaveBeenCalled();
   });
 
   it('检测失败 → 显示错误信息，不崩', async () => {
-    mock.detectLocal.mockRejectedValueOnce(new Error('探测失败：host unreachable'));
+    mock.detectLocal.mockRejectedValue(new Error('探测失败：host unreachable'));
     await mount();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('detect-btn'));
-    });
+    // 挂载自动检测就会失败 → 错误直接可见
     const err = await screen.findByTestId('detect-error');
     expect(err.textContent).toContain('探测失败');
   });
@@ -609,16 +609,14 @@ describe('N3：并发探测闸门（ref）', () => {
     });
   });
 
-  it('探测失败 → 按钮恢复可用，文案回到「检测本机 NapCat」', async () => {
-    mock.detectLocal.mockRejectedValueOnce(new Error('探测失败：host unreachable'));
+  it('探测失败 → 按钮恢复可用，文案回到「重新检测」', async () => {
+    mock.detectLocal.mockRejectedValue(new Error('探测失败：host unreachable'));
     await mount();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('detect-btn'));
-    });
+    // 挂载自动检测即失败
     await waitFor(() => expect(screen.getByTestId('detect-error')).toBeTruthy());
     const btn = screen.getByTestId('detect-btn') as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
-    expect(btn.textContent).toContain('检测本机 NapCat');
+    expect(btn.textContent).toContain('重新检测');
     expect(btn.textContent).not.toContain('检测中');
   });
 });

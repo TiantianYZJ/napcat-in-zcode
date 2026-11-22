@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, bridge, type HostStatus, type HostStatusResult, type InstallJobView } from '../api.js';
+import { QrLogin } from './QrLogin.js';
 
 /**
  * 受管宿主面板：**装 / 启 / 停 / 卸** NapCat。
@@ -70,6 +71,8 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
   const pollTimer = useRef<number | null>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  /** 安装完成后自动启动（只做一次）：初次体验的关键闭环 */
+  const autoStartedRef = useRef(false);
   const installs = state?.installs ?? [];
   const statuses = state?.status ?? [];
   const versions = state?.versions ?? [];
@@ -94,6 +97,17 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 安装完成 → 自动启动 → 面板进入扫码登录流程（不用再点一次启动）
+  const autoStartId = job?.state === 'succeeded' ? (job.install?.id ?? null) : null;
+  useEffect(() => {
+    if (!autoStartId || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void run('autostart', async () => {
+      await api.startHost(autoStartId);
+      await refresh();
+    });
+  }, [autoStartId]);
 
   useEffect(() => {
     if (!pollJobId && !liveHost) return;
@@ -288,10 +302,18 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
             {s.state === 'running' && !s.login && s.webuiPort && (
               <div className="host-login-guide" data-testid="host-login-guide">
                 <div className="guide-title">扫码登录 QQ</div>
-                <div className="host-msg">打开 NapCat 的 WebUI，用手机 QQ 扫码登录</div>
+                {id && (
+                  <QrLogin
+                    installId={id}
+                    onLogined={() => {
+                      void refresh();
+                      onChangedRef.current?.();
+                    }}
+                  />
+                )}
                 <div className="host-acts">
                   <button
-                    className="btn primary"
+                    className="btn"
                     data-testid="guide-open-webui"
                     disabled={!bridge.capabilities.openLinks || busy !== ''}
                     title={
@@ -309,17 +331,13 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                     disabled={busy !== ''}
                     onClick={() => void refresh()}
                   >
-                    已登录，刷新
+                    刷新状态
                   </button>
                 </div>
                 {s.install?.dir && (
                   <div className="host-msg" data-testid="host-login-token-hint">
-                    登录 WebUI 用的访问令牌在安装目录的
-                    <code>webui.json</code> 里{(() => {
-                      const masked = s.install?.webuiTokenMasked;
-                      return masked ? `（${masked}）` : '';
-                    })()}
-                    。
+                    如果二维码扫不出来，也可以打开 WebUI 手动登录（令牌在安装目录的
+                    <code>webui.json</code> 里）。
                   </div>
                 )}
               </div>
@@ -379,10 +397,16 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
         <div className="host-card" data-testid="host-job">
           <div className="host-head">
             <span className="host-name">
-              {job.state === 'running' ? '正在安装 NapCat' : job.state === 'succeeded' ? '安装完成' : '安装失败'}
+              {job.state === 'running'
+                ? '正在安装 NapCat'
+                : job.state === 'succeeded'
+                  ? busy === 'autostart'
+                    ? '正在启动 NapCat…'
+                    : '正在等你扫码登录'
+                  : '安装失败'}
             </span>
             <span className={`badge ${job.state === 'succeeded' ? 'ok' : job.state === 'failed' ? 'bad' : ''}`}>
-              {PHASE_TEXT[job.phase] ?? job.phase}
+              {job.state === 'succeeded' && busy !== 'autostart' ? '待扫码' : PHASE_TEXT[job.phase] ?? job.phase}
             </span>
           </div>
           {job.state === 'running' && (
@@ -395,20 +419,34 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
               </div>
               <div className="host-msg">
                 {job.percent === undefined
-                  ? `已下载 ${formatBytes(job.bytesReceived)}（服务器没声明总大小）`
+                  ? `已下载 ${formatBytes(job.bytesReceived)}`
                   : `${job.percent}% · ${formatBytes(job.bytesReceived)} / ${formatBytes(job.totalBytes ?? 0)}`}
               </div>
             </>
           )}
+          {job.state === 'succeeded' && job.install?.id && busy !== 'autostart' && (
+            <QrLogin
+              installId={job.install.id}
+              onLogined={() => {
+                void refresh();
+                onChangedRef.current?.();
+              }}
+            />
+          )}
           {job.error && <div className="host-warn">{job.error}</div>}
-          {/* 失败时 error 与 notes 常是同一句话，去重避免整屏重复 */}
-          {(job.notes ?? [])
-            .filter((n) => n !== job.error)
-            .map((n, i) => (
-              <div className="host-msg" key={`${i}-${n}`}>
-                {n}
-              </div>
-            ))}
+          {/* 失败时 error 与 notes 常是同一句话；过程 notes 折进详情，不占屏 */}
+          {(job.notes ?? []).filter((n) => n !== job.error).length > 0 && (
+            <details className="job-notes">
+              <summary>安装过程详情</summary>
+              {(job.notes ?? [])
+                .filter((n) => n !== job.error)
+                .map((n, i) => (
+                  <div className="host-msg" key={`${i}-${n}`}>
+                    {n}
+                  </div>
+                ))}
+            </details>
+          )}
         </div>
       )}
 

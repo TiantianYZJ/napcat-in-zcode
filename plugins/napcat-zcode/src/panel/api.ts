@@ -694,4 +694,12 @@ export const api = {
       qqPathFound?: boolean;
       message: string;
     }>('napcat_adopt', { configDir, ...(typeof webuiPort === 'number' ? { webuiPort } : {}) }),
+
+  /** 轮询一次扫码登录：二维码（data URL）与状态。WebUI token 不出服务端。 */
+  qrLogin: (id?: string) =>
+    callToolJson<{
+      phase: 'waiting' | 'accepted' | 'logined' | 'error';
+      message: string;
+      qrDataUrl?: string;
+    }>('napcat_qr_login', id === undefined ? {} : { id }),
 };

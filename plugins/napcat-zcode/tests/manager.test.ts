@@ -862,8 +862,9 @@ describe('M3 Task 2：受管安装台账 + 安装作业', () => {
         sha256: sha,
         allowedHosts: ['127.0.0.1'],
       });
-      expect(readdirSync(join(withoutUin, 'napcat', 'config')).filter((f) => f.startsWith('onebot11'))).toEqual([]);
-      expect(job.notes?.join('\n')).toMatch(/uin/);
+      // 未知 uin → 写**全局** onebot11.json：登录后 OneBot 立即可用（不再断链）
+      expect(existsSync(join(withoutUin, 'napcat', 'config', 'onebot11.json'))).toBe(true);
+      expect(job.notes?.join('\n')).toMatch(/OneBot 已预配置/);
     });
 
     it('桌面 QQ 的发现：版本目录优先，且取版本号最新的那个', () => {

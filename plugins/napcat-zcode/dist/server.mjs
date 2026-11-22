@@ -26048,7 +26048,22 @@ var ManagedHost = class {
    */
   webuiTokenOf(target) {
     const key = this.secretKeyOf(target);
-    return key ? this.secrets.get(key) : void 0;
+    const cached2 = key ? this.secrets.get(key) : void 0;
+    if (cached2) return cached2;
+    const install = this.get(target);
+    const dir = install?.dir ?? target;
+    for (const rel of [
+      ["napcat", "config", "webui.json"],
+      ["config", "webui.json"],
+      ["webui.json"]
+    ]) {
+      try {
+        const cfg = JSON.parse(readFileSync4(join4(dir, ...rel), "utf8"));
+        if (typeof cfg.token === "string" && cfg.token !== "") return cfg.token;
+      } catch {
+      }
+    }
+    return void 0;
   }
   /** 取某个安装的 WebUI token **掩码**（对外唯一允许的形态）。 */
   maskWebuiToken(target) {
@@ -26184,23 +26199,24 @@ var ManagedHost = class {
     };
     this.writeJson(join4(configDir, "webui.json"), webui);
     const uin = typeof req.uin === "string" ? req.uin.trim() : "";
+    const onebot = {
+      network: {
+        httpServers: [
+          {
+            name: "napcat-zcode",
+            enable: true,
+            host: "127.0.0.1",
+            port: req.onebotPort ?? DEFAULT_ONEBOT_PORT
+          }
+        ],
+        websocketServers: []
+      }
+    };
     if (uin !== "") {
-      const onebot = {
-        network: {
-          httpServers: [
-            {
-              name: "napcat-zcode",
-              enable: true,
-              host: "127.0.0.1",
-              port: req.onebotPort ?? DEFAULT_ONEBOT_PORT
-            }
-          ],
-          websocketServers: []
-        }
-      };
       this.writeJson(join4(configDir, `onebot11_${uin}.json`), onebot);
     } else {
-      this.note(job, "\u672A\u63D0\u4F9B QQ \u53F7\uFF08uin\uFF09\uFF0C\u5DF2\u8DF3\u8FC7 OneBot \u8D26\u53F7\u914D\u7F6E\u7684\u5199\u5165\uFF1ANapCat \u9996\u6B21\u542F\u52A8\u540E\u4F1A\u81EA\u884C\u751F\u6210\u3002");
+      this.writeJson(join4(configDir, "onebot11.json"), onebot);
+      this.note(job, "OneBot \u5DF2\u9884\u914D\u7F6E\uFF1A\u626B\u7801\u767B\u5F55\u540E\u5C31\u80FD\u76F4\u63A5\u8FDE\u63A5\uFF0C\u65E0\u9700\u518D\u53BB WebUI \u624B\u52A8\u5F00\u542F\u3002");
     }
     if (req.mode === "inject") {
       this.writeQqntJson(napcatDir, job, req);
@@ -26432,6 +26448,75 @@ var ManagedHost = class {
 function errText3(err) {
   if (err instanceof Error) return err.message;
   return String(err ?? "");
+}
+
+// src/server/host/qrlogin.ts
+var WEBUI_TIMEOUT_MS = 8e3;
+async function webuiJson(fetcher, url, token) {
+  const res = await fetcher(url, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(WEBUI_TIMEOUT_MS)
+  });
+  if (!res.ok) {
+    throw new Error(`WebUI \u8FD4\u56DE\u4E86 ${res.status}`);
+  }
+  const text = await res.text();
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    throw new Error("WebUI \u8FD4\u56DE\u4E86\u65E0\u6CD5\u89E3\u6790\u7684\u5185\u5BB9");
+  }
+}
+async function toDataUrl(fetcher, qrcode, token) {
+  if (qrcode.startsWith("data:image")) return qrcode;
+  if (qrcode.startsWith("http://") || qrcode.startsWith("https://")) {
+    const res = await fetcher(qrcode, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(WEBUI_TIMEOUT_MS)
+    });
+    if (!res.ok) return void 0;
+    const type = (res.headers.get("content-type") ?? "image/png").split(";")[0];
+    const buf = await res.arrayBuffer();
+    return `data:${type};base64,${Buffer.from(buf).toString("base64")}`;
+  }
+  return void 0;
+}
+async function pollQrLogin(fetcher, opts) {
+  const base = `http://127.0.0.1:${opts.webuiPort}`;
+  let status;
+  try {
+    status = await webuiJson(fetcher, `${base}/api/QQLogin/CheckLoginStatus`, opts.token);
+  } catch (err) {
+    return {
+      phase: "error",
+      message: `\u8FDE\u4E0D\u4E0A NapCat \u7684 WebUI\uFF1A${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (status.isLogin === true) {
+    return { phase: "logined", message: "\u767B\u5F55\u6210\u529F" };
+  }
+  if (status.qrLoginAccepted === true) {
+    return { phase: "accepted", message: "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u767B\u5F55" };
+  }
+  let qrcode;
+  try {
+    const qr = await webuiJson(fetcher, `${base}/api/QQLogin/GetQQLoginQrcode`, opts.token);
+    qrcode = qr.qrcode;
+  } catch (err) {
+    return {
+      phase: "error",
+      message: `\u4E8C\u7EF4\u7801\u83B7\u53D6\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  if (typeof qrcode !== "string" || qrcode === "") {
+    return { phase: "error", message: "\u4E8C\u7EF4\u7801\u83B7\u53D6\u5931\u8D25\u3002" };
+  }
+  const qrDataUrl = await toDataUrl(fetcher, qrcode, opts.token);
+  if (!qrDataUrl) {
+    return { phase: "error", message: "\u4E8C\u7EF4\u7801\u56FE\u7247\u4E0B\u8F7D\u5931\u8D25\u3002" };
+  }
+  return { phase: "waiting", message: "\u8BF7\u7528\u624B\u673A QQ \u626B\u4E00\u626B", qrDataUrl };
 }
 
 // src/server/host/supervise.ts
@@ -27059,6 +27144,34 @@ function registerHostTools(server2, state) {
       }
     }
   );
+  server2.registerTool(
+    "napcat_qr_login",
+    {
+      description: "\u83B7\u53D6\u53D7\u7BA1 NapCat \u7684\u767B\u5F55\u4E8C\u7EF4\u7801\u4E0E\u626B\u7801\u72B6\u6001\uFF08\u9762\u677F\u8F6E\u8BE2\u7528\uFF09\u3002\u8FD4\u56DE phase: waiting\uFF08\u9644\u4E8C\u7EF4\u7801 data URL\uFF09/ accepted\uFF08\u5DF2\u626B\u7801\u5F85\u786E\u8BA4\uFF09/ logined / error\u3002",
+      inputSchema: {
+        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09")
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async ({ id }) => {
+      try {
+        const h = getHost();
+        const install = pickInstall(h, id);
+        if (!install) {
+          throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u5148\u5B89\u88C5\u6216\u63A5\u7BA1\u4E00\u4E2A NapCat\u3002");
+        }
+        const { webuiPort } = portsOf(install);
+        const token = h.webuiTokenOf(install.id);
+        if (!token) {
+          throw new Error("\u62FF\u4E0D\u5230\u8FD9\u4E2A\u5B9E\u4F8B\u7684 WebUI \u8BBF\u95EE\u4EE4\u724C\u3002");
+        }
+        const r = await pollQrLogin((url, init) => fetch(url, init), { webuiPort, token });
+        return ok(r);
+      } catch (e) {
+        return fail(state, e);
+      }
+    }
+  );
 }
 
 // src/server/tools.ts
@@ -27627,7 +27740,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.10.1" });
+var server = new McpServer({ name: "napcat", version: "0.11.0" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

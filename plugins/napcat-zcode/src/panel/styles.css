@@ -1244,6 +1244,63 @@ textarea {
   }
 }
 
+/* 扫码登录卡：二维码居中 + 一行状态文字 */
+.qr-login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 2px;
+}
+
+.qr-login .qr-frame {
+  width: 168px;
+  height: 168px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: #ffffff; /* 二维码始终白底，深色主题下也保证可扫 */
+}
+
+.qr-login .qr-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.qr-login .qr-hint {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.qr-login .qr-text {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtle);
+}
+
+.qr-login .qr-ok {
+  color: var(--color-success-surface-foreground);
+  font-weight: 500;
+}
+
+details.job-notes {
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+}
+
+details.job-notes summary {
+  cursor: pointer;
+}
+
+details.job-notes .host-msg {
+  overflow-wrap: anywhere;
+}
+
 .host-card .host-confirm {
   display: flex;
   flex-wrap: wrap;
