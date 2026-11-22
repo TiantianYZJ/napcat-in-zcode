@@ -29,6 +29,10 @@ export interface QrLoginResult {
   qrDataUrl?: string;
   /** 电脑上的桌面 QQ 正在运行（同号会被顶号，扫码前要先退出它）。 */
   desktopQqRunning?: boolean;
+  /** 登录成功后已把 OneBot HTTP Server 热开启（免重启 NapCat）。 */
+  onebotEnabled?: boolean;
+  /** OneBot 开启失败时的原因（成功则为空）。 */
+  onebotMessage?: string;
 }
 
 /** 可注入的最小 fetch 形状（POST JSON）。 */
@@ -117,6 +121,59 @@ async function credentialFor(
 }
 
 /**
+ * 登录成功后**热开启 OneBot HTTP Server**。
+ *
+ * 为什么需要：NapCat 登录后会自建账号级 `onebot11_<uin>.json`，里面默认**不含**
+ * 开启的 OneBot Server → 面板永远连不上。安装时写的全局配置会被账号级文件盖过优先级，
+ * 靠重启 NapCat 生效对新手太重 —— WebUI 的 `OB11Config/SetConfig` 会热加载配置，
+ * 这里直接用它开启（免重启）。
+ */
+async function ensureOneBotEnabled(
+  fetcher: WebuiFetch,
+  port: number,
+  credential: string,
+  onebotPort: number,
+): Promise<{ onebotEnabled?: boolean; onebotMessage?: string }> {
+  const base = `http://127.0.0.1:${port}`;
+  let current: Record<string, unknown>;
+  try {
+    current = unwrap(await webuiPost(fetcher, `${base}/api/OB11Config/GetConfig`, credential, {}));
+  } catch (err) {
+    return { onebotEnabled: false, onebotMessage: `读取 OneBot 配置失败：${err instanceof Error ? err.message : String(err)}` };
+  }
+  const network = (current.network ?? {}) as { httpServers?: unknown[] };
+  const servers = Array.isArray(network.httpServers) ? [...network.httpServers] : [];
+  const already = servers.some(
+    (s) =>
+      typeof s === 'object' &&
+      s !== null &&
+      (s as { enable?: boolean }).enable === true &&
+      (s as { port?: number }).port === onebotPort,
+  );
+  if (already) return { onebotEnabled: true };
+  servers.push({
+    name: 'napcat-zcode',
+    enable: true,
+    port: onebotPort,
+    host: '127.0.0.1',
+    enableCors: false,
+    enableWebsocket: false,
+    messagePostFormat: 'array',
+    token: '',
+    debug: false,
+  });
+  try {
+    await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
+      ...current,
+      network: { ...network, httpServers: servers },
+    });
+    return { onebotEnabled: true };
+  } catch (err) {
+    return { onebotEnabled: false, onebotMessage: `开启 OneBot 失败：${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
  * 拉一次二维码 / 扫码状态。面板每两秒轮询一次：
  * waiting → 展示二维码；accepted → 已扫码待确认；logined → 登录完成。
  *
@@ -124,7 +181,7 @@ async function credentialFor(
  */
 export async function pollQrLogin(
   fetcher: WebuiFetch,
-  opts: { webuiPort: number; token: string; refresh?: boolean },
+  opts: { webuiPort: number; token: string; refresh?: boolean; onebotPort?: number },
 ): Promise<QrLoginResult> {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
   if (opts.refresh === true) credentialCache.delete(opts.webuiPort);
@@ -160,7 +217,10 @@ export async function pollQrLogin(
   }
 
   if (status.isLogin === true || status.coreReady === true) {
-    return { phase: 'logined', message: '登录成功' };
+    // 登录成功 → 顺手把 OneBot HTTP Server 热开启（NapCat 登录后自建的账号级配置
+    // 不含 OneBot Server，不开就永远连不上；WebUI 的 SetConfig 会热加载，免重启）
+    const onebot = await ensureOneBotEnabled(fetcher, opts.webuiPort, credential, opts.onebotPort ?? 3000);
+    return { phase: 'logined', message: '登录成功', ...onebot };
   }
 
   // 登录阶段比布尔字段可靠：waiting_qrcode → qrcode_scanned → initializing

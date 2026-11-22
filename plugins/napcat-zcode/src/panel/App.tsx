@@ -633,7 +633,10 @@ export function App() {
               未配置/错误相位正是需要安装、接管与启动的时刻 */}
           {phase !== 'init' && tab === 'host' && (
             <div className="pane">
-              <HostPanel onChanged={() => void refreshStatus()} />
+              <HostPanel
+                onChanged={() => void refreshStatus()}
+                onOpenRecords={() => setTab('records')}
+              />
             </div>
           )}
         </div>

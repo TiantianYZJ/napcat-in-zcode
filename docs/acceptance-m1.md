@@ -713,3 +713,19 @@
   `napcat_qr_login` 返回 `phase: waiting` + 真实二维码 `data:image/gif`（4 KB）
   ——登录换凭证 → 状态轮询 → 本地渲染二维码全链路打通
 - [x] `npm run typecheck` / `npm test`（35 文件 / 738 通过 / 4 跳过）/ `npm run build` / `npm run smoke`（19/19 + 15/15）
+
+### 15.14 v0.15.0 增量验收记录（扫码闭环收尾 + 步进条 + 原生视觉语言）
+
+用户真机反馈串成的四件事：「扫了确认却还停在这里」「成功了，然后呢，页面呢？」「右侧这个我建议你做成步进条」「你这前端设计学一下 ZCode 的设计美学」：
+
+- [x] **扫码卡变步进条**：右侧四步竖向进度（先退出电脑 QQ 上的同一账号 → 用手机 QQ 扫一扫左侧二维码 → 在手机上确认登录 → 登录成功），当前步高亮、已完成步收敛、竖线连接；每步带 `data-testid="qr-step-{i}"` 与 `data-state`
+- [x] **桌面 QQ 占用前置**：WebUI 返回 `loginError`（如「当前账号(2350355494)已登录,无法重复登录」）被透出到面板，不再显示成「扫不出来」；服务端探测桌面 QQ 进程（PowerShell `Get-Process QQ`），在第一步就提示先退出同一账号
+- [x] **登录成功后热开启 OneBot**：WebUI `OB11Config/GetConfig` + `SetConfig` 写入 `httpServers` 条目（127.0.0.1:3000）——**无需重启 NapCat**，登录成功即有 OneBot 端点；已启用时幂等不动手
+- [x] **登录成功给出口**：「去看聊天记录」按钮直接切到记录页签（`HostPanel.onOpenRecords` → `App.setTab('records')`），不再让人自己找页面；另给「重新获取二维码」刷新入口
+- [x] **视觉语言对齐 ZCode**（依据 `UI_PLUGIN.md` 与宿主令牌映射）：
+  - 面板变量全部桥接到 MCP Apps 标准令牌（`--color-background-primary`、`--color-text-secondary`、`--border-radius-md`…），带 zai 回退值；主题走 `hostContext.theme` + `ui/notifications/host-context-changed` 局部合并，不用 `prefers-color-scheme`
+  - 卡片化骨架：页标题 + 副标题 + 摘要胶囊 + `page-card`；事实用 `8rem minmax(0,1fr)` 定义网格，数字 `tabular-nums`
+  - 大圆角（xl 28 / lg 20 / md 14）+ **G3 连续曲率**：`corner-shape: superellipse(2.5)`——**只作用于大容器**（卡片/二维码框/消息气泡/按钮），此前全局 `*` 会把 9px 圆点也变成超椭圆（表现为「圆角变直角」）
+  - 深度克制：先背景对比与描边，再阴影；消息气泡沿用原生 `ai-elements/message` 几何（右对齐 `bg-secondary`、无名字头）
+- [x] `npm run typecheck` / `npm test`（35 文件 / **756 通过 / 4 跳过**，新增 qrlogin 5、host-panel 3）/ `npm run build`（238.78 kB）/ `npm run smoke`（stdio 19/19、panel 15/15）
+- [x] 视觉复验：2× 截图确认步进条圆点为正圆、竖线连通、当前步高亮，大卡片保留连续曲率

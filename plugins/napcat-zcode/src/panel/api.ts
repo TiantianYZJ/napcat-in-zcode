@@ -705,6 +705,8 @@ export const api = {
       message: string;
       qrDataUrl?: string;
       desktopQqRunning?: boolean;
+      onebotEnabled?: boolean;
+      onebotMessage?: string;
     }>(
       'napcat_qr_login',
       id === undefined ? {} : { id, ...(refresh === true ? { refresh: true } : {}) },

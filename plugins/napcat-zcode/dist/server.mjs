@@ -28151,6 +28151,41 @@ async function credentialFor(fetcher, port, token) {
   credentialCache.set(port, { credential, at: Date.now() });
   return credential;
 }
+async function ensureOneBotEnabled(fetcher, port, credential, onebotPort) {
+  const base = `http://127.0.0.1:${port}`;
+  let current;
+  try {
+    current = unwrap(await webuiPost(fetcher, `${base}/api/OB11Config/GetConfig`, credential, {}));
+  } catch (err) {
+    return { onebotEnabled: false, onebotMessage: `\u8BFB\u53D6 OneBot \u914D\u7F6E\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+  }
+  const network = current.network ?? {};
+  const servers = Array.isArray(network.httpServers) ? [...network.httpServers] : [];
+  const already = servers.some(
+    (s) => typeof s === "object" && s !== null && s.enable === true && s.port === onebotPort
+  );
+  if (already) return { onebotEnabled: true };
+  servers.push({
+    name: "napcat-zcode",
+    enable: true,
+    port: onebotPort,
+    host: "127.0.0.1",
+    enableCors: false,
+    enableWebsocket: false,
+    messagePostFormat: "array",
+    token: "",
+    debug: false
+  });
+  try {
+    await webuiPost(fetcher, `${base}/api/OB11Config/SetConfig`, credential, {
+      ...current,
+      network: { ...network, httpServers: servers }
+    });
+    return { onebotEnabled: true };
+  } catch (err) {
+    return { onebotEnabled: false, onebotMessage: `\u5F00\u542F OneBot \u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 async function pollQrLogin(fetcher, opts) {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
   if (opts.refresh === true) credentialCache.delete(opts.webuiPort);
@@ -28181,7 +28216,8 @@ async function pollQrLogin(fetcher, opts) {
     };
   }
   if (status.isLogin === true || status.coreReady === true) {
-    return { phase: "logined", message: "\u767B\u5F55\u6210\u529F" };
+    const onebot = await ensureOneBotEnabled(fetcher, opts.webuiPort, credential, opts.onebotPort ?? 3e3);
+    return { phase: "logined", message: "\u767B\u5F55\u6210\u529F", ...onebot };
   }
   const loginPhase = typeof status.loginPhase === "string" ? status.loginPhase : "";
   if (loginPhase === "qrcode_scanned" || loginPhase === "initializing" || status.qrLoginAccepted === true) {
@@ -28988,7 +29024,7 @@ function registerHostTools(server2, state) {
         if (!install) {
           throw new Error("\u8FD8\u6CA1\u6709\u53D7\u7BA1\u5B89\u88C5\uFF1A\u5148\u5B89\u88C5\u6216\u63A5\u7BA1\u4E00\u4E2A NapCat\u3002");
         }
-        const { webuiPort } = portsOf(install);
+        const { webuiPort, onebotPort } = portsOf(install);
         const token = h.webuiTokenOf(install.id);
         if (!token) {
           throw new Error("\u62FF\u4E0D\u5230\u8FD9\u4E2A\u5B9E\u4F8B\u7684 WebUI \u8BBF\u95EE\u4EE4\u724C\u3002");
@@ -28996,7 +29032,8 @@ function registerHostTools(server2, state) {
         const r = await pollQrLogin((url, init) => fetch(url, init), {
           webuiPort,
           token,
-          refresh: refresh === true
+          refresh: refresh === true,
+          onebotPort
         });
         return ok(r);
       } catch (e) {
@@ -29572,7 +29609,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.14.3" });
+var server = new McpServer({ name: "napcat", version: "0.15.0" });
 registerTools(server, appState);
 registerPanelResource(server, join8(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

@@ -518,7 +518,7 @@ export function registerHostTools(server: McpServer, state: AppState): void {
         if (!install) {
           throw new Error('还没有受管安装：先安装或接管一个 NapCat。');
         }
-        const { webuiPort } = portsOf(install);
+        const { webuiPort, onebotPort } = portsOf(install);
         const token = h.webuiTokenOf(install.id);
         if (!token) {
           throw new Error('拿不到这个实例的 WebUI 访问令牌。');
@@ -527,6 +527,7 @@ export function registerHostTools(server: McpServer, state: AppState): void {
           webuiPort,
           token,
           refresh: refresh === true,
+          onebotPort,
         });
         return ok(r);
       } catch (e) {

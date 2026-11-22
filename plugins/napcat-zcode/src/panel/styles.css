@@ -21,15 +21,23 @@
  */
 
 /*
- * G3 连续曲率（squircle）：corner-shape 在 Chromium 139+ 原生支持。
- * 参数选 2.5：曲率连续但不过分「发方」——n 越大越接近直角（4 在小半径
- * 圆角上观感已经偏直），iOS 系 UI 控件的观感大约在 2～3。
- * 不支持的浏览器自动回退普通圆角，`@supports` 保证不产生视觉破坏。
+ * G3 连续曲率（squircle）：**只用在��圆角容器上**。
+ * ⚠️ 不要用全局 `*`：superellipse 会把小圆角（9px 圆点、12px 徽章）也变成
+ * 超椭圆 —— 小尺寸下观感接近直角（用户反馈「圆角变直角」的同一机制）。
+ * 参数 2.5：曲率连续但不发方（n 越大越接近直角，iOS 系控件观感约在 2～3）。
+ * 不支持的浏览器自动回退普通圆角。
  */
 @supports (corner-shape: superellipse(2.5)) {
-  *,
-  *::before,
-  *::after {
+  .page-card,
+  .qr-login,
+  .qr-frame,
+  .host-card,
+  .msg,
+  .error-card,
+  .detect-candidate,
+  .detect-fail,
+  .detect-install,
+  .btn {
     corner-shape: superellipse(2.5);
   }
 }
@@ -1366,19 +1374,58 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* 步进条：圆点 + 进度线（对齐 ZCode 的步进/进度语言） */
 .qr-login .qr-steps {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
   font-size: var(--text-ui-sm);
-  color: var(--color-foreground-subtle);
 }
 
 .qr-login .qr-steps li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 0 12px 0;
+  color: var(--color-foreground-subtlest);
   overflow-wrap: anywhere;
+}
+
+.qr-login .qr-steps li:last-child {
+  padding-bottom: 0;
+}
+
+.qr-login .qr-steps li .qr-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-foreground-subtlest);
+  background: transparent;
+}
+
+/* 进度线：最后一个不画 */
+.qr-login .qr-steps li:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 16px;
+  bottom: 2px;
+  width: 1.5px;
+  background: var(--color-border-hover);
+}
+
+.qr-login .qr-steps li.done {
+  color: var(--color-foreground-subtle);
+}
+
+.qr-login .qr-steps li.done .qr-dot {
+  background: var(--color-foreground-subtlest);
+  border-color: var(--color-foreground-subtlest);
 }
 
 .qr-login .qr-steps li.now {
@@ -1386,9 +1433,26 @@ textarea {
   font-weight: 500;
 }
 
-.qr-login .qr-steps li + li {
-  padding-top: 6px;
-  border-top: 1px solid var(--color-border);
+.qr-login .qr-steps li.now .qr-dot {
+  border-color: var(--color-foreground);
+  background: var(--color-foreground);
+  box-shadow: 0 0 0 3px var(--color-surface-hover);
+}
+
+.qr-login .qr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.qr-login .qr-ok-note {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-success-surface);
+  color: var(--color-success-surface-foreground);
+  font-size: var(--text-ui-xs);
 }
 
 .qr-login .qr-status {

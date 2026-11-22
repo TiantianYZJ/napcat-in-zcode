@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   startHost: vi.fn(),
   stopHost: vi.fn(),
   uninstallHost: vi.fn(),
+  qrLogin: vi.fn(),
   openLocalLink: vi.fn(),
   caps: { openLinks: true },
 }));
@@ -24,6 +25,7 @@ vi.mock('../src/panel/api.js', () => ({
     startHost: mocks.startHost,
     stopHost: mocks.stopHost,
     uninstallHost: mocks.uninstallHost,
+    qrLogin: mocks.qrLogin,
   },
   bridge: {
     capabilities: mocks.caps,
@@ -69,6 +71,8 @@ beforeEach(() => {
   mocks.startHost.mockReset();
   mocks.stopHost.mockReset();
   mocks.uninstallHost.mockReset();
+  mocks.qrLogin.mockReset();
+  mocks.qrLogin.mockResolvedValue({ phase: 'waiting', message: '请用手机 QQ 扫一扫' });
   mocks.openLocalLink.mockReset();
   mocks.caps.openLinks = true;
   mocks.hostStatus.mockResolvedValue(result());
@@ -264,5 +268,42 @@ describe('HostPanel', () => {
     await screen.findByTestId('autostart-skipped');
     // 不自动启动：两个进程会抢端口
     expect(mocks.startHost).not.toHaveBeenCalled();
+  });
+
+  it('shows a QR-login stepper and finishes with a link to the records tab', async () => {
+    const onRecords = vi.fn();
+    mocks.qrLogin.mockResolvedValue({
+      phase: 'waiting',
+      message: '请用手机 QQ 扫一扫',
+      qrDataUrl: 'data:image/gif;base64,AAAA',
+    });
+    mocks.hostStatus.mockResolvedValue(
+      result({
+        installs: [install],
+        status: [{ state: 'running', install }],
+        jobs: [
+          {
+            id: 'job-done',
+            startedAt: '2026-11-22T00:00:00.000Z',
+            state: 'succeeded',
+            phase: 'done',
+            bytesReceived: 1,
+            install,
+          },
+        ],
+      }),
+    );
+    render(<HostPanel onOpenRecords={onRecords} />);
+    // 步进条：桌面 QQ 没在跑 → 第 0 步已完成，第 1 步（扫码）是当前
+    await waitFor(() => expect(screen.getByTestId('qr-steps')).toBeTruthy());
+    expect(screen.getByTestId('qr-step-0').getAttribute('data-state')).toBe('done');
+    expect(screen.getByTestId('qr-step-1').getAttribute('data-state')).toBe('now');
+
+    // 登录成功后：给出「去看聊天记录」出口与 OneBot 已开启的提示
+    // （面板每 2 秒轮询一次 → 等待窗口要大于轮询间隔）
+    mocks.qrLogin.mockResolvedValue({ phase: 'logined', message: '登录成功', onebotEnabled: true });
+    await waitFor(() => expect(screen.getByTestId('qr-onebot-ok')).toBeTruthy(), { timeout: 4000 });
+    fireEvent.click(screen.getByTestId('qr-open-records'));
+    expect(onRecords).toHaveBeenCalledTimes(1);
   });
 });

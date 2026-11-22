@@ -54,7 +54,14 @@ function hasLiveHost(statuses: HostStatus[]): boolean {
   return statuses.some((status) => ['running', 'starting', 'degraded'].includes(status.state));
 }
 
-export function HostPanel({ onChanged }: { onChanged?: () => void }) {
+export function HostPanel({
+  onChanged,
+  onOpenRecords,
+}: {
+  onChanged?: () => void;
+  /** 登录成功后的出口：切到记录页看聊天记录。 */
+  onOpenRecords?: () => void;
+}) {
   const [state, setState] = useState<HostStatusResult | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
@@ -437,6 +444,7 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
                 void refresh();
                 onChangedRef.current?.();
               }}
+              onOpenRecords={onOpenRecords}
             />
           )}
           {job.state === 'succeeded' && otherRunning && (

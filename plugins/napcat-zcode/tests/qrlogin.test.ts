@@ -137,4 +137,44 @@ describe('pollQrLogin（扫码登录轮询）', () => {
     const r = await pollQrLogin(fetcher, { webuiPort: 6107, token: PORT.token });
     expect(r.phase).toBe('accepted');
   });
+
+  it('登录成功 → 热开启 OneBot HTTP Server（免重启 NapCat）', async () => {
+    const seen: string[] = [];
+    const fetcher = fakeWebui(
+      {
+        ...baseRoutes({ isLogin: true }),
+        '/api/OB11Config/GetConfig': {
+          body: { code: 0, data: { network: { httpServers: [], websocketServers: [] } }, message: 'success' },
+        },
+        '/api/OB11Config/SetConfig': { body: { code: 0, data: {}, message: 'success' } },
+      },
+      seen,
+    );
+    const r = await pollQrLogin(fetcher, { webuiPort: 6108, token: PORT.token, onebotPort: 3000 });
+    expect(r.phase).toBe('logined');
+    expect(r.onebotEnabled).toBe(true);
+    const setBody = seen.find((s) => s.startsWith('/api/OB11Config/SetConfig|')) ?? '';
+    expect(setBody).toContain('"port":3000');
+    expect(setBody).toContain('"enable":true');
+  });
+
+  it('OneBot 已开启时不重复写配置', async () => {
+    const seen: string[] = [];
+    const fetcher = fakeWebui(
+      {
+        ...baseRoutes({ isLogin: true }),
+        '/api/OB11Config/GetConfig': {
+          body: {
+            code: 0,
+            data: { network: { httpServers: [{ name: 'x', enable: true, port: 3000, host: '127.0.0.1' }] } },
+            message: 'success',
+          },
+        },
+      },
+      seen,
+    );
+    const r = await pollQrLogin(fetcher, { webuiPort: 6109, token: PORT.token, onebotPort: 3000 });
+    expect(r.onebotEnabled).toBe(true);
+    expect(seen.some((s) => s.startsWith('/api/OB11Config/SetConfig|'))).toBe(false);
+  });
 });
