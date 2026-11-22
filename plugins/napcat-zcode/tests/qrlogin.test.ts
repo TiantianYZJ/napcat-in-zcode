@@ -113,4 +113,28 @@ describe('pollQrLogin（扫码登录轮询）', () => {
     expect(r.qrDataUrl).toBeUndefined();
     expect(r.message).toContain('正在生成二维码');
   });
+
+  it('loginError（同号已在别处登录）→ 直接说明原因并给出解法', async () => {
+    const fetcher = fakeWebui(
+      baseRoutes({
+        isLogin: false,
+        qrLoginAccepted: false,
+        loginPhase: 'waiting_qrcode',
+        qrcodeurl: 'https://txz.qq.com/p?k=x',
+        loginError: '当前账号(2350355494)已登录,无法重复登录',
+      }),
+    );
+    const r = await pollQrLogin(fetcher, { webuiPort: 6106, token: PORT.token });
+    expect(r.phase).toBe('error');
+    expect(r.message).toContain('已登录');
+    expect(r.message).toContain('退出电脑 QQ');
+  });
+
+  it('loginPhase=qrcode_scanned → accepted（不依赖 qrLoginAccepted 布尔）', async () => {
+    const fetcher = fakeWebui(
+      baseRoutes({ isLogin: false, qrLoginAccepted: false, loginPhase: 'qrcode_scanned' }),
+    );
+    const r = await pollQrLogin(fetcher, { webuiPort: 6107, token: PORT.token });
+    expect(r.phase).toBe('accepted');
+  });
 });

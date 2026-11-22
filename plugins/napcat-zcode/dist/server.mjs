@@ -26461,6 +26461,8 @@ function errText3(err) {
 
 // src/server/host/qrlogin.ts
 import { createHash as createHash3 } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 // node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
@@ -28097,6 +28099,7 @@ var qrcode_default = qrcode;
 var stringToBytes = qrcode.stringToBytes;
 
 // src/server/host/qrlogin.ts
+var execFileAsync = promisify(execFile);
 var WEBUI_TIMEOUT_MS = 8e3;
 async function webuiPost(fetcher, url, credential, body) {
   const res = await fetcher(url, {
@@ -28150,6 +28153,7 @@ async function credentialFor(fetcher, port, token) {
 }
 async function pollQrLogin(fetcher, opts) {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
+  if (opts.refresh === true) credentialCache.delete(opts.webuiPort);
   let credential;
   try {
     credential = await credentialFor(fetcher, opts.webuiPort, opts.token);
@@ -28169,26 +28173,52 @@ async function pollQrLogin(fetcher, opts) {
       message: `\u8BFB\u53D6\u767B\u5F55\u72B6\u6001\u5931\u8D25\uFF08WebUI \u6CA1\u54CD\u5E94\uFF09\uFF1A${err instanceof Error ? err.message : String(err)}`
     };
   }
-  if (status.isLogin === true) {
+  const loginError = typeof status.loginError === "string" ? status.loginError.trim() : "";
+  if (loginError !== "") {
+    return {
+      phase: "error",
+      message: `${loginError}\u3002\u8BF7\u5148\u9000\u51FA\u7535\u8111 QQ \u4E0A\u7684\u540C\u4E00\u8D26\u53F7\uFF0C\u518D\u91CD\u65B0\u626B\u7801\u3002`
+    };
+  }
+  if (status.isLogin === true || status.coreReady === true) {
     return { phase: "logined", message: "\u767B\u5F55\u6210\u529F" };
   }
-  if (status.qrLoginAccepted === true) {
+  const loginPhase = typeof status.loginPhase === "string" ? status.loginPhase : "";
+  if (loginPhase === "qrcode_scanned" || loginPhase === "initializing" || status.qrLoginAccepted === true) {
     return { phase: "accepted", message: "\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u786E\u8BA4\u767B\u5F55" };
   }
   const qrcodeUrl = typeof status.qrcodeurl === "string" ? status.qrcodeurl : "";
   if (qrcodeUrl === "") {
     return { phase: "waiting", message: "\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026" };
   }
-  return { phase: "waiting", message: "\u8BF7\u7528\u624B\u673A QQ \u626B\u4E00\u626B", qrDataUrl: qrDataUrlOf(qrcodeUrl) };
+  const desktopQqRunning = await isDesktopQqRunning();
+  return {
+    phase: "waiting",
+    message: "\u8BF7\u7528\u624B\u673A QQ \u626B\u4E00\u626B",
+    qrDataUrl: qrDataUrlOf(qrcodeUrl),
+    desktopQqRunning
+  };
+}
+async function isDesktopQqRunning() {
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", "(Get-Process QQ -ErrorAction SilentlyContinue) -ne $null"],
+      { timeout: 5e3 }
+    );
+    return stdout.trim().toLowerCase() === "true";
+  } catch {
+    return false;
+  }
 }
 
 // src/server/host/portfix.ts
-import { execFile } from "node:child_process";
+import { execFile as execFile2 } from "node:child_process";
 import { createServer } from "node:net";
 import { readFileSync as readFileSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join5 } from "node:path";
-import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
+import { promisify as promisify2 } from "node:util";
+var execFileAsync2 = promisify2(execFile2);
 function isPortFree(port) {
   return new Promise((resolve4) => {
     const srv = createServer();
@@ -28252,7 +28282,7 @@ function rewriteNapcatPorts(dir, ports) {
 async function killProcessesUnder(dir) {
   const escaped = dir.replace(/'/g, "''");
   const script = `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${escaped}*' } | Select-Object -ExpandProperty ProcessId`;
-  const { stdout } = await execFileAsync(
+  const { stdout } = await execFileAsync2(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
     { timeout: 15e3 }
@@ -28260,7 +28290,7 @@ async function killProcessesUnder(dir) {
   const pids = stdout.split(/\r?\n/).map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
   for (const pid of pids) {
     try {
-      await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 1e4 });
+      await execFileAsync2("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 1e4 });
     } catch {
     }
   }
@@ -28944,13 +28974,14 @@ function registerHostTools(server2, state) {
   server2.registerTool(
     "napcat_qr_login",
     {
-      description: "\u83B7\u53D6\u53D7\u7BA1 NapCat \u7684\u767B\u5F55\u4E8C\u7EF4\u7801\u4E0E\u626B\u7801\u72B6\u6001\uFF08\u9762\u677F\u8F6E\u8BE2\u7528\uFF09\u3002\u8FD4\u56DE phase: waiting\uFF08\u9644\u4E8C\u7EF4\u7801 data URL\uFF09/ accepted\uFF08\u5DF2\u626B\u7801\u5F85\u786E\u8BA4\uFF09/ logined / error\u3002",
+      description: "\u83B7\u53D6\u53D7\u7BA1 NapCat \u7684\u767B\u5F55\u4E8C\u7EF4\u7801\u4E0E\u626B\u7801\u72B6\u6001\uFF08\u9762\u677F\u8F6E\u8BE2\u7528\uFF09\u3002\u8FD4\u56DE phase: waiting\uFF08\u9644\u4E8C\u7EF4\u7801 data URL\uFF09/ accepted\uFF08\u5DF2\u626B\u7801\u5F85\u786E\u8BA4\uFF09/ logined / error\u3002\u82E5\u7535\u8111\u4E0A\u7684\u684C\u9762 QQ \u6B63\u767B\u5F55\u7740\u540C\u4E00\u8D26\u53F7\uFF0C\u626B\u7801\u4F1A\u88AB\u9876\u53F7\u2014\u2014error \u91CC\u4F1A\u8BF4\u660E\u539F\u56E0\u3002",
       inputSchema: {
-        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09")
+        id: external_exports.string().optional().describe("\u53D7\u7BA1\u5B89\u88C5 id\uFF08\u4E0D\u4F20 = \u6700\u8FD1\u767B\u8BB0\u7684\u90A3\u4E2A\uFF09"),
+        refresh: external_exports.boolean().optional().describe("true = \u91CD\u65B0\u767B\u5F55\u6362\u65B0\u4E8C\u7EF4\u7801\uFF08\u65E7\u7684\u626B\u7801\u4F1A\u8BDD\u4F5C\u5E9F\u65F6\u7528\uFF09")
       },
       annotations: { readOnlyHint: true }
     },
-    async ({ id }) => {
+    async ({ id, refresh }) => {
       try {
         const h = getHost();
         const install = pickInstall(h, id);
@@ -28962,7 +28993,11 @@ function registerHostTools(server2, state) {
         if (!token) {
           throw new Error("\u62FF\u4E0D\u5230\u8FD9\u4E2A\u5B9E\u4F8B\u7684 WebUI \u8BBF\u95EE\u4EE4\u724C\u3002");
         }
-        const r = await pollQrLogin((url, init) => fetch(url, init), { webuiPort, token });
+        const r = await pollQrLogin((url, init) => fetch(url, init), {
+          webuiPort,
+          token,
+          refresh: refresh === true
+        });
         return ok(r);
       } catch (e) {
         return fail(state, e);
@@ -29537,7 +29572,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.14.2" });
+var server = new McpServer({ name: "napcat", version: "0.14.3" });
 registerTools(server, appState);
 registerPanelResource(server, join8(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);

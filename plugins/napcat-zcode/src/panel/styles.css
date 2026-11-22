@@ -1399,6 +1399,17 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* 桌面 QQ 在跑（同号会被顶号）——唯一需要抢眼色的一次提示 */
+.qr-login .qr-warn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-warning-surface);
+  color: var(--color-warning-surface-foreground);
+  font-size: var(--text-ui-xs);
+  line-height: 1.5;
+}
+
 .qr-login .qr-ok {
   color: var(--color-success-surface-foreground);
   font-weight: 500;

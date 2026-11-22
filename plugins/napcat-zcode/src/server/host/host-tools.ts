@@ -503,13 +503,15 @@ export function registerHostTools(server: McpServer, state: AppState): void {
     {
       description:
         '获取受管 NapCat 的登录二维码与扫码状态（面板轮询用）。' +
-        '返回 phase: waiting（附二维码 data URL）/ accepted（已扫码待确认）/ logined / error。',
+        '返回 phase: waiting（附二维码 data URL）/ accepted（已扫码待确认）/ logined / error。' +
+        '若电脑上的桌面 QQ 正登录着同一账号，扫码会被顶号——error 里会说明原因。',
       inputSchema: {
         id: z.string().optional().describe('受管安装 id（不传 = 最近登记的那个）'),
+        refresh: z.boolean().optional().describe('true = 重新登录换新二维码（旧的扫码会话作废时用）'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ id }) => {
+    async ({ id, refresh }) => {
       try {
         const h = getHost();
         const install = pickInstall(h, id);
@@ -521,7 +523,11 @@ export function registerHostTools(server: McpServer, state: AppState): void {
         if (!token) {
           throw new Error('拿不到这个实例的 WebUI 访问令牌。');
         }
-        const r = await pollQrLogin((url, init) => fetch(url, init), { webuiPort, token });
+        const r = await pollQrLogin((url, init) => fetch(url, init), {
+          webuiPort,
+          token,
+          refresh: refresh === true,
+        });
         return ok(r);
       } catch (e) {
         return fail(state, e);
