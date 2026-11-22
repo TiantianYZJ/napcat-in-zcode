@@ -88,6 +88,29 @@ function qrDataUrlOf(text: string): string {
 }
 
 /**
+ * WebUI 凭证缓存（端口 → 凭证）。
+ *
+ * **必须有**：登录接口有频率限制（webui.json 的 loginRate），而面板每 2 秒轮询一次
+ * 扫码状态——每次都重新登录必然撞上限（表现为「login rate limit」）。
+ * 凭证本身一小时有效，缓存复用即可。
+ */
+const credentialCache = new Map<number, { credential: string; at: number }>();
+const CREDENTIAL_TTL_MS = 50 * 60 * 1000;
+
+/** 取凭证：优先用缓存；没有或过期才登录一次。 */
+async function credentialFor(
+  fetcher: WebuiFetch,
+  port: number,
+  token: string,
+): Promise<string> {
+  const cached = credentialCache.get(port);
+  if (cached && Date.now() - cached.at < CREDENTIAL_TTL_MS) return cached.credential;
+  const credential = await webuiLogin(fetcher, port, token);
+  credentialCache.set(port, { credential, at: Date.now() });
+  return credential;
+}
+
+/**
  * 拉一次二维码 / 扫码状态。面板每两秒轮询一次：
  * waiting → 展示二维码；accepted → 已扫码待确认；logined → 登录完成。
  */
@@ -98,7 +121,7 @@ export async function pollQrLogin(
   const base = `http://127.0.0.1:${opts.webuiPort}`;
   let credential: string;
   try {
-    credential = await webuiLogin(fetcher, opts.webuiPort, opts.token);
+    credential = await credentialFor(fetcher, opts.webuiPort, opts.token);
   } catch (err) {
     return {
       phase: 'error',
@@ -110,9 +133,11 @@ export async function pollQrLogin(
   try {
     status = unwrap(await webuiPost(fetcher, `${base}/api/QQLogin/CheckLoginStatus`, credential, {}));
   } catch (err) {
+    // 凭证失效（WebUI 重启过）→ 清缓存，下次轮询重新登录
+    credentialCache.delete(opts.webuiPort);
     return {
       phase: 'error',
-      message: `读取登录状态失败：${err instanceof Error ? err.message : String(err)}`,
+      message: `读取登录状态失败（WebUI 没响应）：${err instanceof Error ? err.message : String(err)}`,
     };
   }
 

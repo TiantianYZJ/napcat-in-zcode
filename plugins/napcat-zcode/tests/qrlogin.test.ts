@@ -63,7 +63,7 @@ describe('pollQrLogin（扫码登录轮询）', () => {
       },
       seen,
     );
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6100, token: PORT.token });
     expect(r.phase).toBe('waiting');
     expect(r.qrDataUrl).toContain('data:image/gif;base64');
     // 登录用的是加盐 hash：body 里的 hash ≠ sha256(裸 token)
@@ -75,14 +75,14 @@ describe('pollQrLogin（扫码登录轮询）', () => {
 
   it('accepted：已扫码待确认（不渲染二维码）', async () => {
     const fetcher = fakeWebui(baseRoutes({ isLogin: false, qrLoginAccepted: true }));
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6101, token: PORT.token });
     expect(r.phase).toBe('accepted');
     expect(r.qrDataUrl).toBeUndefined();
   });
 
   it('logined：登录完成', async () => {
     const fetcher = fakeWebui(baseRoutes({ isLogin: true }));
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6102, token: PORT.token });
     expect(r.phase).toBe('logined');
   });
 
@@ -90,7 +90,7 @@ describe('pollQrLogin（扫码登录轮询）', () => {
     const fetcher: QrFetcher = async () => {
       throw new Error('connect ECONNREFUSED');
     };
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6103, token: PORT.token });
     expect(r.phase).toBe('error');
     expect(r.message).toContain('WebUI');
   });
@@ -99,7 +99,7 @@ describe('pollQrLogin（扫码登录轮询）', () => {
     const fetcher = fakeWebui({
       '/api/auth/login': { body: { code: -1, message: 'token is invalid' } },
     });
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6104, token: PORT.token });
     expect(r.phase).toBe('error');
     expect(r.message).toContain('token is invalid');
   });
@@ -108,7 +108,7 @@ describe('pollQrLogin（扫码登录轮询）', () => {
     const fetcher = fakeWebui(
       baseRoutes({ isLogin: false, qrLoginAccepted: false, qrcodeurl: '' }),
     );
-    const r = await pollQrLogin(fetcher, PORT);
+    const r = await pollQrLogin(fetcher, { webuiPort: 6105, token: PORT.token });
     expect(r.phase).toBe('waiting');
     expect(r.qrDataUrl).toBeUndefined();
     expect(r.message).toContain('正在生成二维码');

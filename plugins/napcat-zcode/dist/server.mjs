@@ -28139,11 +28139,20 @@ function qrDataUrlOf(text) {
   qr.make();
   return qr.createDataURL(6, 4);
 }
+var credentialCache = /* @__PURE__ */ new Map();
+var CREDENTIAL_TTL_MS = 50 * 60 * 1e3;
+async function credentialFor(fetcher, port, token) {
+  const cached2 = credentialCache.get(port);
+  if (cached2 && Date.now() - cached2.at < CREDENTIAL_TTL_MS) return cached2.credential;
+  const credential = await webuiLogin(fetcher, port, token);
+  credentialCache.set(port, { credential, at: Date.now() });
+  return credential;
+}
 async function pollQrLogin(fetcher, opts) {
   const base = `http://127.0.0.1:${opts.webuiPort}`;
   let credential;
   try {
-    credential = await webuiLogin(fetcher, opts.webuiPort, opts.token);
+    credential = await credentialFor(fetcher, opts.webuiPort, opts.token);
   } catch (err) {
     return {
       phase: "error",
@@ -28154,9 +28163,10 @@ async function pollQrLogin(fetcher, opts) {
   try {
     status = unwrap(await webuiPost(fetcher, `${base}/api/QQLogin/CheckLoginStatus`, credential, {}));
   } catch (err) {
+    credentialCache.delete(opts.webuiPort);
     return {
       phase: "error",
-      message: `\u8BFB\u53D6\u767B\u5F55\u72B6\u6001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}`
+      message: `\u8BFB\u53D6\u767B\u5F55\u72B6\u6001\u5931\u8D25\uFF08WebUI \u6CA1\u54CD\u5E94\uFF09\uFF1A${err instanceof Error ? err.message : String(err)}`
     };
   }
   if (status.isLogin === true) {
@@ -29527,7 +29537,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.14.1" });
+var server = new McpServer({ name: "napcat", version: "0.14.2" });
 registerTools(server, appState);
 registerPanelResource(server, join8(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);
