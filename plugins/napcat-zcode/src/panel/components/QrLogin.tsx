@@ -49,12 +49,19 @@ export function QrLogin({ installId, onLogined }: { installId: string; onLogined
         {phase === 'accepted' && !qr && <div className="qr-hint">已扫码，请在手机上确认</div>}
         {phase === 'error' && <div className="qr-hint">{message}</div>}
       </div>
-      <div className="qr-text">
-        {phase === 'logined' ? (
-          <span className="qr-ok">登录成功</span>
-        ) : (
-          <span>{phase === 'accepted' ? '已在手机上确认，等待登录…' : '用手机 QQ 扫一扫上面的二维码'}</span>
-        )}
+      <div className="qr-side">
+        <ol className="qr-steps">
+          <li className={phase === 'waiting' ? 'now' : ''}>手机 QQ 扫一扫左侧二维码</li>
+          <li className={phase === 'accepted' ? 'now' : ''}>在手机上确认登录</li>
+          <li className={phase === 'logined' ? 'now' : ''}>登录成功，自动回到这里</li>
+        </ol>
+        <div className="qr-status">
+          {phase === 'logined' ? (
+            <span className="qr-ok">登录成功</span>
+          ) : (
+            <span>{phase === 'accepted' ? '等待手机确认…' : phase === 'waiting' ? '等待扫码…' : message}</span>
+          )}
+        </div>
       </div>
     </div>
   );

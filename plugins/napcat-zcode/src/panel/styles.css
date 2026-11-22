@@ -20,6 +20,28 @@
  * - **圆角层级**：第一个圆角容器 xl(12) → lg(8) → md(6) → sm(4)；控件默认 lg。
  */
 
+/*
+ * G3 连续曲率（squircle）：corner-shape 在 Chromium 139+ 原生支持。
+ * 参数选 2.5：曲率连续但不过分「发方」——n 越大越接近直角（4 在小半径
+ * 圆角上观感已经偏直），iOS 系 UI 控件的观感大约在 2～3。
+ * 不支持的浏览器自动回退普通圆角，`@supports` 保证不产生视觉破坏。
+ */
+@supports (corner-shape: superellipse(2.5)) {
+  *,
+  *::before,
+  *::after {
+    corner-shape: superellipse(2.5);
+  }
+}
+
+/* 宽侧栏字号提升一档（DESIGN.md 允许的唯一调法：只改 --ui-font-size）；
+   宿主注入的字号令牌可能与它竞争，用 max() 保证宽屏下不小于 15px */
+@media (min-width: 700px) {
+  :root {
+    --ui-font-size: max(var(--font-text-md-size, 14px), 15px);
+  }
+}
+
 :root {
   color-scheme: light;
 
@@ -1042,16 +1064,21 @@ textarea {
   font-size: var(--text-ui-sm);
 }
 
+/* 原生列表行语言：无边框盒、hover 弱背景（对齐 ZCode 文件树/任务列表行） */
 .detect .detect-candidate,
 .detect .detect-fail {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-card);
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+.detect .detect-candidate:hover,
+.detect .detect-fail:hover {
+  background: var(--color-hover);
 }
 
 .detect .ep {
@@ -1107,10 +1134,13 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-card);
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+.detect .detect-install:hover {
+  background: var(--color-hover);
 }
 
 .detect .detect-install-info {
@@ -1151,9 +1181,8 @@ textarea {
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  background: var(--color-card);
+  background: var(--color-card); /* 靠背景对比分层，不加边框（盒子少才安静） */
 }
 
 .host-card .host-head {
@@ -1244,13 +1273,17 @@ textarea {
   }
 }
 
-/* 扫码登录卡：二维码居中 + 一行状态文字 */
+/* 扫码登录卡：当前任务的视觉重心。
+   宽屏两栏（左二维码、右步骤+状态）填满宽度；窄屏纵向居中 */
 .qr-login {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0 2px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
 }
 
 .qr-login .qr-frame {
@@ -1278,14 +1311,54 @@ textarea {
   overflow-wrap: anywhere;
 }
 
-.qr-login .qr-text {
-  font-size: var(--text-ui-xs);
+.qr-login .qr-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-ui-sm);
   color: var(--color-foreground-subtle);
+}
+
+.qr-login .qr-steps li.now {
+  color: var(--color-foreground);
+  font-weight: 500;
+}
+
+.qr-login .qr-steps li + li {
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.qr-login .qr-status {
+  margin-top: 6px;
+  font-size: var(--text-ui-xs);
+  color: var(--color-foreground-subtlest);
+  font-variant-numeric: tabular-nums;
 }
 
 .qr-login .qr-ok {
   color: var(--color-success-surface-foreground);
   font-weight: 500;
+}
+
+@media (min-width: 560px) {
+  .qr-login {
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .qr-login .qr-frame {
+    flex: 0 0 auto;
+  }
+
+  .qr-login .qr-side {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }
 
 details.job-notes {
