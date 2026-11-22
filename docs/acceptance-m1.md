@@ -704,3 +704,12 @@
 - [x] 文案断言同步（M2 裁定保留：预算耗尽必说「不能据此判断本机没有 NapCat」、token 角标必带「可能」修饰）
 - [x] `npm run typecheck` / `npm test`（35 文件 / **735 通过 / 4 跳过**）/ `npm run build` / `npm run smoke`（stdio 19/19、panel 15/15）
 - [x] 视觉复验：808px dark 下连接页两栏填满、警告单次、密度对齐原生
+
+### 15.13 v0.14.1 增量验收记录（扫码请求方法修正 + 端到端验证）
+
+- [x] **修 WebUI 请求方法**：fetch 默认 GET，带 body 会被 Node 拒绝
+  （`Request with GET/HEAD method cannot have body`）→ 显式 `method: 'POST'`
+- [x] **端到端验证**（真实 MCP server 子进程 + 用户机器上真实运行的 NapCat）：
+  `napcat_qr_login` 返回 `phase: waiting` + 真实二维码 `data:image/gif`（4 KB）
+  ——登录换凭证 → 状态轮询 → 本地渲染二维码全链路打通
+- [x] `npm run typecheck` / `npm test`（35 文件 / 738 通过 / 4 跳过）/ `npm run build` / `npm run smoke`（19/19 + 15/15）
