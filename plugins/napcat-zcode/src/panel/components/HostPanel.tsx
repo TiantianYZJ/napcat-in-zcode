@@ -401,11 +401,14 @@ export function HostPanel({ onChanged }: { onChanged?: () => void }) {
             </>
           )}
           {job.error && <div className="host-warn">{job.error}</div>}
-          {(job.notes ?? []).map((n, i) => (
-            <div className="host-msg" key={`${i}-${n}`}>
-              {n}
-            </div>
-          ))}
+          {/* 失败时 error 与 notes 常是同一句话，去重避免整屏重复 */}
+          {(job.notes ?? [])
+            .filter((n) => n !== job.error)
+            .map((n, i) => (
+              <div className="host-msg" key={`${i}-${n}`}>
+                {n}
+              </div>
+            ))}
         </div>
       )}
 

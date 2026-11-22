@@ -30,7 +30,15 @@ export const NAPCAT_ARTIFACTS: Record<string, NapCatArtifact> = {
     url: 'https://github.com/XingYunStar/NapCatQQ/releases/download/v4.18.42/NapCat.Shell.Windows.Node.zip',
     sha256: '77397ac38d66f46383e48f08f35d5f9d37ec575c22069f62d6c600e73b4521ed',
     size: 124162399,
-    allowedHosts: ['github.com', 'objects.githubusercontent.com', 'api.github.com', 'raw.githubusercontent.com'],
+    // GitHub 的 release 资产会 302 到 release-assets.githubusercontent.com（新资产域），
+    // 逐跳校验必须放行，否则安装直接被下载源闸门拒绝
+    allowedHosts: [
+      'github.com',
+      'objects.githubusercontent.com',
+      'release-assets.githubusercontent.com',
+      'api.github.com',
+      'raw.githubusercontent.com',
+    ],
     platforms: ['win32'],
   },
 };

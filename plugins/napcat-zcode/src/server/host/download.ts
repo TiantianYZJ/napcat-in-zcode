@@ -329,9 +329,7 @@ function assertResourceUrl(raw: string, allowedHosts: string[], policy: Resource
     (Array.isArray(allowedHosts) ? allowedHosts : []).map(normalizeHostEntry).filter((h) => h !== ''),
   );
   if (!allowed.has(normalizeHostEntry(host))) {
-    throw new DownloadError(
-      `下载被拒绝：「${host}」不在允许的下载源清单内。请把下载源改成清单内的地址（例如 GitHub 官方发布页）。`,
-    );
+    throw new DownloadError(`下载被拒绝：这个下载地址不在允许的下载源里。`);
   }
   return url;
 }

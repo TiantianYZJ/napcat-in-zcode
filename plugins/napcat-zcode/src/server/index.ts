@@ -10,7 +10,7 @@ import { appState, closeConnection } from './state.js';
 // 打包产物是 dist/server.mjs → here = dist/ → 面板在 dist/ui/panel.html
 const here = dirname(fileURLToPath(import.meta.url));
 
-const server = new McpServer({ name: 'napcat', version: '0.10.0' });
+const server = new McpServer({ name: 'napcat', version: '0.10.1' });
 registerTools(server, appState);
 registerPanelResource(server, join(here, 'ui', 'panel.html'));
 // 聊天图片的只读代理资源：面板 readServerResource 拉图（默认 CSP 拦外域 img，

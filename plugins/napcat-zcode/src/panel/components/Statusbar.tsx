@@ -132,10 +132,10 @@ export function Statusbar({
       <span className="topbar-spacer" aria-hidden="true" />
       {onSettings && (
         <button
-          className="btn pill"
+          className="btn ghost"
           data-testid="settings-btn"
           onClick={onSettings}
-          title="查看插件配置（只读）"
+          title="查看插件配置"
         >
           设置
         </button>

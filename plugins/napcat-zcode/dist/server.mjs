@@ -24449,7 +24449,15 @@ var NAPCAT_ARTIFACTS = {
     url: "https://github.com/XingYunStar/NapCatQQ/releases/download/v4.18.42/NapCat.Shell.Windows.Node.zip",
     sha256: "77397ac38d66f46383e48f08f35d5f9d37ec575c22069f62d6c600e73b4521ed",
     size: 124162399,
-    allowedHosts: ["github.com", "objects.githubusercontent.com", "api.github.com", "raw.githubusercontent.com"],
+    // GitHub 的 release 资产会 302 到 release-assets.githubusercontent.com（新资产域），
+    // 逐跳校验必须放行，否则安装直接被下载源闸门拒绝
+    allowedHosts: [
+      "github.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com",
+      "api.github.com",
+      "raw.githubusercontent.com"
+    ],
     platforms: ["win32"]
   }
 };
@@ -24660,9 +24668,7 @@ function assertResourceUrl(raw, allowedHosts, policy) {
     (Array.isArray(allowedHosts) ? allowedHosts : []).map(normalizeHostEntry).filter((h) => h !== "")
   );
   if (!allowed.has(normalizeHostEntry(host))) {
-    throw new DownloadError(
-      `\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u300C${host}\u300D\u4E0D\u5728\u5141\u8BB8\u7684\u4E0B\u8F7D\u6E90\u6E05\u5355\u5185\u3002\u8BF7\u628A\u4E0B\u8F7D\u6E90\u6539\u6210\u6E05\u5355\u5185\u7684\u5730\u5740\uFF08\u4F8B\u5982 GitHub \u5B98\u65B9\u53D1\u5E03\u9875\uFF09\u3002`
-    );
+    throw new DownloadError(`\u4E0B\u8F7D\u88AB\u62D2\u7EDD\uFF1A\u8FD9\u4E2A\u4E0B\u8F7D\u5730\u5740\u4E0D\u5728\u5141\u8BB8\u7684\u4E0B\u8F7D\u6E90\u91CC\u3002`);
   }
   return url;
 }
@@ -27621,7 +27627,7 @@ function registerImageResource(server2, fetcher) {
 
 // src/server/index.ts
 var here = dirname5(fileURLToPath(import.meta.url));
-var server = new McpServer({ name: "napcat", version: "0.9.0" });
+var server = new McpServer({ name: "napcat", version: "0.10.1" });
 registerTools(server, appState);
 registerPanelResource(server, join7(here, "ui", "panel.html"));
 var imageFetch = (url, init) => fetch(url, init);
