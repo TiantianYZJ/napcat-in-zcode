@@ -174,7 +174,7 @@ describe('HostBridge', () => {
     const params = init.params as { appInfo: unknown; appCapabilities: unknown; protocolVersion: string };
     // protocolVersion 在协议 schema 里是必填的（brief 漏了，按实测补上）
     expect(params.protocolVersion).toBe('2026-01-26');
-    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.12.4' });
+    expect(params.appInfo).toMatchObject({ name: 'napcat-zcode', version: '0.12.5' });
     expect(params.appCapabilities).toEqual({ availableDisplayModes: ['inline', 'fullscreen'] });
 
     const notified = host.sent.find((m) => m.method === 'ui/notifications/initialized');
